@@ -29,6 +29,7 @@ import {
 	artifactOwner,
 	canChangeSessionArtifacts,
 	filterArtifactGroups,
+	isPublishedArtifact,
 	groupArtifactsByProject,
 	hostArtifactLocation,
 	sharedArtifactGroup,
@@ -63,6 +64,7 @@ import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import { Button } from "./ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -104,6 +106,9 @@ function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<Workspa
  * Every artifact agents have written, grouped by project: on this machine, and
  * in cloud sessions when the control plane keeps artifacts.
  */
+/** The Artifacts page's sections: every artifact, or only the published ones. */
+type ArtifactSection = "all" | "published";
+
 export function ArtifactsView() {
 	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
@@ -146,6 +151,8 @@ export function ArtifactsView() {
 	const [sharings, setSharings] = useState<readonly ArtifactSharing[]>([]);
 	const [owner, setOwner] = useState<ArtifactOwner | undefined>();
 	const [pinnedOnly, setPinnedOnly] = useState(false);
+	// The Published section lists only the files this person published a link to.
+	const [section, setSection] = useState<ArtifactSection>("all");
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
 	// A shared link opened from outside the app (ao-app://shared-artifact) opens here once.
@@ -172,13 +179,15 @@ export function ArtifactsView() {
 	const cloudUserId = useCloudMeUserId(cloudArtifacts);
 	const pinnedKeys = useMemo(() => pinnedOnly ? new Set(pinnedArtifactIds) : undefined, [pinnedOnly, pinnedArtifactIds]);
 	const filters = useMemo(
-		() => ({ query, projectIds, location, types, sharings, owner, cloudUserId, onlyKeys: pinnedKeys }),
-		[query, projectIds, location, types, sharings, owner, cloudUserId, pinnedKeys],
+		() => ({ query, projectIds, location, types, sharings, owner, cloudUserId, onlyKeys: pinnedKeys, published: section === "published" }),
+		[query, projectIds, location, types, sharings, owner, cloudUserId, pinnedKeys, section],
 	);
 	const visibleGroups = useMemo(() => filterArtifactGroups(groups, filters, scratchpadName), [groups, filters, scratchpadName]);
 	// Each location chip counts what choosing it would show under the other filters.
 	const locationCounts = useMemo(() => artifactLocationCounts(groups, filters, scratchpadName), [groups, filters, scratchpadName]);
 	const hasArtifacts = artifactCount(groups) > 0;
+	// Every published file, whatever the filters, so the section's count and its empty state agree.
+	const publishedCount = useMemo(() => groups.reduce((count, group) => count + group.rows.filter(isPublishedArtifact).length, 0), [groups]);
 	// One list, newest change (or name) first, with pinned artifacts kept at the
 	// top. The filters narrow it; nothing splits it into sections.
 	const cards = useMemo(() => {
@@ -363,240 +372,258 @@ export function ArtifactsView() {
 	};
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col bg-background">
+		<Tabs value={section} onValueChange={(value) => setSection(value as ArtifactSection)} className="flex min-h-0 flex-1 flex-col bg-background">
 			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<Package className="size-icon-md" aria-hidden="true" />}>{t("artifacts.title")}</PageTopbarTitle>} />
-			<div className="shrink-0 pt-3 pr-4 pl-(--space-4_5)">
-				<div className="flex min-h-control-md items-center gap-2">
-					{hasArtifacts ? (
-						<div role="group" aria-label={t("artifacts.location")} className="flex min-w-0 items-center gap-1">
-							{locationOptions.map((option) => (
-								<Button
-									key={option.value ?? "all"}
-									type="button"
-									size="sm"
-									variant="ghost"
-									aria-pressed={location === option.value}
-									onClick={() => setLocation(option.value)}
-								>
-									{option.label}
-									<span aria-hidden="true" className="tabular-nums text-passive">{locationCounts.get(option.value ?? "all") ?? 0}</span>
-								</Button>
-							))}
-						</div>
-					) : null}
-					<div className="ms-auto flex shrink-0 items-center gap-0.5">
-						{hasArtifacts ? (
-							<>
-								<ToolbarSearch label={t("artifacts.search")} query={query} onQueryChange={setQuery} />
-								<DropdownMenu>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<DropdownMenuTrigger asChild>
-												<Button type="button" size="icon-sm" variant="quiet" aria-label={t("artifacts.filter")} data-active={filtering ? "true" : undefined}>
-													<Filter aria-hidden="true" className="size-icon-sm" />
-												</Button>
-											</DropdownMenuTrigger>
-										</TooltipTrigger>
-										<TooltipContent side="bottom">{t("artifacts.filter")}</TooltipContent>
-									</Tooltip>
-									<DropdownMenuContent align="end" className="min-w-64" data-browser-native-overlay="true">
-										<DropdownMenuSub>
-											<FilterMenuRow label={t("artifacts.sortBy")} value={t(`artifacts.sort.${sort}`)} />
-											<DropdownMenuSubContent className="min-w-44" data-browser-native-overlay="true">
-												<DropdownMenuRadioGroup value={sort} onValueChange={(value) => setSort(value as ArtifactSort)}>
-													{(["updated", "name"] as const).map((value) => (
-														<DropdownMenuRadioItem key={value} value={value}>{t(`artifacts.sort.${value}`)}</DropdownMenuRadioItem>
-													))}
-												</DropdownMenuRadioGroup>
-											</DropdownMenuSubContent>
-										</DropdownMenuSub>
-										<DropdownMenuSeparator />
-										<DropdownMenuSub>
-											<FilterMenuRow label={t("artifacts.filterOwner")} value={owner ? ownerLabel(owner) : t("artifacts.ownerAny")} />
-											<DropdownMenuSubContent className="min-w-44" data-browser-native-overlay="true">
-												<DropdownMenuRadioGroup value={owner ?? "any"} onValueChange={(value) => setOwner(value === "any" ? undefined : value as ArtifactOwner)}>
-													<DropdownMenuRadioItem value="any">{t("artifacts.ownerAny")}</DropdownMenuRadioItem>
-													{ARTIFACT_OWNERS.map((value) => (
-														<DropdownMenuRadioItem key={value} value={value}>{ownerLabel(value)}</DropdownMenuRadioItem>
-													))}
-												</DropdownMenuRadioGroup>
-											</DropdownMenuSubContent>
-										</DropdownMenuSub>
-										<DropdownMenuSub>
-											<FilterMenuRow label={t("artifacts.filterProject")} value={chosen(selectedProjects.map(projectName), t("artifacts.allProjects"))} />
-											<DropdownMenuSubContent className="max-h-[min(30rem,70vh)] min-w-52 overflow-y-auto" data-browser-native-overlay="true">
-												<FilterOption checked={projectIds.length === 0} onToggle={() => setProjectIds([])}>{t("artifacts.allProjects")}</FilterOption>
-												<DropdownMenuSeparator />
-												{groups
-													.filter((group) => !location || group.rows.some((row) => artifactLocation(row, group) === location))
-													.map((group) => (
-														<FilterOption key={group.id} checked={projectIds.includes(group.id)} onToggle={() => setProjectIds(toggled(projectIds, group.id))}>
-															<span className="truncate">{projectName(group)}</span>
-														</FilterOption>
-													))}
-											</DropdownMenuSubContent>
-										</DropdownMenuSub>
-										<DropdownMenuSub>
-											<FilterMenuRow label={t("artifacts.filterType")} value={chosen(types.map((value) => t(`artifacts.type.${value}`)), t("artifacts.allTypes"))} />
-											<DropdownMenuSubContent className="min-w-48" data-browser-native-overlay="true">
-												<FilterOption checked={types.length === 0} onToggle={() => setTypes([])}>{t("artifacts.allTypes")}</FilterOption>
-												<DropdownMenuSeparator />
-												{ARTIFACT_TYPES.map((value) => (
-													<FilterOption key={value} checked={types.includes(value)} onToggle={() => setTypes(toggled(types, value))}>{t(`artifacts.type.${value}`)}</FilterOption>
-												))}
-											</DropdownMenuSubContent>
-										</DropdownMenuSub>
-										<DropdownMenuSub>
-											<FilterMenuRow label={t("artifacts.filterSharing")} value={chosen(sharings.map((value) => t(`artifacts.sharing.${value}`)), t("artifacts.allSharing"))} />
-											<DropdownMenuSubContent className="min-w-48" data-browser-native-overlay="true">
-												<FilterOption checked={sharings.length === 0} onToggle={() => setSharings([])}>{t("artifacts.allSharing")}</FilterOption>
-												<DropdownMenuSeparator />
-												{ARTIFACT_SHARINGS.map((value) => (
-													<FilterOption key={value} checked={sharings.includes(value)} onToggle={() => setSharings(toggled(sharings, value))}>{t(`artifacts.sharing.${value}`)}</FilterOption>
-												))}
-											</DropdownMenuSubContent>
-										</DropdownMenuSub>
-										<DropdownMenuSeparator />
-										<FilterOption checked={pinnedOnly} onToggle={() => setPinnedOnly(!pinnedOnly)}>{t("artifacts.pinned")}</FilterOption>
-										{filtering ? (
-											<>
-												<DropdownMenuSeparator />
-												<DropdownMenuItem onSelect={clearFilters}>{t("artifacts.clearFilters")}</DropdownMenuItem>
-											</>
-										) : null}
-									</DropdownMenuContent>
-								</DropdownMenu>
-								{selecting ? null : (
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Button type="button" size="icon-sm" variant="quiet"
-												aria-label={t("artifacts.listView")}
-												aria-pressed={view === "list"}
-												onClick={() => setView(view === "list" ? "gallery" : "list")}
-											>
-												<List aria-hidden="true" className="size-icon-sm" />
-											</Button>
-										</TooltipTrigger>
-										<TooltipContent side="bottom">{view === "list" ? t("artifacts.galleryView") : t("artifacts.listView")}</TooltipContent>
-									</Tooltip>
-								)}
-							</>
-						) : null}
-						{selecting && hasArtifacts ? (
-							<div role="group" aria-label={t("artifacts.selection")} className="ms-1 inline-flex shrink-0 items-center gap-1">
-								<span aria-live="polite" className="px-1 text-control tabular-nums text-muted-foreground">
-									{t("artifacts.selectedCount", { count: selectedRows.length })}
-								</span>
-								<Button type="button" size="sm" variant="quiet" disabled={selectableVisibleIds.length === 0} onClick={toggleAllVisible}>
-									{t(allVisibleSelected ? "artifacts.deselectAll" : "artifacts.selectAll")}
-								</Button>
-								<Button type="button" size="sm" variant="destructive" disabled={selectedRows.length === 0} onClick={confirmBulkDelete}>
-									<Trash2 aria-hidden="true" className="size-icon-sm" />
-									{t("artifacts.deleteSelected")}
-								</Button>
-								<Button type="button" size="sm" variant="quiet" onClick={stopSelecting}>
-									{t("artifacts.cancelSelection")}
-								</Button>
-							</div>
-						) : (
-							<>
-								{hasArtifacts ? (
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Button type="button" size="icon-sm" variant="quiet" aria-label={t("artifacts.select")} onClick={() => setSelecting(true)}>
-												<SelectMultiple aria-hidden="true" className="size-icon-sm" />
-											</Button>
-										</TooltipTrigger>
-										<TooltipContent side="bottom">{t("artifacts.select")}</TooltipContent>
-									</Tooltip>
-								) : null}
-								<CreateArtifactMenu
-									workspaces={workspaces ?? []}
-									create={createArtifact.create}
-									pending={createArtifact.pending}
-									label="new"
-									align="end"
-									localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
-								/>
-							</>
-						)}
-					</div>
+			{hasArtifacts ? (
+				<div className="shrink-0 pt-3 pr-4 pb-2 pl-(--space-4_5)">
+					<TabsList aria-label={t("artifacts.section")}>
+						<TabsTrigger value="all">{t("artifacts.sectionAll")}</TabsTrigger>
+						<TabsTrigger value="published">
+							{t("artifacts.sectionPublished")}
+							<span aria-hidden="true" className="tabular-nums text-passive">{publishedCount}</span>
+						</TabsTrigger>
+					</TabsList>
 				</div>
-				{failedHosts.map((host) => (
-					<div key={host.hostId} role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
-						<span className="min-w-0 truncate">{t("artifacts.hostLoadFailed", { host: host.label })}</span>
-						<Button type="button" size="sm" variant="quiet" onClick={() => void remote.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
-					</div>
-				))}
-				{/* A failed shared list is said so, with a retry; the rest still shows. */}
-				{sharedQuery.isError && (location === undefined || location === "cloud") ? (
-					<div role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
-						<span className="min-w-0 truncate">{t("artifacts.sharedLoadFailed")}</span>
-						<Button type="button" size="sm" variant="quiet" onClick={() => void sharedQuery.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
-					</div>
-				) : null}
-				{hasArtifacts && filtering ? (
-					<div className="mt-2 flex flex-wrap items-center gap-1.5">
-						{([
-							[t("artifacts.filterOwner"), owner ? [ownerLabel(owner)] : [], () => setOwner(undefined)],
-							[t("artifacts.filterProject"), selectedProjects.map(projectName), () => setProjectIds([])],
-							[t("artifacts.filterType"), types.map((value) => t(`artifacts.type.${value}`)), () => setTypes([])],
-							[t("artifacts.filterSharing"), sharings.map((value) => t(`artifacts.sharing.${value}`)), () => setSharings([])],
-						] as const).map(([label, values, clear]) => values.length > 0 ? (
-							<FilterChip
-								key={label}
-								label={label}
-								value={values.join(", ")}
-								removeLabel={t("artifacts.removeFilter", { filter: `${label}: ${values.join(", ")}` })}
-								onRemove={clear}
-							/>
-						) : null)}
-						{pinnedOnly ? (
-							<FilterChip
-								label={t("artifacts.pinned")}
-								removeLabel={t("artifacts.removeFilter", { filter: t("artifacts.pinned") })}
-								onRemove={() => setPinnedOnly(false)}
-							/>
+			) : null}
+			<ArtifactSectionPanel tabbed={hasArtifacts} section={section}>
+				<div className={cn("shrink-0 pr-4 pl-(--space-4_5)", !hasArtifacts && "pt-3")}>
+					<div className="flex min-h-control-md items-center gap-2">
+						{hasArtifacts ? (
+							<div role="group" aria-label={t("artifacts.location")} className="flex min-w-0 items-center gap-1">
+								{locationOptions.map((option) => (
+									<Button
+										key={option.value ?? "all"}
+										type="button"
+										size="sm"
+										variant="ghost"
+										aria-pressed={location === option.value}
+										onClick={() => setLocation(option.value)}
+									>
+										{option.label}
+										<span aria-hidden="true" className="tabular-nums text-passive">{locationCounts.get(option.value ?? "all") ?? 0}</span>
+									</Button>
+								))}
+							</div>
 						) : null}
-					</div>
-				) : null}
-			</div>
-			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
-				<main className="relative min-h-0 flex-1 overflow-hidden">
-					{/* Radix wraps the content in a display:table box that grows to its widest
-					    row, so long names never truncate and push each row's time out of
-					    view in a narrow panel; a block box keeps the rows to the panel's width. */}
-					<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-contain focus-visible:outline-none [&>div]:block!">
-						<div className="@container pt-3 pr-4 pb-4 pl-(--space-4_5)">
-							{workspaceQuery.isLoading ? (
-								<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>
-							) : workspaceQuery.error ? (
-								<p role="alert" className="px-3 py-8 text-center text-sm text-destructive">{workspaceQuery.error.message}</p>
-							) : !hasArtifacts ? (
-								<EmptyArtifacts workspaces={workspaces ?? []} />
-							) : visibleGroups.length === 0 && location !== undefined && failedHosts.length > 0 ? null : visibleGroups.length === 0 ? (
-								<div className="flex flex-col items-center gap-1 py-16 text-center">
-									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
-									<Button variant="quiet" size="sm" onClick={clearFilters}>
-										{t("artifacts.clearFilters")}
+						<div className="ms-auto flex shrink-0 items-center gap-0.5">
+							{hasArtifacts ? (
+								<>
+									<ToolbarSearch label={t("artifacts.search")} query={query} onQueryChange={setQuery} />
+									<DropdownMenu>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<DropdownMenuTrigger asChild>
+													<Button type="button" size="icon-sm" variant="quiet" aria-label={t("artifacts.filter")} data-active={filtering ? "true" : undefined}>
+														<Filter aria-hidden="true" className="size-icon-sm" />
+													</Button>
+												</DropdownMenuTrigger>
+											</TooltipTrigger>
+											<TooltipContent side="bottom">{t("artifacts.filter")}</TooltipContent>
+										</Tooltip>
+										<DropdownMenuContent align="end" className="min-w-64" data-browser-native-overlay="true">
+											<DropdownMenuSub>
+												<FilterMenuRow label={t("artifacts.sortBy")} value={t(`artifacts.sort.${sort}`)} />
+												<DropdownMenuSubContent className="min-w-44" data-browser-native-overlay="true">
+													<DropdownMenuRadioGroup value={sort} onValueChange={(value) => setSort(value as ArtifactSort)}>
+														{(["updated", "name"] as const).map((value) => (
+															<DropdownMenuRadioItem key={value} value={value}>{t(`artifacts.sort.${value}`)}</DropdownMenuRadioItem>
+														))}
+													</DropdownMenuRadioGroup>
+												</DropdownMenuSubContent>
+											</DropdownMenuSub>
+											<DropdownMenuSeparator />
+											<DropdownMenuSub>
+												<FilterMenuRow label={t("artifacts.filterOwner")} value={owner ? ownerLabel(owner) : t("artifacts.ownerAny")} />
+												<DropdownMenuSubContent className="min-w-44" data-browser-native-overlay="true">
+													<DropdownMenuRadioGroup value={owner ?? "any"} onValueChange={(value) => setOwner(value === "any" ? undefined : value as ArtifactOwner)}>
+														<DropdownMenuRadioItem value="any">{t("artifacts.ownerAny")}</DropdownMenuRadioItem>
+														{ARTIFACT_OWNERS.map((value) => (
+															<DropdownMenuRadioItem key={value} value={value}>{ownerLabel(value)}</DropdownMenuRadioItem>
+														))}
+													</DropdownMenuRadioGroup>
+												</DropdownMenuSubContent>
+											</DropdownMenuSub>
+											<DropdownMenuSub>
+												<FilterMenuRow label={t("artifacts.filterProject")} value={chosen(selectedProjects.map(projectName), t("artifacts.allProjects"))} />
+												<DropdownMenuSubContent className="max-h-[min(30rem,70vh)] min-w-52 overflow-y-auto" data-browser-native-overlay="true">
+													<FilterOption checked={projectIds.length === 0} onToggle={() => setProjectIds([])}>{t("artifacts.allProjects")}</FilterOption>
+													<DropdownMenuSeparator />
+													{groups
+														.filter((group) => !location || group.rows.some((row) => artifactLocation(row, group) === location))
+														.map((group) => (
+															<FilterOption key={group.id} checked={projectIds.includes(group.id)} onToggle={() => setProjectIds(toggled(projectIds, group.id))}>
+																<span className="truncate">{projectName(group)}</span>
+															</FilterOption>
+														))}
+												</DropdownMenuSubContent>
+											</DropdownMenuSub>
+											<DropdownMenuSub>
+												<FilterMenuRow label={t("artifacts.filterType")} value={chosen(types.map((value) => t(`artifacts.type.${value}`)), t("artifacts.allTypes"))} />
+												<DropdownMenuSubContent className="min-w-48" data-browser-native-overlay="true">
+													<FilterOption checked={types.length === 0} onToggle={() => setTypes([])}>{t("artifacts.allTypes")}</FilterOption>
+													<DropdownMenuSeparator />
+													{ARTIFACT_TYPES.map((value) => (
+														<FilterOption key={value} checked={types.includes(value)} onToggle={() => setTypes(toggled(types, value))}>{t(`artifacts.type.${value}`)}</FilterOption>
+													))}
+												</DropdownMenuSubContent>
+											</DropdownMenuSub>
+											<DropdownMenuSub>
+												<FilterMenuRow label={t("artifacts.filterSharing")} value={chosen(sharings.map((value) => t(`artifacts.sharing.${value}`)), t("artifacts.allSharing"))} />
+												<DropdownMenuSubContent className="min-w-48" data-browser-native-overlay="true">
+													<FilterOption checked={sharings.length === 0} onToggle={() => setSharings([])}>{t("artifacts.allSharing")}</FilterOption>
+													<DropdownMenuSeparator />
+													{ARTIFACT_SHARINGS.map((value) => (
+														<FilterOption key={value} checked={sharings.includes(value)} onToggle={() => setSharings(toggled(sharings, value))}>{t(`artifacts.sharing.${value}`)}</FilterOption>
+													))}
+												</DropdownMenuSubContent>
+											</DropdownMenuSub>
+											<DropdownMenuSeparator />
+											<FilterOption checked={pinnedOnly} onToggle={() => setPinnedOnly(!pinnedOnly)}>{t("artifacts.pinned")}</FilterOption>
+											{filtering ? (
+												<>
+													<DropdownMenuSeparator />
+													<DropdownMenuItem onSelect={clearFilters}>{t("artifacts.clearFilters")}</DropdownMenuItem>
+												</>
+											) : null}
+										</DropdownMenuContent>
+									</DropdownMenu>
+									{selecting ? null : (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button type="button" size="icon-sm" variant="quiet"
+													aria-label={t("artifacts.listView")}
+													aria-pressed={view === "list"}
+													onClick={() => setView(view === "list" ? "gallery" : "list")}
+												>
+													<List aria-hidden="true" className="size-icon-sm" />
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent side="bottom">{view === "list" ? t("artifacts.galleryView") : t("artifacts.listView")}</TooltipContent>
+										</Tooltip>
+									)}
+								</>
+							) : null}
+							{selecting && hasArtifacts ? (
+								<div role="group" aria-label={t("artifacts.selection")} className="ms-1 inline-flex shrink-0 items-center gap-1">
+									<span aria-live="polite" className="px-1 text-control tabular-nums text-muted-foreground">
+										{t("artifacts.selectedCount", { count: selectedRows.length })}
+									</span>
+									<Button type="button" size="sm" variant="quiet" disabled={selectableVisibleIds.length === 0} onClick={toggleAllVisible}>
+										{t(allVisibleSelected ? "artifacts.deselectAll" : "artifacts.selectAll")}
+									</Button>
+									<Button type="button" size="sm" variant="destructive" disabled={selectedRows.length === 0} onClick={confirmBulkDelete}>
+										<Trash2 aria-hidden="true" className="size-icon-sm" />
+										{t("artifacts.deleteSelected")}
+									</Button>
+									<Button type="button" size="sm" variant="quiet" onClick={stopSelecting}>
+										{t("artifacts.cancelSelection")}
 									</Button>
 								</div>
 							) : (
-								<ul ref={grid.listRef} aria-label={t("artifacts.title")} className={view === "gallery" ? ARTIFACT_GRID_CLASS : "grid grid-cols-[minmax(0,1fr)] gap-1.5"}>
-									<GridSpacer height={grid.before} />
-									{cards.slice(grid.start, grid.end).map(({ row, projectName, placeName, owner: rowOwner, pinned }) => (
-										<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} placeName={placeName} owner={rowOwner} pinned={pinned} view={view} previewLive={livePreviews.has(artifactKey(row))} onPreview={openPreview} selection={selectionFor(row, projectName)} />
-									))}
-									<GridSpacer height={grid.after} />
-								</ul>
+								<>
+									{hasArtifacts ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button type="button" size="icon-sm" variant="quiet" aria-label={t("artifacts.select")} onClick={() => setSelecting(true)}>
+													<SelectMultiple aria-hidden="true" className="size-icon-sm" />
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent side="bottom">{t("artifacts.select")}</TooltipContent>
+										</Tooltip>
+									) : null}
+									<CreateArtifactMenu
+										workspaces={workspaces ?? []}
+										create={createArtifact.create}
+										pending={createArtifact.pending}
+										label="new"
+										align="end"
+										localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+									/>
+								</>
 							)}
 						</div>
-					</ScrollArea.Viewport>
-					<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
-						<ScrollArea.Thumb className="relative flex-1 rounded-full bg-[color-mix(in_srgb,var(--color-scrollbar)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-scrollbar)_56%,transparent)]" />
-					</ScrollArea.Scrollbar>
-				</main>
-			</ScrollArea.Root>
+					</div>
+					{failedHosts.map((host) => (
+						<div key={host.hostId} role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+							<span className="min-w-0 truncate">{t("artifacts.hostLoadFailed", { host: host.label })}</span>
+							<Button type="button" size="sm" variant="quiet" onClick={() => void remote.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
+						</div>
+					))}
+					{/* A failed shared list is said so, with a retry; the rest still shows. */}
+					{sharedQuery.isError && (location === undefined || location === "cloud") ? (
+						<div role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+							<span className="min-w-0 truncate">{t("artifacts.sharedLoadFailed")}</span>
+							<Button type="button" size="sm" variant="quiet" onClick={() => void sharedQuery.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
+						</div>
+					) : null}
+					{hasArtifacts && filtering ? (
+						<div className="mt-2 flex flex-wrap items-center gap-1.5">
+							{([
+								[t("artifacts.filterOwner"), owner ? [ownerLabel(owner)] : [], () => setOwner(undefined)],
+								[t("artifacts.filterProject"), selectedProjects.map(projectName), () => setProjectIds([])],
+								[t("artifacts.filterType"), types.map((value) => t(`artifacts.type.${value}`)), () => setTypes([])],
+								[t("artifacts.filterSharing"), sharings.map((value) => t(`artifacts.sharing.${value}`)), () => setSharings([])],
+							] as const).map(([label, values, clear]) => values.length > 0 ? (
+								<FilterChip
+									key={label}
+									label={label}
+									value={values.join(", ")}
+									removeLabel={t("artifacts.removeFilter", { filter: `${label}: ${values.join(", ")}` })}
+									onRemove={clear}
+								/>
+							) : null)}
+							{pinnedOnly ? (
+								<FilterChip
+									label={t("artifacts.pinned")}
+									removeLabel={t("artifacts.removeFilter", { filter: t("artifacts.pinned") })}
+									onRemove={() => setPinnedOnly(false)}
+								/>
+							) : null}
+						</div>
+					) : null}
+				</div>
+				<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
+					<main className="relative min-h-0 flex-1 overflow-hidden">
+						{/* Radix wraps the content in a display:table box that grows to its widest
+						    row, so long names never truncate and push each row's time out of
+						    view in a narrow panel; a block box keeps the rows to the panel's width. */}
+						<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-contain focus-visible:outline-none [&>div]:block!">
+							<div className="@container pt-3 pr-4 pb-4 pl-(--space-4_5)">
+								{workspaceQuery.isLoading ? (
+									<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>
+								) : workspaceQuery.error ? (
+									<p role="alert" className="px-3 py-8 text-center text-sm text-destructive">{workspaceQuery.error.message}</p>
+								) : !hasArtifacts ? (
+									<EmptyArtifacts workspaces={workspaces ?? []} />
+								) : visibleGroups.length === 0 && location !== undefined && failedHosts.length > 0 ? null : section === "published" && publishedCount === 0 ? (
+									<div className="flex flex-col items-center gap-1 py-16 text-center">
+										<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.publishedEmpty.title")}</h2>
+										<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.publishedEmpty.description")}</p>
+									</div>
+								) : visibleGroups.length === 0 ? (
+									<div className="flex flex-col items-center gap-1 py-16 text-center">
+										<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
+										<Button variant="quiet" size="sm" onClick={clearFilters}>
+											{t("artifacts.clearFilters")}
+										</Button>
+									</div>
+								) : (
+									<ul ref={grid.listRef} aria-label={t("artifacts.title")} className={view === "gallery" ? ARTIFACT_GRID_CLASS : "grid grid-cols-[minmax(0,1fr)] gap-1.5"}>
+										<GridSpacer height={grid.before} />
+										{cards.slice(grid.start, grid.end).map(({ row, projectName, placeName, owner: rowOwner, pinned }) => (
+											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} placeName={placeName} owner={rowOwner} pinned={pinned} view={view} previewLive={livePreviews.has(artifactKey(row))} onPreview={openPreview} selection={selectionFor(row, projectName)} />
+										))}
+										<GridSpacer height={grid.after} />
+									</ul>
+								)}
+							</div>
+						</ScrollArea.Viewport>
+						<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
+							<ScrollArea.Thumb className="relative flex-1 rounded-full bg-[color-mix(in_srgb,var(--color-scrollbar)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-scrollbar)_56%,transparent)]" />
+						</ScrollArea.Scrollbar>
+					</main>
+				</ScrollArea.Root>
+			</ArtifactSectionPanel>
 			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 			<ConfirmDialog
 				busy={bulkDelete.isPending}
@@ -618,8 +645,18 @@ export function ArtifactsView() {
 					) : null}
 				</ul>
 			</ConfirmDialog>
-		</div>
+		</Tabs>
 	);
+}
+
+/**
+ * The toolbar and list under the section tabs, as the tab panel the active
+ * section controls. With no artifacts there are no tabs, so it is a plain box.
+ */
+function ArtifactSectionPanel({ tabbed, section, children }: { tabbed: boolean; section: ArtifactSection; children: ReactNode }) {
+	// The page keeps its own text size; TabsContent's default is smaller.
+	const className = "flex min-h-0 flex-1 flex-col text-[length:inherit]";
+	return tabbed ? <TabsContent value={section} className={className}>{children}</TabsContent> : <div className={className}>{children}</div>;
 }
 
 /** A remote host's project name with the host's, so equal names on two machines tell apart. */

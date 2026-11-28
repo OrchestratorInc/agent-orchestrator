@@ -331,6 +331,8 @@ export type ArtifactFilters = {
 	cloudUserId?: string;
 	/** Keys (artifactKey) of the only rows to keep, for the Pinned filter; undefined keeps every row. */
 	onlyKeys?: ReadonlySet<string>;
+	/** Keeps only the artifacts this person published, for the Published section. */
+	published?: boolean;
 };
 
 /** Whether an artifact is this person's ("mine") or someone else's they can see ("shared"). */
@@ -373,6 +375,19 @@ export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess
 	if (row.shared) return row.shared.access === "restricted" ? "shared" : "public";
 	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : row.shareAccess === "anyone" ? "public" : undefined;
 	return row.cloud ? undefined : "private";
+}
+
+/**
+ * Whether this person published a link to an artifact: a file of theirs with
+ * a share link, whoever it opens for. A link someone else published to them
+ * is not theirs to list as published. Only files whose link is known count: a
+ * local or remote-host file's, from this computer's publish records. A cloud
+ * session's file list says nothing about publishing (see artifactSharing), and
+ * the link list does not name each link's file, so a published cloud file is
+ * not listed until the control plane reports it.
+ */
+export function isPublishedArtifact(row: Pick<ArtifactRow, "shareUrl" | "shared">): boolean {
+	return !row.shared && Boolean(row.shareUrl);
 }
 
 /** Sets each published row's shareAccess from who its link opens for. */
@@ -442,6 +457,7 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 					(!location || artifactLocation(row, group) === location)
 					&& (!filters.owner || artifactOwner(row, filters.cloudUserId) === filters.owner)
 					&& (!filters.onlyKeys || filters.onlyKeys.has(artifactKey(row)))
+					&& (!filters.published || isPublishedArtifact(row))
 					&& (types.length === 0 || types.includes(artifactType(row)))
 					&& (sharings.length === 0 || matchesSharing(sharings, artifactSharing(row)))
 					&& (groupMatches
