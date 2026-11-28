@@ -284,27 +284,35 @@ func (id taskID) terminalBriefFingerprint() (length int, hash string, ok bool) {
 	return n, parts[2], true
 }
 
-// briefFingerprintHead is how much of a brief its fingerprint hashes. Turn
-// recorders keep at least this much of the start of a request.
-const briefFingerprintHead = 1024
+// briefFingerprintEdge is how much of each end of a brief its fingerprint
+// hashes on its own, so a recorder's shortened copy (its start, a marker, its
+// end) can still be recognised.
+const briefFingerprintEdge = 1024
 
-// canonicalBrief is a brief as turn recorders store it: trimmed, with control
-// characters other than tab and newlines removed (as the daemon delivers it).
+// recorderTruncationMarker is what turn recorders put where they cut a long
+// request (hooks.go capHookText).
+const recorderTruncationMarker = "\n[... truncated by AO ...]\n"
+
+// canonicalBrief is a brief as turn recorders store it, with control
+// characters other than tab and newlines removed (as the daemon delivers it)
+// and surrounding space trimmed. It trims on both sides of sanitizing, so a
+// recorded request canonicalizes to itself.
 func canonicalBrief(text string) string {
-	return domain.SanitizeControlChars(strings.TrimSpace(text))
+	return strings.TrimSpace(domain.SanitizeControlChars(strings.TrimSpace(text)))
 }
 
-// briefHash is the short fingerprint of the first briefFingerprintHead bytes
-// of a canonical brief.
+// briefHash is the fingerprint of a canonical brief: a short hash of the whole
+// text, then of its first and of its last briefFingerprintEdge bytes.
 func briefHash(canonical string) string {
-	head := canonical[:min(len(canonical), briefFingerprintHead)]
-	sum := sha256.Sum256([]byte(head))
-	return hex.EncodeToString(sum[:4])
+	short := func(s string) string { sum := sha256.Sum256([]byte(s)); return hex.EncodeToString(sum[:4]) }
+	head := canonical[:min(len(canonical), briefFingerprintEdge)]
+	tail := canonical[len(canonical)-min(len(canonical), briefFingerprintEdge):]
+	return short(canonical) + short(head) + short(tail)
 }
 
 // turnCarriesBrief reports whether a recorded request is the complete brief:
 // the same text, or, for a brief longer than a recorder keeps, a shortened copy
-// with the same start. A request that only contains the brief, or extends it,
+// with the same start and end. A request that only contains the brief, or extends it,
 // does not match.
 func turnCarriesBrief(request string, length int, hash string) bool {
 	request = canonicalBrief(request)
@@ -323,11 +331,21 @@ func turnCarriesBrief(request string, length int, hash string) bool {
 var senderHeader = regexp.MustCompile(`^\[from [A-Za-z0-9_.-]+\][ \t]*\n?`)
 
 func matchesBriefFingerprint(request string, length int, hash string) bool {
-	head := min(length, briefFingerprintHead)
-	if len(request) < head || briefHash(request[:head]) != hash {
+	if len(hash) != 24 {
 		return false
 	}
-	return len(request) == length || len(request) < length && length > briefFingerprintHead
+	if len(request) == length {
+		return briefHash(request) == hash
+	}
+	// A recorder's shortened copy keeps the brief's start and end around its
+	// marker: both ends must match, not a shared start alone.
+	if len(request) >= length || length <= 2*briefFingerprintEdge ||
+		len(request) < 2*briefFingerprintEdge+len(recorderTruncationMarker) ||
+		!strings.Contains(request, recorderTruncationMarker) {
+		return false
+	}
+	got := briefHash(request)
+	return got[8:] == hash[8:]
 }
 
 func (id taskID) String() string {

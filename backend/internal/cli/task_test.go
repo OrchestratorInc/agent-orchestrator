@@ -2025,22 +2025,41 @@ func TestTurnCarriesBriefMatchesTheCompleteBrief(t *testing.T) {
 	}
 
 	// Control characters are removed by the daemon before delivery, so the
-	// fingerprint is taken over the same text the recorder stores.
+	// fingerprint is taken over the same text the recorder stores, trimmed
+	// after sanitizing.
 	n, h = fp("Reply\x07 OK")
 	if !turnCarriesBrief("Reply OK", n, h) {
 		t.Error("a brief with a control character should match its sanitized record")
 	}
+	n, h = fp("Reply OK \x07")
+	if !turnCarriesBrief(capHookText("Reply OK \x07", maxHookInteractionLen), n, h) {
+		t.Error("a brief ending in space and a control character should match its record")
+	}
 
-	// A brief longer than the recorder keeps matches its truncated record by its
-	// start, but not a different long request.
-	long := strings.Repeat("a", 20000) + " end"
+	// A brief longer than the recorder keeps matches the recorder's shortened
+	// copy (start, marker, end), but neither a complete request that shares
+	// only its start nor a copy that keeps only its start.
+	long := strings.Repeat("a", 20000) + " approve"
 	n, h = fp(long)
-	truncated := long[:8000] + "\n[... truncated by AO ...]\n" + long[len(long)-8000:]
-	if !turnCarriesBrief(truncated, n, h) {
+	if !turnCarriesBrief(capHookText(long, maxHookInteractionLen), n, h) {
 		t.Error("a long brief should match its truncated record")
 	}
-	if turnCarriesBrief("b"+long[1:], n, h) {
-		t.Error("a different long request must not match")
+	if !turnCarriesBrief(long, n, h) {
+		t.Error("a long brief should match its complete record")
+	}
+	if turnCarriesBrief(strings.Repeat("a", 20000)+" reject!", n, h) {
+		t.Error("a complete request sharing only the start must not match")
+	}
+	if turnCarriesBrief(capHookText(strings.Repeat("a", 20000)+" reject!", maxHookInteractionLen), n, h) {
+		t.Error("a truncated request with a different end must not match")
+	}
+	if turnCarriesBrief(long[:16000], n, h) {
+		t.Error("a copy keeping only the start must not match")
+	}
+	mid := strings.Repeat("a", 1024) + "approve"
+	n, h = fp(mid)
+	if turnCarriesBrief(strings.Repeat("a", 1024)+"reject!", n, h) {
+		t.Error("a same-length request with the same 1 KiB start must not match")
 	}
 }
 
