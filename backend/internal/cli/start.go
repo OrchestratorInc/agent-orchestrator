@@ -555,6 +555,7 @@ func (c *commandContext) download(ctx context.Context, w io.Writer, url, asset, 
 
 	pw := &progressWriter{w: w, total: total, tty: writerIsInteractive(w)}
 	if _, err := io.Copy(f, io.TeeReader(resp.Body, pw)); err != nil {
+		pw.abort()
 		return err
 	}
 	pw.done()
@@ -594,6 +595,14 @@ func (p *progressWriter) done() {
 		return
 	}
 	_, _ = fmt.Fprintf(p.w, "Downloaded %s.\n", humanBytes(p.written))
+}
+
+// abort closes a live terminal progress line after a failed copy, so the error
+// printed next (plain or the --json envelope) starts on its own line.
+func (p *progressWriter) abort() {
+	if p.tty && p.written > 0 {
+		_, _ = fmt.Fprintln(p.w)
+	}
 }
 
 // writerIsInteractive reports whether w is an interactive terminal, mirroring

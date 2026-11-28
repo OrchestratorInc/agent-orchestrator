@@ -43,7 +43,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 
 - When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
-- Most read commands accept `--json` for machine-readable output.
+- Most read commands accept `--json` for machine-readable output; a command without it refuses the flag. Under `--json`, the last line of stderr on failure is `{"error":{"code","message","requestId","exitCode"}}`: branch on `code`. Remote-host `ao browser` errors stay plain text.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
 - To refer to a session in Orchestrator Chat or the Orchestrator terminal, use the canonical in-app
