@@ -1008,3 +1008,18 @@ func (q *Queries) RequeueClaimedReports(ctx context.Context) (int64, error) {
 	}
 	return result.RowsAffected()
 }
+
+const requeueStaleClaimedReports = `-- name: RequeueStaleClaimedReports :execrows
+UPDATE reports
+SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
+    last_error = 'delivery claim expired before acknowledgement'
+WHERE delivery_state = 'claimed' AND claimed_at < ?1
+`
+
+func (q *Queries) RequeueStaleClaimedReports(ctx context.Context, claimedBefore sql.NullTime) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueStaleClaimedReports, claimedBefore)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

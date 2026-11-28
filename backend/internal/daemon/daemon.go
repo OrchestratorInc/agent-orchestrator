@@ -276,17 +276,24 @@ func Run(buildVersion string) (retErr error) {
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
 	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout
-	// and I = installerShutdownTimeout, capped shutdown takes at most 7T+I+18s:
+	// and I = installerShutdownTimeout, capped shutdown takes at most
+	// 8T+max(T,30s)+I+33s:
 	//   - the HTTP drain and six stages capped at T each: failure dispatcher,
-	//     background workers, agent-switch workers, Codex account-switch workers,
-	//     chat StopAll, LAN listener; the harness installer gets I;
+	//     computer use, background workers, agent-switch workers, Codex
+	//     account-switch workers, LAN listener; the harness installer gets I;
+	//   - the chat stop gets T, or max(T,30s) on a desktop quit that stops
+	//     agents;
+	//   - one shared budget of T for the goroutine joins with no timeout of
+	//     their own: usage-limit resume, startup reconcile, preview poller,
+	//     report coordinator, usage pipeline, pricing, lifecycle stack and
+	//     store sweeps;
 	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
-	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
-	//     a 2s Sentry flush.
-	// Wait 8T+I+18s (382s by default), one stage of margin. Run's uncapped waits
-	// (startup reconcile, preview servers, chat side stops, usage, pricing,
-	// lifecycle stack) are not covered: a predecessor stuck in one past the
-	// wait still makes this daemon exit 75.
+	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake),
+	//     15s device support (10s agent-device stop plus 5s hub exit), and a
+	//     2s Sentry flush.
+	// Wait 9T+max(T,30s)+I+33s (437s by default), one stage of margin.
+	// Managed preview server and chat side stops are still uncapped: a
+	// predecessor stuck in one past the wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
 	steps.done(stepPrepare)
 	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
@@ -920,10 +927,15 @@ func Run(buildVersion string) (retErr error) {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
+	// reportJoined is set once the shutdown drain has taken over this join, so
+	// a delivery stuck past the budget does not hold Run here without a bound.
+	reportJoined := false
 	defer func() {
 		unsubscribeReportActivity()
 		stop()
-		<-reportDeliveryDone
+		if !reportJoined {
+			<-reportDeliveryDone
+		}
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 
@@ -1098,6 +1110,10 @@ func Run(buildVersion string) (retErr error) {
 		usageHookQueue *usagesvc.HookQueue
 		usagePipeline  *usagepipeline.Pipeline
 		usagePricing   *usagePricingRuntime
+		// pricingJoined is set once the shutdown drain has taken over the
+		// pricing join, so the deferred safety net does not wait on it again
+		// without a bound after that join timed out.
+		pricingJoined bool
 	)
 	if pricingRuntime, pricingErr := newUsagePricingRuntime(usagePricingRuntimeConfig{
 		DataDir: cfg.DataDir,
@@ -1112,7 +1128,9 @@ func Run(buildVersion string) (retErr error) {
 		}
 		defer func() {
 			stop()
-			usagePricing.Wait()
+			if !pricingJoined {
+				usagePricing.Wait()
+			}
 		}()
 	}
 	if roots, rootsErr := usagesvc.DefaultSourceRoots(ctx, cfg.DataDir); rootsErr != nil {
@@ -1582,6 +1600,9 @@ func Run(buildVersion string) (retErr error) {
 	}
 
 	var startupReconcileDone <-chan struct{}
+	// Periodic sweeps that write to the store. Shutdown joins them before the
+	// store and CDC pipeline close.
+	var sweepLoops sync.WaitGroup
 	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
 		steps.done(stepListen)
@@ -1638,7 +1659,7 @@ func Run(buildVersion string) (retErr error) {
 				emitStartupSteps(telemetrySink, daemonStartupReconciledEvent, restore, daemonReconcileTotal)
 			}
 		}()
-		go func() {
+		sweepLoops.Go(func() {
 			defer sentryobs.RecoverBackground()
 			// The session operation gate skips reconciliation in progress, so
 			// a slow provider reconnect must not stall hibernation of others.
@@ -1652,13 +1673,16 @@ func Run(buildVersion string) (retErr error) {
 					if !settingsSvc.ChatHibernationEnabled() {
 						continue
 					}
-					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
-						log.Warn("idle Chat hibernation failed", "err", err)
-					}
+					// A panicking sweep is reported and the next tick retries.
+					sentryobs.RecoverIteration(func() {
+						if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
+							log.Warn("idle Chat hibernation failed", "err", err)
+						}
+					})
 				}
 			}
-		}()
-		go func() {
+		})
+		sweepLoops.Go(func() {
 			defer sentryobs.RecoverBackground()
 			// Boot restore and reconciliation settle which terminated sessions
 			// are coming back before this pass looks at any of them.
@@ -1670,22 +1694,29 @@ func Run(buildVersion string) (retErr error) {
 			ticker := time.NewTicker(workspaceCleanupSweepTick)
 			defer ticker.Stop()
 			for {
-				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
-					log.Warn("workspace cleanup reconcile failed", "err", err)
-				}
-				reapForkSeeds(ctx, cfg.DataDir, store, log)
-				if settings, err := settingsSvc.Get(ctx); err != nil {
-					log.Warn("read session retention", "err", err)
-				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
-					log.Warn("delete expired sessions failed", "err", err)
-				}
+				// Each step re-reads its work from the store, so a panicking pass
+				// is reported and the next tick retries instead of stopping the
+				// daemon.
+				sentryobs.RecoverIteration(func() {
+					if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("workspace cleanup reconcile failed", "err", err)
+					}
+				})
+				sentryobs.RecoverIteration(func() { reapForkSeeds(ctx, cfg.DataDir, store, log) })
+				sentryobs.RecoverIteration(func() {
+					if settings, err := settingsSvc.Get(ctx); err != nil {
+						log.Warn("read session retention", "err", err)
+					} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
+						log.Warn("delete expired sessions failed", "err", err)
+					}
+				})
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
 				}
 			}
-		}()
+		})
 		resumeDone := make(chan struct{})
 		usageLimitResumeDone = resumeDone
 		go func() {
@@ -1738,10 +1769,10 @@ func Run(buildVersion string) (retErr error) {
 				}
 			}
 		}()
-		go func() {
+		sweepLoops.Go(func() {
 			defer sentryobs.RecoverBackground()
 			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
-		}()
+		})
 	})
 
 	shutdownFields := map[string]any{"stopAgents": srv.StopAgentsRequested()}
@@ -1766,9 +1797,11 @@ func Run(buildVersion string) (retErr error) {
 	// stop only cancels workers; deferred stopSignals keeps a second automatic
 	// SIGTERM from terminating the process while installer restoration runs.
 	stop()
-	if usageLimitResumeDone != nil {
-		<-usageLimitResumeDone
-	}
+	// Waits with no timeout of their own share one ShutdownTimeout budget, so
+	// a hung goroutine cannot hold the data-dir lock past a successor's
+	// takeover wait (see dataDirTakeoverWait).
+	drain := newShutdownBudget(cfg.ShutdownTimeout, log)
+	drain.wait("usage-limit resume", usageLimitResumeDone)
 	installStopCtx, installStopCancel := context.WithTimeout(context.Background(), installerShutdownTimeout)
 	if err := systemInstall.Close(installStopCtx); err != nil {
 		log.Error("harness installer shutdown", "err", err)
@@ -1779,9 +1812,7 @@ func Run(buildVersion string) (retErr error) {
 		log.Error("computer use shutdown", "err", err)
 	}
 	computerUseStopCancel()
-	if startupReconcileDone != nil {
-		<-startupReconcileDone
-	}
+	drain.wait("startup reconcile", startupReconcileDone)
 	backgroundStopCtx, backgroundStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	if err := sessMgr.WaitBackgroundWorkers(backgroundStopCtx); err != nil {
 		log.Error("session background worker shutdown", "err", err)
@@ -1801,7 +1832,7 @@ func Run(buildVersion string) (retErr error) {
 	if err := deviceSvc.Shutdown(); err != nil {
 		log.Error("device support shutdown", "err", err)
 	}
-	<-previewDone
+	drain.wait("preview poller", previewDone)
 	// Daemon replacement detaches providers. Desktop exit stops processes
 	// while keeping the sessions and worktrees available for resume.
 	chatStopTimeout := cfg.ShutdownTimeout
@@ -1820,13 +1851,17 @@ func Run(buildVersion string) (retErr error) {
 		chatSvc.StopAll(chatStopCtx)
 	}
 	chatCancel()
-	if usageDone != nil {
-		<-usageDone
-	}
+	// After the chat stop: a report sent to a Chat orchestrator can be queued
+	// behind that controller's send lock, which the stop releases.
+	reportJoined = true
+	drain.wait("report coordinator", reportDeliveryDone)
+	drain.wait("usage pipeline", usageDone)
 	if usagePricing != nil {
-		usagePricing.Wait()
+		pricingJoined = true
+		drain.run("usage pricing", usagePricing.Wait)
 	}
-	lcStack.Stop()
+	drain.run("lifecycle stack", lcStack.Stop)
+	drain.run("store sweeps", sweepLoops.Wait)
 	// Tear the tailnet proxy down before the listener it fronts. `tailscale
 	// serve --bg` state lives in tailscaled and outlives this process, so
 	// leaving it would keep publishing a local port that no longer has the
@@ -2079,10 +2114,11 @@ func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 	}
 }
 
-// dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
-// stage of margin. Installer draining can outlast an ordinary shutdown stage.
+// dataDirTakeoverWait covers the capped shutdown stages, the shared drain
+// budget, plus one ordinary stage of margin. Installer draining and the
+// desktop-quit chat stop can outlast an ordinary shutdown stage.
 func dataDirTakeoverWait(shutdownTimeout, installerShutdownTimeout time.Duration) time.Duration {
-	return 8*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 18*time.Second
+	return 9*shutdownTimeout + max(shutdownTimeout, 30*time.Second) + max(shutdownTimeout, installerShutdownTimeout) + 33*time.Second
 }
 
 // lockDataDir takes the data-dir lock. When another AO process holds it, as a

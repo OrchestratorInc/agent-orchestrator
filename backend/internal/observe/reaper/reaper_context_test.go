@@ -3,6 +3,7 @@ package reaper
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -48,5 +49,45 @@ func TestTickListsWithoutCancellableContext(t *testing.T) {
 	}
 	if len(reviewers.cancellable) != 1 || reviewers.cancellable[0] {
 		t.Fatalf("reviewers listed with a cancellable context: %v", reviewers.cancellable)
+	}
+}
+
+type bootRecordingReviewers struct {
+	panicNext bool
+	boots     []bool
+}
+
+func (r *bootRecordingReviewers) ListObservableReviewers(context.Context) ([]ports.ReviewerTarget, error) {
+	if r.panicNext {
+		r.panicNext = false
+		panic("listing exploded")
+	}
+	return nil, nil
+}
+
+func (r *bootRecordingReviewers) ProbeReviewer(context.Context, ports.ReviewerTarget) (bool, error) {
+	return false, nil
+}
+
+func (r *bootRecordingReviewers) ApplyReviewerObservations(_ context.Context, pass ports.ReviewerObservationPass) error {
+	r.boots = append(r.boots, pass.Boot)
+	return nil
+}
+
+// The run loop recovers a panicking tick and keeps going, so a boot pass cut
+// short by a panic must still be retried as the boot pass next time.
+func TestReviewerBootPassRetriesAfterPanic(t *testing.T) {
+	reviewers := &bootRecordingReviewers{panicNext: true}
+	r := New(&fakeLCM{}, &contextRecordingSessions{}, fakeRuntime{}, Config{Logger: quietLogger()})
+	r.BindReviewers(reviewers)
+	func() {
+		defer func() { _ = recover() }()
+		_ = r.observeReviewers(context.Background(), time.Now())
+	}()
+	if err := r.observeReviewers(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(reviewers.boots) != 1 || !reviewers.boots[0] {
+		t.Fatalf("pass after the panic boots = %v, want one boot pass", reviewers.boots)
 	}
 }

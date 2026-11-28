@@ -350,6 +350,23 @@ func (s *Store) RequeueClaimedReports(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+// RequeueStaleClaimedReports returns to pending every claim taken before
+// claimedBefore. A claim normally ends in acknowledge, release, defer or fail;
+// one whose owner died or lost its follow-up write would otherwise stay claimed
+// until the daemon restarts.
+func (s *Store) RequeueStaleClaimedReports(ctx context.Context, claimedBefore time.Time) (int64, error) {
+	if claimedBefore.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	count, err := s.qw.RequeueStaleClaimedReports(ctx, nullTime(claimedBefore))
+	if err != nil {
+		return 0, fmt.Errorf("requeue stale report claims: %w", err)
+	}
+	return count, nil
+}
+
 func (s *Store) reportWithOutputs(ctx context.Context, row gen.Report) (domain.ReportRecord, error) {
 	outputs, err := s.qr.ListReportOutputs(ctx, row.ID)
 	if err != nil {

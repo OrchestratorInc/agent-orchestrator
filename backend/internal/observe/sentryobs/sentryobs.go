@@ -116,6 +116,7 @@ var operationLabels = map[string]string{
 	"resume_agent":       "Agent resume failed",
 	"restore_session":    "Session restore failed",
 	"background_panic":   "daemon background panic",
+	"iteration_panic":    "daemon loop iteration panic",
 }
 
 var areaLabels = map[string]string{
@@ -621,15 +622,36 @@ func RecoverBackground() {
 	if rec == nil {
 		return
 	}
+	reportBackgroundPanic(rec, "background_panic")
+	panic(rec)
+}
+
+// RecoverIteration runs one unit of a long-running loop's repeated work and
+// reports a panic in it, like RecoverBackground, but returns instead of
+// crashing the daemon, so the loop goes on to its next pass. Use it only around
+// work that leaves nothing half-changed in memory that a later pass relies on:
+// a pass that re-reads its state from the store, a tick, a sweep. It returns
+// true when fn panicked.
+func RecoverIteration(fn func()) (panicked bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			panicked = true
+			reportBackgroundPanic(rec, "iteration_panic")
+		}
+	}()
+	fn()
+	return false
+}
+
+func reportBackgroundPanic(rec any, operation string) {
 	site := telemetrymeta.CurrentFailureSite()
 	kind := telemetrymeta.PanicKind(rec)
-	log.Printf("daemon background panic: %v\n%s", rec, debug.Stack())
+	log.Printf("daemon %s: %v\n%s", strings.ReplaceAll(operation, "_", " "), rec, debug.Stack())
 	CapturePanic(context.Background(), map[string]string{
 		"component":  "daemon",
-		"operation":  "background_panic",
+		"operation":  operation,
 		"panic_kind": kind,
-	}, telemetrymeta.Fingerprint("daemon", "background_panic", site.String(), kind), telemetrymeta.SafeRoute{}, site)
-	panic(rec)
+	}, telemetrymeta.Fingerprint("daemon", operation, site.String(), kind), telemetrymeta.SafeRoute{}, site)
 }
 
 func capture(level sentry.Level, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, isPanic bool) {

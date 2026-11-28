@@ -65,9 +65,9 @@ func TestDataDirTakeoverWaitIncludesInstallerDrain(t *testing.T) {
 		shutdown time.Duration
 		want     time.Duration
 	}{
-		{"default", 10 * time.Second, 382 * time.Second},
-		{"short shutdown", time.Second, 310 * time.Second},
-		{"long shutdown", 5 * time.Minute, 2718 * time.Second},
+		{"default", 10 * time.Second, 437 * time.Second},
+		{"short shutdown", time.Second, 356 * time.Second},
+		{"long shutdown", 5 * time.Minute, 3333 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := dataDirTakeoverWait(tc.shutdown, systeminstall.DefaultShutdownTimeout())
