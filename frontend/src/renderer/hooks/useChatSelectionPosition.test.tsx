@@ -124,4 +124,41 @@ describe("selection action positioning", () => {
 		h.flush();
 		expect(h.invalid).toHaveBeenCalled();
 	});
+
+	it("places a page selection from its frame's box and follows only that frame's reports", () => {
+		const viewport = document.createElement("div");
+		const frame = document.createElement("iframe");
+		const other = document.createElement("iframe");
+		viewport.append(frame, other);
+		const button = document.createElement("div");
+		document.body.append(viewport, button);
+		vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 500, 400));
+		vi.spyOn(button, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 120, 36));
+		vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(20, 150, 400, 300));
+		let scheduled: FrameRequestCallback | undefined;
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { scheduled = callback; return 1; });
+		const flush = () => act(() => { const callback = scheduled; scheduled = undefined; callback?.(0); });
+		const report = (source: Window | null, top: number) => act(() => {
+			const at = { left: 100, top, width: 80, height: 20 };
+			window.dispatchEvent(new MessageEvent("message", { source, data: { jsonrpc: "2.0", method: "ao/selection", params: { first: at, extent: at } } }));
+		});
+		const range = document.createRange();
+		range.selectNode(frame);
+		const invalid = vi.fn();
+		const at = { left: 100, top: 100, width: 80, height: 20 };
+		const selected = { element: frame, first: at, extent: at };
+		const hook = renderHook(({ pinned }) => useChatSelectionPosition(range, { current: viewport }, { current: button }, invalid, pinned, selected), { initialProps: { pinned: false } });
+		expect(hook.result.current).toEqual({ left: 100, top: 108, visible: true });
+		fireEvent(document, new Event("selectionchange")); flush();
+		expect(invalid).not.toHaveBeenCalled();
+		report(other.contentWindow, 300); flush();
+		expect(hook.result.current?.top).toBe(108);
+		report(frame.contentWindow, 300); flush();
+		expect(hook.result.current).toEqual({ left: 100, top: 308, visible: false });
+		hook.rerender({ pinned: true });
+		expect(hook.result.current?.top).toBe(308);
+		frame.remove();
+		fireEvent.scroll(viewport); flush();
+		expect(invalid).toHaveBeenCalled();
+	});
 });

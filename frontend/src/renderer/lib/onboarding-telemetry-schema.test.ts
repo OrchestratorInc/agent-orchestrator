@@ -37,6 +37,16 @@ describe("onboarding telemetry allowlist", () => {
 		}
 	});
 
+	it("keeps the work defaults page's choices as booleans only", () => {
+		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "work_defaults", archive_on_merge: true, auto_review: false, assigned_issues: "yes", fix_checks: true, fix_review_comments: 1 }))
+			.toEqual({ step: "work_defaults", step_index: 10, archive_on_merge: true, auto_review: false, fix_checks: true });
+	});
+
+	it("keeps the work defaults page's agent only as an agent id", () => {
+		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "work_defaults", orchestrator_agent: "claude-code", worker_agent: "/Users/me/bin/codex" }))
+			.toEqual({ step: "work_defaults", step_index: 10, orchestrator_agent: "claude-code" });
+	});
+
 	it("keeps only closed values on step events", () => {
 		expect(sanitizeOnboardingProperties("ao.onboarding.step_viewed", {
 			step: "tools",
@@ -116,6 +126,16 @@ describe("onboarding telemetry allowlist", () => {
 			reason: "exit status 1",
 			error_code: "remote: Repository not found.",
 		})).toEqual({});
+	});
+
+	it("keeps a failure cause only from the closed list, and only for install_failed", () => {
+		const finished = { action: "agent_install", target: "codex", attempt: 1, outcome: "failed" };
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { ...finished, reason: "install_failed", failure_cause: "npm_missing" }))
+			.toEqual({ ...finished, reason: "install_failed", failure_cause: "npm_missing" });
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { ...finished, reason: "install_failed", failure_cause: "exec: \"npm\": executable file not found in $PATH" }))
+			.toEqual({ ...finished, reason: "install_failed" });
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { ...finished, reason: "start_failed", failure_cause: "network" }))
+			.toEqual({ ...finished, reason: "start_failed" });
 	});
 
 	it("buckets activation time", () => {

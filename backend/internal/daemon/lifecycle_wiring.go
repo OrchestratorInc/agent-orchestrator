@@ -288,6 +288,7 @@ type sessionLifecycle interface {
 	SetComputerUseEnabled(enabled func(context.Context) bool)
 	SetDevicesOffered(offered func() bool)
 	SetCommitAttributionEnabled(enabled func(context.Context) bool)
+	SetSkillSharingEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -326,6 +327,7 @@ type sessionLifecycle interface {
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
 	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
+	PersistChatEffort(ctx context.Context, id domain.SessionID, effort string) error
 }
 
 // sessionLifecycleMessenger adapts sessionLifecycle to ports.AgentMessenger so
@@ -403,7 +405,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Browser:             browserLifecycle,
 		BrowserCapabilities: browserCapabilities,
 		AgentBrowserURL:     cfg.AgentBrowserURL,
-		AgentBrowserToken:   cfg.AgentBrowserToken,
 		DataDir:             cfg.DataDir,
 		RunFilePath:         cfg.RunFilePath,
 		BackgroundContext:   ctx,
@@ -932,6 +933,10 @@ func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, 
 
 func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) error {
 	return c.svc.DrainQueued(ctx, id)
+}
+
+func (c chatLauncher) OpenChats() []domain.SessionID {
+	return c.svc.OpenChats()
 }
 
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {

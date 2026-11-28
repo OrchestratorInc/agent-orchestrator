@@ -175,6 +175,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/endpoint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Store a custom API base URL and key for one agent */
+        put: operations["setAgentEndpoint"];
+        post?: never;
+        /** Remove the custom API endpoint for one agent */
+        delete: operations["clearAgentEndpoint"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/install": {
         parameters: {
             query?: never;
@@ -926,6 +944,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List agent actions waiting for the user's approval */
+        get: operations["listApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/approvals/{id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Allow once, always allow on this site, or deny a pending agent action */
+        post: operations["decideApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/approvals/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the log of gated agent actions and how each was decided */
+        get: operations["listApprovalAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/approvals/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a session's approval mode and the sites always allowed */
+        get: operations["getApprovalPolicy"];
+        /** Change when a session asks before acting: off, risky actions, or every form submission */
+        put: operations["setApprovalPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/approvals/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Forget an always-allow choice for a site and category */
+        delete: operations["removeApprovalSiteRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/approvals/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream approval requests as they arrive and end */
+        get: operations["streamApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attachment-uploads": {
         parameters: {
             query?: never;
@@ -1265,6 +1386,23 @@ export interface paths {
         put?: never;
         /** Execute a target-scoped command in a session's desktop browser */
         post: operations["executeBrowserCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/browser/remote-commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an agent-browser command on this host's self-hosted agent browser, after the approval gate */
+        post: operations["executeRemoteBrowserCommand"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3140,6 +3278,23 @@ export interface paths {
         put?: never;
         /** Write images into a running session's worktree and return their paths */
         post: operations["stageSessionAttachments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/attachments/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release or renew files staged for an unsent chat draft */
+        post: operations["updateSessionAttachmentLeases"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5374,6 +5529,23 @@ export interface paths {
         patch: operations["updateSessionRetention"];
         trace?: never;
     };
+    "/api/v1/settings/skill-sharing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Turn sharing the user's skills with every agent on or off */
+        patch: operations["updateSkillSharing"];
+        trace?: never;
+    };
     "/api/v1/settings/version-refresh": {
         parameters: {
             query?: never;
@@ -5901,6 +6073,7 @@ export interface components {
             action: string;
             agentId: string;
             available: boolean;
+            customEndpoint?: components["schemas"]["AgentEndpointStatus"];
             displayCommand?: string;
             documentationUrl: string;
             guidance?: string;
@@ -5930,6 +6103,22 @@ export interface components {
             model?: string;
             permissions?: string;
             terminateOnPrMerge?: null | boolean;
+        };
+        AgentEndpointResponse: {
+            endpoint: components["schemas"]["AgentEndpointStatus"];
+        };
+        AgentEndpointStatus: {
+            /** @enum {string} */
+            authStyle?: "bearer" | "api-key";
+            authStyles: string[];
+            baseUrl?: string;
+            configured: boolean;
+            /** @enum {string} */
+            defaultAuthStyle: "bearer" | "api-key";
+            error?: string;
+            hasApiKey: boolean;
+            model?: string;
+            supportsModel: boolean;
         };
         AgentInfo: {
             /**
@@ -6120,6 +6309,91 @@ export interface components {
             processCount: number;
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
+        };
+        ApprovalAuditEntryResponse: {
+            action: string;
+            category: string;
+            /** Format: date-time */
+            decidedAt: string;
+            /** @enum {string} */
+            decision: "allow-once" | "allow-site" | "deny" | "timeout" | "cancelled" | "site-allowed";
+            id: string;
+            kind: string;
+            reason?: string;
+            sessionId: string;
+            site: string;
+            /** Format: date-time */
+            time: string;
+            url?: string;
+        };
+        ApprovalAuditResponse: {
+            entries: components["schemas"]["ApprovalAuditEntryResponse"][];
+        };
+        ApprovalDecisionRequest: {
+            /** @enum {string} */
+            decision: "allow-once" | "allow-site" | "deny";
+        };
+        ApprovalDecisionResponse: {
+            /** @enum {string} */
+            decision: "allow-once" | "allow-site" | "deny" | "timeout" | "cancelled" | "site-allowed";
+            id: string;
+        };
+        ApprovalListResponse: {
+            pending: components["schemas"]["ApprovalPendingResponse"][];
+        };
+        ApprovalPendingResponse: {
+            /** @description What will happen, e.g. Click "Place order" on shop.example. */
+            action: string;
+            /** @description payment, message, publish, delete, security, account, submit, or credential. */
+            category: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description The target element's role and label. */
+            element?: string;
+            /**
+             * Format: date-time
+             * @description When the request is denied if nobody answers.
+             */
+            expiresAt: string;
+            id: string;
+            /** @description Base64 PNG of the element in its page. */
+            image?: string;
+            /**
+             * @description What is asking: a browser action, or the first use of a saved login.
+             * @enum {string}
+             */
+            kind: "browser-action" | "credential-use";
+            pageTitle?: string;
+            /** @description Why it was flagged. */
+            reason: string;
+            sessionId: string;
+            /** @description Origin (scheme, host, and non-default port) the action happens on; Always allow is remembered for it. */
+            site: string;
+            url?: string;
+        };
+        ApprovalPolicyRequest: {
+            /** @enum {string} */
+            mode: "off" | "risky" | "every-submit";
+            sessionId?: string;
+        };
+        ApprovalPolicyResponse: {
+            /**
+             * @description The mode for sessions that have not chosen their own.
+             * @enum {string}
+             */
+            defaultMode: "off" | "risky" | "every-submit";
+            /**
+             * @description The session's mode, or the default when no session was named.
+             * @enum {string}
+             */
+            mode: "off" | "risky" | "every-submit";
+            sites: components["schemas"]["ApprovalSiteRuleResponse"][];
+        };
+        ApprovalSiteRuleResponse: {
+            category: string;
+            /** Format: date-time */
+            createdAt: string;
+            site: string;
         };
         ArtifactFileResponse: {
             /** @description Hex SHA-256 of the file's content. */
@@ -6442,6 +6716,23 @@ export interface components {
             requestId: string;
             result: unknown;
             sessionId: string;
+        };
+        BrowserRemoteCommandRequest: {
+            /** @description agent-browser arguments, e.g. ["click", "@e2"]. */
+            args: string[];
+            /** @description Uploaded files by path, base64. */
+            files?: {
+                [key: string]: string;
+            };
+            sessionId: string;
+        };
+        BrowserRemoteCommandResponse: {
+            error?: string;
+            /** @description Files the command wrote, by path, base64. */
+            files?: {
+                [key: string]: string;
+            };
+            output: string;
         };
         BrowserStatusResponse: {
             client?: string;
@@ -7243,6 +7534,7 @@ export interface components {
             displayName?: string;
             /** @enum {string} */
             displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Waiting on base PR" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            effort?: string;
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -7262,6 +7554,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            modelPending?: boolean;
             moveStarted?: string;
             movedTo?: components["schemas"]["SessionMove"];
             needsResume: boolean;
@@ -8093,6 +8386,11 @@ export interface components {
             /** @description Expected or adapter-resolved executable destination. */
             expectedDestination?: string;
             /**
+             * @description Set only when status is failed: why, from a closed list read from the error and output.
+             * @enum {string}
+             */
+            failureCause?: "timeout" | "not_found_after_install" | "verify_failed" | "node_missing" | "npm_missing" | "brew_missing" | "tool_missing" | "xcode_tools_missing" | "disk_full" | "permission_denied" | "network" | "locked" | "exit_nonzero" | "other";
+            /**
              * Format: date-time
              * @description Absent until the job finishes.
              */
@@ -8722,6 +9020,8 @@ export interface components {
             agentRules?: string;
             agentRulesFile?: string;
             attribution?: components["schemas"]["AttributionConfig"];
+            autoInjectCI?: null | boolean;
+            autoInjectReview?: null | boolean;
             autoReview?: boolean;
             canonicalRepoURL?: string;
             containerReap?: components["schemas"]["ContainerReapConfig"];
@@ -9665,6 +9965,19 @@ export interface components {
             sessionId: string;
             state: string;
         };
+        SetAgentEndpointRequest: {
+            /** @description API key; omit to keep the stored key. */
+            apiKey?: string;
+            /**
+             * @description Credential form; defaults per harness.
+             * @enum {string}
+             */
+            authStyle?: "bearer" | "api-key";
+            /** @description Absolute http(s) provider endpoint URL. */
+            baseUrl: string;
+            /** @description Default model. Omit it to keep the saved model or use the first model the endpoint lists. */
+            model?: string;
+        };
         SetBrowserRemoteAccessRequest: {
             enabled: boolean;
         };
@@ -9772,6 +10085,8 @@ export interface components {
             localEnabled: boolean;
             /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
             sessionRetentionDays: number;
+            /** @description Sessions get the user's skills from ~/.agents, ~/.claude and ~/.codex that their agent does not load itself, inside Orchestrator only. A running session follows at its next resume. */
+            skillSharing: boolean;
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
@@ -10024,6 +10339,7 @@ export interface components {
         };
         StageSessionAttachmentsRequest: {
             attachments: components["schemas"]["AttachmentInput"][];
+            draft?: boolean;
         };
         StageSessionAttachmentsResponse: {
             paths: string[];
@@ -10208,6 +10524,7 @@ export interface components {
             installId?: string;
             isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;
+            lifetimeWorkSessions?: null | number;
             optedOut: boolean;
         };
         TerminalShellCheckResponse: {
@@ -10324,6 +10641,13 @@ export interface components {
             config: components["schemas"]["ProjectConfig"];
             displayName: string;
         };
+        UpdateSessionAttachmentLeasesRequest: {
+            release?: string[];
+            renew?: string[];
+        };
+        UpdateSessionAttachmentLeasesResponse: {
+            missing: string[];
+        };
         UpdateSessionInterfaceRequest: {
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
@@ -10335,6 +10659,9 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateSkillSharingRequest: {
+            enabled: null | boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -10363,6 +10690,9 @@ export interface components {
         UsageLimitLogin: {
             accountId: string;
             email?: string;
+            loginId?: string;
+            organizationName?: string;
+            organizationUnknown?: boolean;
             plan?: string;
             /** @enum {string} */
             provider: "claude" | "codex";
@@ -11361,6 +11691,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrewarmChatAgentResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAgentEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAgentEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentEndpointResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearAgentEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentEndpointResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */
@@ -13678,6 +14112,339 @@ export interface operations {
             };
         };
     };
+    listApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalListResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    decideApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Approval request id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalDecisionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listApprovalAudit: {
+        parameters: {
+            query?: {
+                /** @description Maximum entries, newest first. Defaults to 100. */
+                limit?: null | number;
+                /** @description Only this session's entries. */
+                sessionId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalAuditResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getApprovalPolicy: {
+        parameters: {
+            query?: {
+                /** @description Report this session's mode. */
+                sessionId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalPolicyResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setApprovalPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalPolicyResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeApprovalSiteRule: {
+        parameters: {
+            query: {
+                site: string;
+                category: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalPolicyResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    streamApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     uploadAttachment: {
         parameters: {
             query?: never;
@@ -14968,6 +15735,87 @@ export interface operations {
             };
             /** @description Gateway Timeout */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    executeRemoteBrowserCommand: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserRemoteCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserRemoteCommandResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21764,6 +22612,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StageSessionAttachmentsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSessionAttachmentLeases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionAttachmentLeasesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSessionAttachmentLeasesResponse"];
                 };
             };
             /** @description Bad Request */
@@ -30651,6 +31562,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateSessionRetentionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSkillSharing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkillSharingRequest"];
             };
         };
         responses: {

@@ -417,6 +417,25 @@ export function activityNodesRunning(nodes: ActivityNode[]): boolean {
 	return nodes.some((node) => node.activity.status === "running" || activityNodesRunning(node.children));
 }
 
+/**
+ * What a compaction row says, in the desktop's words: under way, could not run
+ * (with why, or that it was stopped), or done with what it freed and how full
+ * the context is now.
+ */
+export function compactionLine(activity: ConversationActivity): string {
+	if (activity.status === "running") return "Compacting conversation";
+	if (activity.status === "failed" || activity.status === "cancelled") {
+		const reason = activity.detail?.error || (activity.status === "cancelled" ? "Stopped" : "");
+		return reason ? `Couldn't compact conversation · ${reason}` : "Couldn't compact conversation";
+	}
+	const reclaimed = activity.detail?.tokensReclaimed;
+	const after = activity.detail?.tokensAfter;
+	const window = activity.detail?.contextWindow;
+	return `Compacted conversation${reclaimed ? ` · −${formatTokens(reclaimed)}` : ""}${after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}`;
+}
+
+function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
+
 export function summarizeActivities(activities: ConversationActivity[]): string {
 	let reads = 0;
 	let searches = 0;

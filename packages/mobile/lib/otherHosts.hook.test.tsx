@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
+import type { SavedBoard } from "./boardSnapshot";
 import type { Host } from "./hosts";
 import { connectedSpawnHosts } from "./hostRoute";
 import { emptyHostSnapshot, useOtherHosts, type HostSnapshot, type VerifiedHostSnapshot } from "./otherHosts";
@@ -14,7 +15,7 @@ vi.mock("./api", () => ({
 }));
 vi.mock("./connectRuntime", () => ({ connectToHost: vi.fn() }));
 vi.mock("./hosts", () => ({ findHost: vi.fn() }));
-vi.mock("./config", () => ({ isConfigured: (config: ServerConfig) => Boolean(config.host) }));
+vi.mock("./config", () => ({ isConfigured: (config: ServerConfig) => Boolean(config.host), hostMachineIdentity: (hostId: string) => `host.${hostId}` }));
 vi.mock("./pollInterval", () => ({ pollIntervalFor: () => 60_000 }));
 
 type HandoffResult = ReturnType<typeof useOtherHosts> & {
@@ -33,8 +34,15 @@ const configs = { a: configA, b: configB, c: configC };
 
 let current!: HandoffResult;
 
+// The phone's saved boards, by machine: what the store hands useOtherHosts.
+const savedBoards = new Map<string, SavedBoard>();
+const boards = {
+	load: vi.fn(async (machine: string) => savedBoards.get(machine) ?? null),
+	save: vi.fn((board: Omit<SavedBoard, "v">) => { savedBoards.set(board.machine, { v: 1, ...board }); }),
+};
+
 function Harness(props: { selectedHostId: string; appActive: boolean; hosts?: Host[] }) {
-	current = useOtherHosts(props.hosts ?? hosts, props.selectedHostId, props.appActive);
+	current = useOtherHosts(props.hosts ?? hosts, props.selectedHostId, props.appActive, boards);
 	return null;
 }
 
@@ -59,6 +67,7 @@ async function renderHarness(selectedHostId = "a") {
 describe("other host ownership handoff", () => {
 	beforeEach(async () => {
 		vi.clearAllMocks();
+		savedBoards.clear();
 		const { connectToHost } = await import("./connectRuntime");
 		const { getSessions, getNotifications } = await import("./api");
 		vi.mocked(connectToHost).mockImplementation(async (hostId) => {
@@ -240,5 +249,181 @@ describe("other host ownership handoff", () => {
 		} finally {
 			act(() => renderer.unmount());
 		}
+	});
+});
+
+function worker(id: string, displayName: string) {
+	return {
+		id, displayName, projectId: "project", status: "idle", mode: "chat" as const,
+		branch: null, issueId: null, issueTitle: null, userPrompt: null, summary: null,
+		createdAt: "2026-11-27T00:00:00Z", lastActivityAt: "2026-11-27T00:00:00Z",
+	};
+}
+
+function savedBoard(hostId: string, savedAt: number, overrides: Partial<SavedBoard> = {}): SavedBoard {
+	return {
+		v: 1, machine: `host.${hostId}`, savedAt,
+		sessions: [worker(`${hostId}-1`, `Saved on ${hostId}`)],
+		orchestrators: [], projects: [{ id: "project", name: "Project" }], archive: null, stats: {}, notificationsUnread: 2,
+		...overrides,
+	};
+}
+
+describe("other machines' saved boards", () => {
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		savedBoards.clear();
+		const { connectToHost } = await import("./connectRuntime");
+		const { getSessions, getNotifications } = await import("./api");
+		vi.mocked(connectToHost).mockImplementation(async (hostId) => {
+			const config = configs[hostId as keyof typeof configs];
+			return { ok: true, hostId, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config };
+		});
+		vi.mocked(getSessions).mockImplementation(async (config) => ({
+			projects: [{ id: "project", name: "Project" }], sessions: [worker(`${config.hostId}-live`, `Live on ${config.hostId}`)], orchestrators: [], orchestratorId: null, stats: {},
+		}));
+		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 1, nextCursor: undefined });
+	});
+
+	it("shows an unreachable machine's last board at launch, aged by when it was saved", async () => {
+		const { connectToHost } = await import("./connectRuntime");
+		vi.mocked(connectToHost).mockImplementation(async (hostId) => {
+			if (hostId === "b") return { ok: false, reason: "none-reachable" };
+			const config = configs[hostId as keyof typeof configs];
+			return { ok: true, hostId, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config };
+		});
+		const savedAt = Date.now() - 10 * 60_000;
+		savedBoards.set("host.b", savedBoard("b", savedAt));
+		const renderer = await renderHarness();
+		try {
+			await act(async () => { await Promise.resolve(); });
+			expect(current.snapshots.b).toMatchObject({
+				connection: "closed",
+				config: null,
+				lastSyncAt: savedAt,
+				projects: [{ id: "project", name: "Project" }],
+				projectsKnown: true,
+				notificationsUnread: 2,
+			});
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-1"]);
+			expect(boards.load).toHaveBeenCalledWith("host.b");
+			// The selected machine's board is the store's to restore, not this hook's.
+			expect(boards.load).not.toHaveBeenCalledWith("host.a");
+		} finally { act(() => renderer.unmount()); }
+	});
+
+	it("never lays a saved board over a live one that answered first", async () => {
+		let release!: () => void;
+		boards.load.mockImplementationOnce(async (machine: string) => {
+			await new Promise<void>((resolve) => { release = resolve; });
+			return savedBoards.get(machine) ?? null;
+		});
+		savedBoards.set("host.b", savedBoard("b", Date.now() - 60_000));
+		const renderer = await renderHarness();
+		try {
+			await act(async () => { await Promise.resolve(); });
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); });
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			expect(current.snapshots.b.connection).toBe("open");
+		} finally { act(() => renderer.unmount()); }
+	});
+
+	it("saves each other machine's board after it answers, with its unread count", async () => {
+		const renderer = await renderHarness();
+		try {
+			await act(async () => { await Promise.resolve(); });
+			for (const hostId of ["b", "c"]) {
+				expect(savedBoards.get(`host.${hostId}`)).toMatchObject({
+					machine: `host.${hostId}`,
+					sessions: [{ id: `${hostId}-live` }],
+					projects: [{ id: "project", name: "Project" }],
+					notificationsUnread: 1,
+				});
+				expect(savedBoards.get(`host.${hostId}`)?.savedAt).toBe(current.snapshots[hostId].lastSyncAt);
+			}
+			expect(savedBoards.has("host.a")).toBe(false);
+		} finally { act(() => renderer.unmount()); }
+	});
+
+	it("keeps a restored project list when the first poll's /projects fails", async () => {
+		const { getSessions } = await import("./api");
+		vi.mocked(getSessions).mockImplementation(async (config) => ({
+			projects: null, sessions: [worker(`${config.hostId}-live`, "Live")], orchestrators: [], orchestratorId: null, stats: {},
+		}));
+		let release!: () => void;
+		const { connectToHost } = await import("./connectRuntime");
+		vi.mocked(connectToHost).mockImplementation(async (hostId) => {
+			// The saved board is read before the machine answers.
+			if (hostId === "b") await new Promise<void>((resolve) => { release = resolve; });
+			const config = configs[hostId as keyof typeof configs];
+			return { ok: true, hostId, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config };
+		});
+		savedBoards.set("host.b", savedBoard("b", Date.now() - 60_000));
+		const renderer = await renderHarness();
+		try {
+			await act(async () => { await Promise.resolve(); });
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-1"]);
+			await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			expect(current.snapshots.b).toMatchObject({ projects: [{ id: "project", name: "Project" }], projectsKnown: true });
+			expect(savedBoards.get("host.b")?.projects).toEqual([{ id: "project", name: "Project" }]);
+		} finally { act(() => renderer.unmount()); }
+	});
+
+	it("keeps the saved project list when the board loads after a first poll whose /projects failed", async () => {
+		const { getSessions } = await import("./api");
+		let projects: Array<{ id: string; name: string }> | null = null;
+		vi.mocked(getSessions).mockImplementation(async (config) => ({
+			projects, sessions: [worker(`${config.hostId}-live`, "Live")], orchestrators: [], orchestratorId: null, stats: {},
+		}));
+		let release!: () => void;
+		boards.load.mockImplementation(async (machine: string) => {
+			const saved = savedBoards.get(machine) ?? null;
+			if (machine === "host.b") await new Promise<void>((resolve) => { release = resolve; });
+			return saved;
+		});
+		savedBoards.set("host.b", savedBoard("b", Date.now() - 60_000));
+		const renderer = await renderHarness();
+		try {
+			await act(async () => { await Promise.resolve(); });
+			// The live poll answered first, with no project list.
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			expect(current.snapshots.b.projectsKnown).toBe(false);
+			await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); });
+			// The live rows stay; only the list the poll could not send comes from the saved board.
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			expect(current.snapshots.b).toMatchObject({ projects: [{ id: "project", name: "Project" }], projectsKnown: true });
+			expect(savedBoards.get("host.b")).toMatchObject({ sessions: [{ id: "b-live" }], projects: [{ id: "project", name: "Project" }] });
+
+			// A list the machine does send, even an empty one, is what it has.
+			projects = [];
+			await act(async () => { await current.refreshHost("b"); });
+			expect(current.snapshots.b).toMatchObject({ projects: [], projectsKnown: true });
+			expect(savedBoards.get("host.b")?.projects).toEqual([]);
+		} finally {
+			boards.load.mockImplementation(async (machine: string) => savedBoards.get(machine) ?? null);
+			act(() => renderer.unmount());
+		}
+	});
+
+	it("does not bring back a machine removed while its saved board was loading", async () => {
+		let release!: () => void;
+		boards.load.mockImplementationOnce(async (machine: string) => {
+			await new Promise<void>((resolve) => { release = resolve; });
+			return savedBoards.get(machine) ?? null;
+		});
+		const { connectToHost } = await import("./connectRuntime");
+		vi.mocked(connectToHost).mockResolvedValue({ ok: false, reason: "none-reachable" });
+		savedBoards.set("host.b", savedBoard("b", Date.now() - 60_000));
+		const renderer = await renderHarness();
+		try {
+			await act(async () => {
+				renderer.update(<Harness selectedHostId="a" appActive hosts={[hostA, hostC]} />);
+				await Promise.resolve();
+			});
+			await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); });
+			expect(current.snapshots.b).toBeUndefined();
+		} finally { act(() => renderer.unmount()); }
 	});
 });

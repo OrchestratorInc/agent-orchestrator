@@ -2002,6 +2002,21 @@ func (s *Service) GetRecord(ctx context.Context, id domain.SessionID) (domain.Se
 	return rec, nil
 }
 
+// GetAttachmentRecord returns the stored row for a session or held task
+// preparation whose staged attachments may be previewed, renewing a
+// preparation's expiry so reading its staged files counts as use.
+func (s *Service) GetAttachmentRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("get %s: %w", id, err)
+	}
+	if !ok {
+		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	s.renewTaskPreparation(rec)
+	return rec, nil
+}
+
 // Get returns one session as an enriched display model, or an apierr.NotFound
 // (SESSION_NOT_FOUND) if it is absent.
 func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session, error) {

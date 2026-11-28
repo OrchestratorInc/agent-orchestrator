@@ -140,7 +140,8 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	}
 	// Forks at the latest finished turn; terminal sessions have no turn rows,
 	// so this is their way to fork. A session that can't be forked shows the
-	// item disabled, with the reason under it.
+	// item disabled, with the reason as its tooltip: a line under it would
+	// widen the fixed-width menu.
 	if (forkable) {
 		const refused = forkOptions.data && !forkOptions.data.allowed ? forkOptions.data : undefined;
 		entries.push({
@@ -149,7 +150,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			icon: <GitFork aria-hidden="true" />,
 			label: t("sessionFork.forkSession"),
 			disabled: Boolean(refused),
-			description: refused?.refusal?.message,
+			title: refused?.refusal?.message,
 			onSelect: () => forkSession(session),
 			accelerator: "f",
 		});

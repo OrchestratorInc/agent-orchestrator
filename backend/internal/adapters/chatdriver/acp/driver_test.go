@@ -5826,13 +5826,15 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 	}
 
 	// Drain events and verify compaction event
-	var compactedEvent *ports.ChatEvent
+	var compactedEvent, runningEvent *ports.ChatEvent
 	for {
 		ev := nextEvent(t, opened.Events())
 		if ev.Kind == ports.ChatEventMessageDelta {
 			t.Fatalf("unexpected message delta emitted during compaction turn: %q", ev.Delta)
 		}
-		if ev.Kind == ports.ChatEventCompacted {
+		if ev.Kind == ports.ChatEventCompacted && ev.ActivityStatus == domain.ActivityStatusRunning {
+			runningEvent = &ev
+		} else if ev.Kind == ports.ChatEventCompacted {
 			compactedEvent = &ev
 		}
 		if ev.Kind == ports.ChatEventTurnCompleted {
@@ -5842,6 +5844,12 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 
 	if compactedEvent == nil {
 		t.Fatal("ChatEventCompacted was not emitted")
+	}
+	if runningEvent == nil || runningEvent.ProviderItemID == "" || runningEvent.ProviderItemID != compactedEvent.ProviderItemID {
+		t.Fatalf("running row = %+v, want one under way before the settled row, on the same item", runningEvent)
+	}
+	if compactedEvent.ActivityStatus == domain.ActivityStatusRunning {
+		t.Fatal("the last compaction row is still running")
 	}
 	if !strings.Contains(compactedEvent.Summary, "15.0k tokens") {
 		t.Errorf("summary = %q, want 15.0k tokens named", compactedEvent.Summary)
@@ -5902,21 +5910,38 @@ func compactionStatusPrompt(agent *fakeAgent, statuses ...map[string]any) func(c
 }
 
 type compactionTurnResult struct {
-	turn      ports.ChatEvent
+	turn ports.ChatEvent
+	// running is whether the compaction's row was reported under way first.
+	running bool
+	// compacted is whether the row settled as a finished compaction.
 	compacted bool
-	// timelineError is the turn's error row, the only timeline item a failed
-	// compaction has. Without one the timeline leaves the turn out.
+	// failure is the reason a failed compaction's row carries.
+	failure string
+	// rows are the compaction rows reported, by provider item id.
+	rows map[string]bool
+	// timelineError is a separate error row, which a compaction only needs for
+	// an account problem.
 	timelineError error
+	last          ports.ChatEvent
 }
 
 func awaitCompactionTurn(t *testing.T, opened ports.ChatConversation) compactionTurnResult {
 	t.Helper()
-	var result compactionTurnResult
+	result := compactionTurnResult{rows: map[string]bool{}}
 	for {
 		ev := nextEvent(t, opened.Events())
 		switch ev.Kind {
 		case ports.ChatEventCompacted:
-			result.compacted = true
+			result.rows[ev.ProviderItemID] = true
+			result.last = ev
+			switch ev.ActivityStatus {
+			case domain.ActivityStatusRunning:
+				result.running = true
+			case domain.ActivityStatusFailed:
+				result.failure = ev.Summary
+			default:
+				result.compacted = true
+			}
 		case ports.ChatEventError:
 			result.timelineError = ev.Err
 		case ports.ChatEventTurnCompleted:
@@ -5966,8 +5991,12 @@ func TestACPCompactionReportedFailedFailsTheTurn(t *testing.T) {
 			if result.turn.Err == nil || result.turn.Err.Error() != test.want {
 				t.Fatalf("turn error = %v, want %q", result.turn.Err, test.want)
 			}
-			if result.timelineError == nil || result.timelineError.Error() != test.want {
-				t.Fatalf("timeline error = %v, want %q", result.timelineError, test.want)
+			if !result.running || result.failure != test.want || len(result.rows) != 1 {
+				t.Fatalf("compaction row = running %v, failure %q, %d rows; want one row that ran and failed with %q",
+					result.running, result.failure, len(result.rows), test.want)
+			}
+			if result.timelineError != nil {
+				t.Fatalf("timeline error = %v, want the failure on the compaction row only", result.timelineError)
 			}
 		})
 	}
@@ -5995,7 +6024,7 @@ func TestACPCompactionFailureDoesNotCarryIntoTheNextCompaction(t *testing.T) {
 		t.Fatalf("second Compact: %v", err)
 	}
 	result := awaitCompactionTurn(t, opened)
-	if result.turn.TurnState != domain.TurnStateCompleted || !result.compacted || result.timelineError != nil {
+	if result.turn.TurnState != domain.TurnStateCompleted || !result.compacted || result.failure != "" || result.timelineError != nil {
 		t.Fatalf("second compaction = %+v, want completed and compacted with no error", result)
 	}
 }
@@ -6011,8 +6040,34 @@ func TestACPCompactionPromptErrorReachesTheTimeline(t *testing.T) {
 		t.Fatalf("Compact: %v", err)
 	}
 	result := awaitCompactionTurn(t, opened)
-	if result.turn.TurnState != domain.TurnStateFailed || result.timelineError == nil {
-		t.Fatalf("compaction = %+v, want failed with a timeline error", result)
+	if result.turn.TurnState != domain.TurnStateFailed || !strings.Contains(result.failure, "provider refused") || result.timelineError != nil {
+		t.Fatalf("compaction = %+v, want failed with the reason on its row", result)
+	}
+}
+
+// A compaction still open when its turn ends normally never said how it went
+// (an older Qwen whose closing line AO does not recognize): its row says so,
+// rather than settling as a finished compaction.
+func TestACPCompactionTheTurnLeftOpenSaysNoResult(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent, map[string]any{"status": "started"})
+	agent.mu.Unlock()
+
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
+		t.Fatalf("turn = %+v, want completed and not compacted", result)
+	}
+	if !result.running || len(result.rows) != 1 || result.failure != "No result reported" {
+		t.Fatalf("compaction = running %v, %d rows, failure %q; want one row that ran and says no result came",
+			result.running, len(result.rows), result.failure)
 	}
 }
 
@@ -6029,8 +6084,592 @@ func TestACPAutomaticCompactionFailureLeavesANormalTurnCompleted(t *testing.T) {
 	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatalf("StartDeferredTurn: %v", err)
 	}
-	if result := awaitCompactionTurn(t, opened); result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
 		t.Fatalf("turn = %+v, want completed and not compacted", result)
+	}
+	if result.failure != "Compaction failed" || len(result.rows) != 1 {
+		t.Fatalf("compaction rows = %v, failure %q; want one failed row", result.rows, result.failure)
+	}
+}
+
+// On AO's own /compact turn, the figures Claude gives at the compaction's
+// boundary beat the token bracket.
+func TestACPCompactionPrefersTheAgentsOwnFigures(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent,
+		map[string]any{"status": "started"},
+		map[string]any{"status": "completed"},
+		map[string]any{"status": "completed", "tokensBefore": 110559.0, "tokensAfter": 56805.0},
+	)
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if !result.compacted || len(result.rows) != 1 {
+		t.Fatalf("compaction = %+v, want one settled row", result)
+	}
+	if !strings.Contains(string(result.last.Detail), `"tokensReclaimed":53754`) || !strings.Contains(string(result.last.Detail), `"tokensAfter":56805`) {
+		t.Fatalf("detail = %s, want Claude's own figures", result.last.Detail)
+	}
+}
+
+// A compaction that finished with no newer token report settles when the agent
+// moves on, claiming no figures it does not have.
+func TestACPFinishedCompactionSettlesWhenTheAgentWritesOn(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	session := acpsdk.SessionId(opened.ProviderConversationID())
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+			UsageUpdate: &acpsdk.SessionUsageUpdate{Used: 180000, Size: 200000},
+		}})
+		for _, value := range []string{"started", "completed"} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+				SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+					SessionUpdate: "session_info_update",
+					Meta:          map[string]any{"ao/compaction": map[string]any{"status": value}},
+				},
+			}})
+		}
+		_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+			AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Picking up where I left off.")},
+		}})
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var settledBeforeReply bool
+	result := compactionTurnResult{rows: map[string]bool{}}
+	for {
+		ev := nextEvent(t, opened.Events())
+		if ev.Kind == ports.ChatEventCompacted {
+			result.rows[ev.ProviderItemID] = true
+			result.last = ev
+		}
+		if ev.Kind == ports.ChatEventMessageDelta && !settledBeforeReply {
+			settledBeforeReply = result.last.ActivityStatus != domain.ActivityStatusRunning && len(result.rows) == 1
+		}
+		if ev.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if !settledBeforeReply {
+		t.Fatal("the compaction row was still running when the agent wrote on")
+	}
+	if strings.Contains(string(result.last.Detail), "tokensReclaimed") || strings.Contains(string(result.last.Detail), "tokensAfter") {
+		t.Fatalf("detail = %s, want no figure the agent never reported", result.last.Detail)
+	}
+}
+
+// An agent that reports compaction as reply text (Qwen) gets the same row: the
+// recognized chunks never reach the reply, and the agent's own figures win.
+func TestACPCompactionMessageDrivesTheRowInsteadOfTheReply(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+			switch text {
+			case "Compressing context...":
+				return CompactionReport{Status: "started"}, true
+			case "Context compressed (48231 -> 9874).":
+				return CompactionReport{Status: "completed", TokensBefore: 48231, TokensAfter: 9874}, true
+			}
+			return CompactionReport{}, false
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events()) // controller.ready
+
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		for _, text := range []string{"Compressing context...", "Context compressed (48231 -> 9874).", "Done."} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+				AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+			}})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "/compress"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+
+	reply := ""
+	result := compactionTurnResult{rows: map[string]bool{}}
+	for {
+		ev := nextEvent(t, opened.Events())
+		if ev.Kind == ports.ChatEventMessageDelta {
+			reply += ev.Delta
+		}
+		if ev.Kind == ports.ChatEventCompacted {
+			result.rows[ev.ProviderItemID] = true
+			result.last = ev
+			result.running = result.running || ev.ActivityStatus == domain.ActivityStatusRunning
+		}
+		if ev.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if reply != "Done." {
+		t.Fatalf("reply = %q, want only the text that is not a compaction report", reply)
+	}
+	if !result.running || len(result.rows) != 1 || result.last.ActivityStatus == domain.ActivityStatusRunning {
+		t.Fatalf("compaction = running %v, %d rows, last %q; want one row that ran and settled",
+			result.running, len(result.rows), result.last.ActivityStatus)
+	}
+	if !strings.Contains(string(result.last.Detail), `"tokensReclaimed":38357`) {
+		t.Fatalf("detail = %s, want Qwen's own figures", result.last.Detail)
+	}
+}
+
+// An agent that starts, then finds nothing to compact (Qwen's "noop"), records
+// no compaction: a row it opened says so, and with none open its words stay in
+// the reply.
+func TestACPSkippedCompactionRecordsNoCompaction(t *testing.T) {
+	for name, test := range map[string]struct {
+		texts     []string
+		wantRows  int
+		wantReply string
+	}{
+		"after progress": {texts: []string{"Compressing context...", "Nothing to compress."}, wantRows: 1},
+		"on its own":     {texts: []string{"Nothing to compress."}, wantReply: "Nothing to compress."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:      domain.HarnessQwen,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+					switch text {
+					case "Compressing context...":
+						return CompactionReport{Status: "started"}, true
+					case "Nothing to compress.":
+						return CompactionReport{Status: "skipped"}, true
+					}
+					return CompactionReport{}, false
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			t.Cleanup(func() { _ = opened.Close() })
+			_ = nextEvent(t, opened.Events()) // controller.ready
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				for _, text := range test.texts {
+					_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+						AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+					}})
+				}
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "/compress"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			reply := ""
+			rows := map[string]domain.ActivityStatus{}
+			var last ports.ChatEvent
+			for {
+				ev := nextEvent(t, opened.Events())
+				if ev.Kind == ports.ChatEventMessageDelta {
+					reply += ev.Delta
+				}
+				if ev.Kind == ports.ChatEventCompacted {
+					rows[ev.ProviderItemID] = ev.ActivityStatus
+					last = ev
+				}
+				if ev.Kind == ports.ChatEventTurnCompleted {
+					break
+				}
+			}
+			if reply != test.wantReply {
+				t.Fatalf("reply = %q, want %q", reply, test.wantReply)
+			}
+			if len(rows) != test.wantRows {
+				t.Fatalf("compaction rows = %v, want %d", rows, test.wantRows)
+			}
+			if test.wantRows > 0 && (last.ActivityStatus != domain.ActivityStatusFailed || last.Summary != "Nothing to compact") {
+				t.Fatalf("row settled as %q %q, want failed with \"Nothing to compact\"", last.ActivityStatus, last.Summary)
+			}
+		})
+	}
+}
+
+// On AO's own compaction turn, an agent that finds nothing to compact leaves the
+// history as it was: the turn's row says so, and claims no compaction.
+func TestACPCompactionTurnWithNothingToCompactSaysSo(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityCompaction: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+			switch text {
+			case "Compressing context...":
+				return CompactionReport{Status: "started"}, true
+			case "Nothing to compress.":
+				return CompactionReport{Status: "skipped"}, true
+			}
+			return CompactionReport{}, false
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events()) // controller.ready
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		for _, text := range []string{"Compressing context...", "Nothing to compress."} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+				AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+			}})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted {
+		t.Fatalf("turn state = %v, want completed", result.turn.TurnState)
+	}
+	if result.compacted || len(result.rows) != 1 || result.failure != "Nothing to compact" {
+		t.Fatalf("compaction = compacted %v, %d rows, failure %q; want one row saying there was nothing to compact",
+			result.compacted, len(result.rows), result.failure)
+	}
+}
+
+// An agent that reports only that a compaction finished, with no start and no
+// figures, gets a row that waits for a newer context figure, so it never shows
+// the one from before the compaction as what is left.
+func TestACPCompactionOutcomeOnlyWaitsForANewerFigure(t *testing.T) {
+	for name, test := range map[string]struct {
+		// usageAfter is the context figure the agent reports once it finished.
+		usageAfter int
+		wantAfter  int64
+	}{
+		"newer figure":    {usageAfter: 24000, wantAfter: 24000},
+		"agent writes on": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					UsageUpdate: &acpsdk.SessionUsageUpdate{Used: 180000, Size: 200000},
+				}})
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": map[string]any{"status": "completed"}},
+					},
+				}})
+				if test.usageAfter > 0 {
+					_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+						UsageUpdate: &acpsdk.SessionUsageUpdate{Used: test.usageAfter, Size: 200000},
+					}})
+				}
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Picking up where I left off.")},
+				}})
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			result := awaitCompactionTurn(t, opened)
+			if !result.compacted || len(result.rows) != 1 {
+				t.Fatalf("compaction = compacted %v, %d rows; want one settled row", result.compacted, len(result.rows))
+			}
+			var detail struct {
+				TokensAfter int64 `json:"tokensAfter"`
+			}
+			if err := json.Unmarshal(result.last.Detail, &detail); err != nil {
+				t.Fatalf("unmarshal detail: %v", err)
+			}
+			if detail.TokensAfter != test.wantAfter {
+				t.Fatalf("tokensAfter = %d, want %d (detail %s)", detail.TokensAfter, test.wantAfter, result.last.Detail)
+			}
+		})
+	}
+}
+
+// An attachment that reconnects to a running turn gets that turn's updates
+// replayed, but not a context figure from an earlier turn. Each update must
+// still emit the same events as it did the first time, since the store knows a
+// replayed event by its update and its place among that update's events.
+func TestACPReplayedCompactionUpdatesEmitTheSameEvents(t *testing.T) {
+	type step struct {
+		usage  int64
+		report CompactionReport
+	}
+	steps := []step{
+		{report: CompactionReport{Status: "started"}},
+		{usage: 24000},
+		{report: CompactionReport{Status: "completed"}},
+		{report: CompactionReport{Status: "started"}},
+		{report: CompactionReport{Status: "failed", Reason: "Conversation too long"}},
+	}
+	replay := func(c *conversation) [][]string {
+		var updates [][]string
+		for _, step := range steps {
+			var events []string
+			emit := func(event ports.ChatEvent) {
+				events = append(events, event.ProviderItemID+" "+string(event.ActivityStatus))
+			}
+			if step.usage > 0 {
+				// As the client handles a token report.
+				c.trackContext("running", step.usage, 200000)
+				c.settleFinishedCompaction(emit)
+			} else {
+				c.reportCompaction("running", step.report, emit)
+			}
+			updates = append(updates, events)
+		}
+		return updates
+	}
+	first := &conversation{}
+	first.trackContext("earlier", 180000, 200000)
+	live := replay(first)
+	replayed := replay(&conversation{})
+	if !reflect.DeepEqual(replayed, live) {
+		t.Fatalf("replayed updates emit %q, want %q as they did live", replayed, live)
+	}
+	if last := live[len(live)-1]; len(last) != 1 || last[0] != "compaction:running:2 failed" {
+		t.Fatalf("failure settled %q, want the second compaction's row", last)
+	}
+}
+
+// A compaction that starts while a finished one still waits for its figure is a
+// second compaction: the first settles, and the second runs on its own row.
+func TestACPNextCompactionStartSettlesTheFinishedOne(t *testing.T) {
+	for name, first := range map[string][]string{
+		"outcome only":     {"completed"},
+		"started finished": {"started", "completed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			status := func(ctx context.Context, value map[string]any) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": value},
+					},
+				}})
+			}
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				for _, value := range first {
+					status(ctx, map[string]any{"status": value})
+				}
+				status(ctx, map[string]any{"status": "started"})
+				status(ctx, map[string]any{"status": "completed", "tokensBefore": 120000.0, "tokensAfter": 30000.0})
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			var order []string
+			ran := map[string]bool{}
+			settled := map[string]ports.ChatEvent{}
+			for {
+				ev := nextEvent(t, opened.Events())
+				if ev.Kind == ports.ChatEventCompacted {
+					if _, seen := settled[ev.ProviderItemID]; !seen && !ran[ev.ProviderItemID] {
+						order = append(order, ev.ProviderItemID)
+					}
+					if ev.ActivityStatus == domain.ActivityStatusRunning {
+						ran[ev.ProviderItemID] = true
+					} else {
+						settled[ev.ProviderItemID] = ev
+					}
+				}
+				if ev.Kind == ports.ChatEventTurnCompleted {
+					break
+				}
+			}
+			if len(order) != 2 || len(settled) != 2 {
+				t.Fatalf("compaction rows = %v, settled %d; want two rows, both settled", order, len(settled))
+			}
+			firstRow, second := settled[order[0]], settled[order[1]]
+			if strings.Contains(string(firstRow.Detail), "tokensAfter") {
+				t.Fatalf("first row detail = %s, want no figure it never got", firstRow.Detail)
+			}
+			if !ran[order[1]] || !strings.Contains(string(second.Detail), `"tokensReclaimed":90000`) {
+				t.Fatalf("second row = ran %v, detail %s; want it to run, then settle on its own figures", ran[order[1]], second.Detail)
+			}
+		})
+	}
+}
+
+// Compactions are numbered per turn. An attachment that reconnects to a running
+// turn gets that turn's updates replayed, so it names the turn's compactions as
+// the attachment before it did, however many earlier turns had: a replayed one
+// reaches its stored row, and a new one gets a row of its own.
+func TestACPProviderCompactionIDsAreCountedPerTurn(t *testing.T) {
+	var ids []string
+	record := func(event ports.ChatEvent) { ids = append(ids, event.ProviderItemID) }
+	earlier := &conversation{}
+	earlier.reportCompaction("before", CompactionReport{Status: "failed"}, record)
+	earlier.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	// The next attachment gets only the running turn's updates, then more.
+	next := &conversation{}
+	next.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	next.reportCompaction("running", CompactionReport{Status: "failed"}, record)
+	next.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	want := []string{
+		"compaction:before:1",
+		"compaction:running:1",
+		"compaction:running:1", "compaction:running:1",
+		"compaction:running:2",
+	}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("compaction rows = %v, want %v", ids, want)
+	}
+}
+
+// Claude (through AO's patched adapter) and OpenCode report a compaction they
+// start on their own as status. It gets one row that runs, then settles with
+// what the token reports either side of it show.
+func TestACPProviderCompactionRunsThenSettlesOneRow(t *testing.T) {
+	for name, test := range map[string]struct {
+		key string
+		// usageLast sends the smaller context after "completed": the row
+		// waits for it instead of settling with nothing freed.
+		usageLast bool
+		// figures sends Claude's boundary report (a second "completed" with
+		// its own figures) between the bare "completed" and the usage.
+		figures bool
+		// figuresLast sends that report after the usage instead.
+		figuresLast bool
+	}{
+		"opencode":                {key: "opencode/compaction"},
+		"usage before completion": {key: "ao/compaction"},
+		"usage after completion":  {key: "opencode/compaction", usageLast: true},
+		"claude":                  {key: "ao/compaction", usageLast: true, figures: true},
+		// A usage report that lands between the bare "completed" and the
+		// boundary's figures settles the row; the figures still reach it.
+		"figures after usage": {key: "ao/compaction", usageLast: true, figuresLast: true},
+	} {
+		key := test.key
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			usage := func(ctx context.Context, used int) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					UsageUpdate: &acpsdk.SessionUsageUpdate{Used: used, Size: 200000},
+				}})
+			}
+			statusWith := func(ctx context.Context, value map[string]any) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{key: value},
+					},
+				}})
+			}
+			status := func(ctx context.Context, value string) { statusWith(ctx, map[string]any{"status": value}) }
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				usage(ctx, 180000)
+				status(ctx, "started")
+				// Claude repeats the status while it works.
+				status(ctx, "started")
+				if test.usageLast {
+					status(ctx, "completed")
+					if test.figures {
+						statusWith(ctx, map[string]any{"status": "completed", "tokensBefore": 180000.0, "tokensAfter": 24000.0})
+						// The usage after it repeats what the figures said.
+						usage(ctx, 24000)
+					} else {
+						usage(ctx, 24000)
+						if test.figuresLast {
+							statusWith(ctx, map[string]any{"status": "completed", "tokensBefore": 180000.0, "tokensAfter": 24000.0})
+						}
+					}
+				} else {
+					usage(ctx, 24000)
+					status(ctx, "completed")
+				}
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			result := awaitCompactionTurn(t, opened)
+			if result.turn.TurnState != domain.TurnStateCompleted {
+				t.Fatalf("turn state = %v, want completed", result.turn.TurnState)
+			}
+			if !result.running || !result.compacted || len(result.rows) != 1 {
+				t.Fatalf("compaction = running %v, compacted %v, %d rows; want one row that ran and settled",
+					result.running, result.compacted, len(result.rows))
+			}
+			var detail struct {
+				TokensBefore    int64 `json:"tokensBefore"`
+				TokensAfter     int64 `json:"tokensAfter"`
+				TokensReclaimed int64 `json:"tokensReclaimed"`
+				ContextWindow   int64 `json:"contextWindow"`
+			}
+			if err := json.Unmarshal(result.last.Detail, &detail); err != nil {
+				t.Fatalf("unmarshal detail: %v", err)
+			}
+			if detail.TokensBefore != 180000 || detail.TokensAfter != 24000 || detail.TokensReclaimed != 156000 || detail.ContextWindow != 200000 {
+				t.Fatalf("detail = %+v, want 180000 -> 24000 of 200000", detail)
+			}
+		})
 	}
 }
 
@@ -6227,8 +6866,9 @@ func TestACPCompactionCancelledDoesNotSettle(t *testing.T) {
 
 	for {
 		ev := nextEvent(t, opened.Events())
-		if ev.Kind == ports.ChatEventCompacted {
-			t.Fatal("ChatEventCompacted emitted on cancelled prompt")
+		if ev.Kind == ports.ChatEventCompacted && ev.ActivityStatus != domain.ActivityStatusRunning {
+			// The running row settles with the interrupted turn.
+			t.Fatalf("compaction settled as %q on a cancelled prompt", ev.ActivityStatus)
 		}
 		if ev.Kind == ports.ChatEventTurnCompleted {
 			if ev.TurnState != domain.TurnStateInterrupted {

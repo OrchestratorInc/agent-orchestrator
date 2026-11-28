@@ -1,5 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ArtifactScrollMemory, ArtifactScrollMemoryContext } from "../lib/artifact-scroll-memory";
+import { ArtifactZoomContext, ArtifactZoomController } from "../lib/artifact-zoom";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactPageFrame } from "./ArtifactPageFrame";
 
@@ -68,5 +70,50 @@ describe("ArtifactPageFrame links", () => {
 		post(openLink("javascript:alert(1)"), frame().contentWindow);
 		post(openLink("file:///etc/passwd"), frame().contentWindow);
 		expect(open).not.toHaveBeenCalled();
+	});
+});
+
+describe("ArtifactPageFrame scroll", () => {
+	it("scrolls a page shown again back to where it was left, and keeps up with where it is scrolled", () => {
+		const memory = new ArtifactScrollMemory({ x: 0, y: 640 });
+		render(
+			<ArtifactScrollMemoryContext.Provider value={memory}>
+				<ArtifactPageFrame src="http://ao-inline-artifact.sess-1.localhost/report.html" title="report.html" />
+			</ArtifactScrollMemoryContext.Provider>,
+		);
+		const page = frame().contentWindow!;
+		const postMessage = vi.spyOn(page, "postMessage");
+		act(() => { frame().dispatchEvent(new Event("load")); });
+		expect(postMessage).toHaveBeenLastCalledWith({
+			jsonrpc: "2.0",
+			method: "ui/notifications/host-context-changed",
+			params: { scrollReport: true, scrollTo: { x: 0, y: 640 } },
+		}, "*");
+		expect(memory.pendingPosition()).toBeUndefined();
+
+		post({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 900 } }, page);
+		expect(memory.current()).toEqual({ x: 0, y: 900 });
+		// Another window's report, or a malformed one, is not the page's.
+		post({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 5 } }, window);
+		post({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: "12" } }, page);
+		expect(memory.current()).toEqual({ x: 0, y: 900 });
+
+		// A reload of the page (the file rewritten) does not jump back to the old spot.
+		act(() => { frame().dispatchEvent(new Event("load")); });
+		expect(postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { scrollReport: true } }, "*");
+	});
+
+	it("asks for no scroll reports where no scroll is kept", () => {
+		render(
+			<ArtifactZoomContext.Provider value={new ArtifactZoomController()}>
+				<ArtifactPageFrame src="http://ao-inline-artifact.sess-1.localhost/report.html" title="report.html" />
+			</ArtifactZoomContext.Provider>,
+		);
+		const postMessage = vi.spyOn(frame().contentWindow!, "postMessage");
+		act(() => { frame().dispatchEvent(new Event("load")); });
+		expect(postMessage).toHaveBeenCalled();
+		for (const [message] of postMessage.mock.calls) {
+			expect((message as { params?: object }).params).not.toHaveProperty("scrollReport");
+		}
 	});
 });

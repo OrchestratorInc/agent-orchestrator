@@ -19,6 +19,7 @@ type SettingsService interface {
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (settingssvc.Snapshot, error)
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (settingssvc.Snapshot, error)
 	SetChatHibernationEnabled(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetSkillSharing(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetVersionRefresh(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetComputerUse(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetCommitAttribution(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
@@ -42,6 +43,7 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Get("/settings", c.get)
 	r.Patch("/settings/session-interface", c.setSessionInterface)
 	r.Patch("/settings/chat-hibernation", c.setChatHibernation)
+	r.Patch("/settings/skill-sharing", c.setSkillSharing)
 	r.Patch("/settings/version-refresh", c.setVersionRefresh)
 	r.Patch("/settings/computer-use", c.setComputerUse)
 	r.Patch("/settings/commit-attribution", c.setCommitAttribution)
@@ -105,6 +107,28 @@ func (c *SettingsController) setChatHibernation(w http.ResponseWriter, r *http.R
 		return
 	}
 	snapshot, err := c.Svc.SetChatHibernationEnabled(r.Context(), *req.Enabled)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
+func (c *SettingsController) setSkillSharing(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/skill-sharing")
+		return
+	}
+	var req UpdateSkillSharingRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"SKILL_SHARING_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetSkillSharing(r.Context(), *req.Enabled)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -219,6 +243,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		VersionRefresh:         snapshot.VersionRefresh,
 		ComputerUse:            snapshot.ComputerUse,
 		CommitAttribution:      snapshot.CommitAttribution,
+		SkillSharing:           snapshot.SkillSharing,
 		SessionRetentionDays:   snapshot.SessionRetentionDays,
 		CloudEnabled:           offering.CloudEnabled(),
 		AccountHandoff:         snapshot.AccountHandoff,

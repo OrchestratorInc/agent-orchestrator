@@ -207,3 +207,30 @@ export function readRenderImageRequest(data: unknown): { src: string; alt: strin
 	if (typeof src !== "string" || !/^data:image\//i.test(src)) return undefined;
 	return { src, alt: typeof params?.alt === "string" ? params.alt : "" };
 }
+
+export interface RenderRect {
+	left: number;
+	top: number;
+	width: number;
+	height: number;
+}
+
+export type RenderSelection = { text: "" } | { text?: string; first: RenderRect; extent: RenderRect };
+
+function readRenderRect(value: unknown): RenderRect | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const { left, top, width, height } = value as Record<string, unknown>;
+	return [left, top, width, height].every((each) => typeof each === "number" && Number.isFinite(each))
+		? { left, top, width, height } as RenderRect
+		: undefined;
+}
+
+export function readRenderSelection(data: unknown): RenderSelection | undefined {
+	const params = rpc(data, "ao/selection");
+	const text = params?.text;
+	if (!params || (text !== undefined && typeof text !== "string")) return undefined;
+	if (text === "") return { text };
+	const first = readRenderRect(params.first);
+	const extent = readRenderRect(params.extent);
+	return first && extent ? { ...(text === undefined ? {} : { text }), first, extent } : undefined;
+}

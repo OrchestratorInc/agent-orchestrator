@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -40,6 +41,13 @@ type ProviderKeyService interface {
 	CheckProviderKey(ctx context.Context, name, secret string) (agentauth.ProviderKeyCheck, error)
 }
 
+// AgentEndpointService manages a harness's user-supplied custom API endpoint.
+// The API key is write-only: responses carry display-safe status only.
+type AgentEndpointService interface {
+	SetEndpoint(ctx context.Context, agentID string, in harnessendpoint.Input) (harnessendpoint.Status, error)
+	ClearEndpoint(ctx context.Context, agentID string) (harnessendpoint.Status, error)
+}
+
 // AgentSignInRecorder applies a sign-in completed in the harness's own
 // terminal login to AO's state, so the CLI never writes that state itself.
 type AgentSignInRecorder interface {
@@ -63,6 +71,8 @@ type AgentAuthController struct {
 func (c *AgentAuthController) Register(r chi.Router) {
 	r.Get("/agents/auth-plans", c.list)
 	c.registerProviderKeys(r)
+	r.Put("/agents/{agent}/endpoint", c.setEndpoint)
+	r.Delete("/agents/{agent}/endpoint", c.clearEndpoint)
 	r.Post("/agents/{agent}/auth", c.start)
 	r.Post("/agents/{agent}/logout", c.logout)
 	c.registerUILogin(r)
@@ -347,6 +357,45 @@ func (c *AgentAuthController) checkProviderKey(w http.ResponseWriter, r *http.Re
 }
 
 // decodeOne reads exactly one small JSON object with no unknown fields.
+func (c *AgentAuthController) endpointService(w http.ResponseWriter, r *http.Request) (AgentEndpointService, bool) {
+	w.Header().Set("Cache-Control", "no-store")
+	svc, ok := c.Svc.(AgentEndpointService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/endpoint")
+	}
+	return svc, ok
+}
+
+func (c *AgentAuthController) setEndpoint(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.endpointService(w, r)
+	if !ok {
+		return
+	}
+	var req harnessendpoint.Input
+	if !decodeOne(w, r, &req, "custom endpoint request") {
+		return
+	}
+	status, err := svc.SetEndpoint(r.Context(), chi.URLParam(r, "agent"), req)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, AgentEndpointResponse{Endpoint: status})
+}
+
+func (c *AgentAuthController) clearEndpoint(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.endpointService(w, r)
+	if !ok {
+		return
+	}
+	status, err := svc.ClearEndpoint(r.Context(), chi.URLParam(r, "agent"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, AgentEndpointResponse{Endpoint: status})
+}
+
 func decodeOne(w http.ResponseWriter, r *http.Request, into any, what string) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20*1024))
 	decoder.DisallowUnknownFields()

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
@@ -78,12 +79,16 @@ type APIDeps struct {
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
 	TelemetryIdentity ports.TelemetryIdentityStore
 	LifetimeSessions  func(context.Context) (int64, error)
+	// LifetimeWork counts worker and standalone sessions ever started.
+	LifetimeWork func(context.Context) (int64, error)
 	// DaemonVersion is this daemon's release, reported to a paired phone.
 	DaemonVersion string
 	Mobile        *controllers.MobileController
 	BrowserLive   *BrowserLiveHub
 	Browser       controllers.BrowserService
 	BrowserChrome controllers.BrowserChromeService
+	// Approvals is the gate that holds consequential agent actions for the user.
+	Approvals controllers.ApprovalService
 	// Panes relays split-pane requests from agents to the desktop window.
 	Panes controllers.PaneService
 	// PaneTerminals lets an agent type into and read its session's shell terminals.
@@ -199,6 +204,7 @@ type API struct {
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
 	computerUse   *controllers.ComputerUseController
+	approvals     *controllers.ApprovalsController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
 	prPreview     *controllers.PRPreviewController
@@ -271,9 +277,10 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
-		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, DaemonVersion: deps.DaemonVersion},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, LifetimeWork: deps.LifetimeWork, DaemonVersion: deps.DaemonVersion},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
+		approvals:     &controllers.ApprovalsController{Svc: deps.Approvals},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		prPreview:     &controllers.PRPreviewController{Svc: deps.PRPreview},
@@ -284,6 +291,10 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 }
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
+
+// browserCommandBudget covers a command's own run plus the time it may wait
+// for the user to approve it.
+const browserCommandBudget = approval.BrowserCommandBudget
 
 // moveCaptureRoute reports a move route that reads a session's whole worktree
 // or fetches origin, either of which can outlast the default request budget.
@@ -355,6 +366,7 @@ func (a *API) Register(root chi.Router) {
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
+				browserCommand := middleware.Timeout(max(timeout, browserCommandBudget))(next)
 				deviceCommand := middleware.Timeout(max(timeout, deviceCommandBudget))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
@@ -374,6 +386,12 @@ func (a *API) Register(root chi.Router) {
 					// A stack merge waits up to two minutes for the provider to land
 					// it (stackMergeWait in the GitHub adapter), after the layers'
 					// own readiness reads.
+					// A consequential browser action waits for the user's approval
+					// (browsersvc.DefaultApprovalTimeout) before it runs.
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/browser/commands" || pattern == "/api/v1/browser/remote-commands" {
+						browserCommand.ServeHTTP(w, req)
+						return
+					}
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/prs/{id}/stack/merge" {
 						stackMerge.ServeHTTP(w, req)
 						return
@@ -457,6 +475,7 @@ func (a *API) Register(root chi.Router) {
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.computerUse.Register(r)
+			a.approvals.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
 			a.prPreview.Register(r)
@@ -466,6 +485,7 @@ func (a *API) Register(root chi.Router) {
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.
 		a.notifications.RegisterStream(r)
+		a.approvals.RegisterStream(r)
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)

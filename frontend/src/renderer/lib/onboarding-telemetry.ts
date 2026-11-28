@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
+import type { components } from "../../api/schema";
+import { onboardingFailureCause, type OnboardingFailureCause } from "../../shared/onboarding-failures";
 import { onComposerSent } from "./guided-tour-signals";
 import type { OnboardingStep } from "./onboarding-steps";
 import type {
@@ -8,6 +10,7 @@ import type {
 	OnboardingOutcome,
 	OnboardingProjectSource,
 	OnboardingRunKind,
+	OnboardingSkipReason,
 } from "./onboarding-telemetry-schema";
 import { isAnalyticsOptedOut, onAnalyticsOptedOut } from "./analytics-opt-out";
 import { captureRendererEvent, captureRendererEventOnUnload } from "./telemetry";
@@ -50,6 +53,8 @@ const STEPS_KEY = "ao.telemetry.onboardingSteps";
 const RUN_KEY = "ao.telemetry.onboardingRun";
 /** Activation is only looked for this long after onboarding finished. */
 const ACTIVATION_WINDOW_MS = 7 * 24 * 60 * 60_000;
+/** How long after onboarding the first message still counts as activation. */
+export const ONBOARDING_ACTIVATION_WINDOW_MS = ACTIVATION_WINDOW_MS;
 /** A project noted by the add or clone handler counts for the tour this long. */
 const PROJECT_NOTE_TTL_MS = 60_000;
 
@@ -235,7 +240,7 @@ export function completeOnboardingStepIfViewed(step: OnboardingStep): void {
  * past it) is counted once per install; a person skipping or dismissing is
  * counted on every click.
  */
-export function skipOnboardingStep(step: OnboardingStep, reason: "already_done" | "user" | "dismissed"): void {
+export function skipOnboardingStep(step: OnboardingStep, reason: OnboardingSkipReason, extra: Record<string, unknown> = {}): void {
 	if (!tracking()) return;
 	if (reason === "already_done") {
 		if (!reserve(`${step}:skipped`)) return;
@@ -244,10 +249,10 @@ export function skipOnboardingStep(step: OnboardingStep, reason: "already_done" 
 			run.autoSkipped += 1;
 			saveRun(run);
 		}
-		capture("ao.onboarding.step_skipped", { step, reason });
+		capture("ao.onboarding.step_skipped", { step, reason, ...extra });
 		return;
 	}
-	capture("ao.onboarding.step_skipped", { step, reason, time_on_step_ms: timeOnStep(step) });
+	capture("ao.onboarding.step_skipped", { step, reason, ...extra, time_on_step_ms: timeOnStep(step) });
 }
 
 /** Back, from one page to an earlier one. Sent per click. */
@@ -365,7 +370,7 @@ export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep
 
 /** The run ended: the last page's Continue (`finished`), Skip setup, or closed for the person (`superseded`). */
 export function completeOnboardingRun(outcome: OnboardingOutcome): void {
-	// Only a finished run goes on into the tour, which ends what is still running (GuidedTour).
+	// Only a finished run goes on into the first-task funnel, which ends what is still running (FirstTaskFunnel).
 	if (outcome !== "finished") leaveOnboardingActions();
 	else noteOnboardingPagesFinished();
 	if (!tracking()) {
@@ -443,7 +448,7 @@ export function startOnboardingAction(
 export function finishOnboardingAction(
 	action: OnboardingAction,
 	outcome: OnboardingActionOutcome,
-	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number; onUnload?: boolean } = {},
+	options: { target?: string; reason?: OnboardingFailureReason; failureCause?: OnboardingFailureCause; errorCode?: string; attempt?: number; onUnload?: boolean } = {},
 ): boolean {
 	const key = actionKey(action, options.target);
 	const watched = errorWatch.get(key);
@@ -452,7 +457,10 @@ export function finishOnboardingAction(
 	const attempt = pending.get(key);
 	// Once per attempt, and only for one started during onboarding: the same
 	// panels outside onboarding (the clone dialog's GitHub sign-in) send nothing.
-	if (errorWatch.delete(key) && outcome === "failed" && options.reason) captureOnboardingFailureToSentry(action, options.reason, options.target);
+	if (errorWatch.delete(key) && outcome === "failed" && options.reason) {
+		if (options.failureCause) captureOnboardingFailureToSentry(action, options.reason, options.target, options.failureCause);
+		else captureOnboardingFailureToSentry(action, options.reason, options.target);
+	}
 	if (!tracking() || !attempt) return false;
 	pending.delete(key);
 	(options.onUnload ? captureOnUnload : capture)("ao.onboarding.action_finished", {
@@ -462,6 +470,7 @@ export function finishOnboardingAction(
 		attempt: attempt.attempt,
 		outcome,
 		reason: options.reason,
+		failure_cause: options.failureCause,
 		error_code: options.errorCode,
 		duration_ms: Date.now() - attempt.startedAt,
 	});
@@ -500,13 +509,27 @@ export function onboardingActionAttempt(action: OnboardingAction, target?: strin
 	return errorWatch.get(actionKey(action, target));
 }
 
-/** An install job's end state, as an action outcome. */
-export function installJobOutcome(status: string | undefined): { outcome: OnboardingActionOutcome; reason?: OnboardingFailureReason } | null {
+type InstallFailureCause = NonNullable<components["schemas"]["InstallJob"]["failureCause"]>;
+// The daemon's enum and the closed list sent as failure_cause must match both ways.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _failureCausesMatch: Same<InstallFailureCause, OnboardingFailureCause> = true;
+void _failureCausesMatch;
+
+/**
+ * An install job's end state, as an action outcome. A failed job carries the
+ * daemon's closed-list cause (none from a daemon too old to send one).
+ */
+export function installJobOutcome(
+	status: string | undefined,
+	failureCause?: string,
+): { outcome: OnboardingActionOutcome; reason?: OnboardingFailureReason; failureCause?: OnboardingFailureCause } | null {
 	switch (status) {
 		case "succeeded":
 			return { outcome: "succeeded" };
-		case "failed":
-			return { outcome: "failed", reason: "install_failed" };
+		case "failed": {
+			const cause = onboardingFailureCause(failureCause);
+			return { outcome: "failed", reason: "install_failed", ...(cause ? { failureCause: cause } : {}) };
+		}
 		case "interrupted":
 			return { outcome: "failed", reason: "interrupted" };
 		case "unsupported":
@@ -522,7 +545,7 @@ export function apiErrorCode(error: unknown): string | undefined {
 	return typeof code === "string" ? code : undefined;
 }
 
-// ── The guided tour's project step ──────────────────────────────────────────
+// ── The first-task funnel's project step ────────────────────────────────────
 
 let projectNote: { source: "clone" | "local_folder"; projectId: string; at: number } | undefined;
 
@@ -560,10 +583,12 @@ export function recordOnboardingActivation(duringTour: boolean, now = Date.now()
 		milestone: "first_message",
 		time_since_completed_ms: now - run.completedAt,
 		during_tour: duringTour,
+		// Only the unguided funnel sends activation now (FirstTaskFunnel).
+		funnel_variant: "unguided",
 	});
 }
 
-/** Listens for the first delivered chat message for activation. Mounted once, by GuidedTour. */
+/** Listens for the first delivered chat message for activation. Mounted once, by FirstTaskFunnel. */
 export function useOnboardingActivation(duringTour: () => boolean): void {
 	const duringTourRef = useRef(duringTour);
 	duringTourRef.current = duringTour;

@@ -487,6 +487,89 @@ paths:
         to it skips it
       tags:
       - conversations
+  /api/v1/agents/{agent}/endpoint:
+    delete:
+      operationId: clearAgentEndpoint
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentEndpointResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove the custom API endpoint for one agent
+      tags:
+      - agents
+    put:
+      operationId: setAgentEndpoint
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAgentEndpointRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentEndpointResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Store a custom API base URL and key for one agent
+      tags:
+      - agents
   /api/v1/agents/{agent}/install:
     get:
       operationId: getAgentInstallStatus
@@ -2310,6 +2393,266 @@ paths:
       summary: Refresh the cached local agent adapter catalog
       tags:
       - agents
+  /api/v1/approvals:
+    get:
+      operationId: listApprovals
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalListResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List agent actions waiting for the user's approval
+      tags:
+      - approvals
+  /api/v1/approvals/{id}/decision:
+    post:
+      operationId: decideApproval
+      parameters:
+      - description: Approval request id.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Approval request id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalDecisionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalDecisionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Allow once, always allow on this site, or deny a pending agent action
+      tags:
+      - approvals
+  /api/v1/approvals/audit:
+    get:
+      operationId: listApprovalAudit
+      parameters:
+      - description: Maximum entries, newest first. Defaults to 100.
+        in: query
+        name: limit
+        schema:
+          description: Maximum entries, newest first. Defaults to 100.
+          maximum: 500
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: Only this session's entries.
+        in: query
+        name: sessionId
+        schema:
+          description: Only this session's entries.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalAuditResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the log of gated agent actions and how each was decided
+      tags:
+      - approvals
+  /api/v1/approvals/policy:
+    get:
+      operationId: getApprovalPolicy
+      parameters:
+      - description: Report this session's mode.
+        in: query
+        name: sessionId
+        schema:
+          description: Report this session's mode.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalPolicyResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a session's approval mode and the sites always allowed
+      tags:
+      - approvals
+    put:
+      operationId: setApprovalPolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalPolicyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalPolicyResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Change when a session asks before acting: off, risky actions, or every
+        form submission'
+      tags:
+      - approvals
+  /api/v1/approvals/sites:
+    delete:
+      operationId: removeApprovalSiteRule
+      parameters:
+      - in: query
+        name: site
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: category
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalPolicyResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Forget an always-allow choice for a site and category
+      tags:
+      - approvals
+  /api/v1/approvals/stream:
+    get:
+      operationId: streamApprovals
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream approval requests as they arrive and end
+      tags:
+      - approvals
   /api/v1/attachment-uploads:
     post:
       operationId: uploadAttachment
@@ -3253,6 +3596,69 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Gateway Timeout
       summary: Execute a target-scoped command in a session's desktop browser
+      tags:
+      - browser
+  /api/v1/browser/remote-commands:
+    post:
+      operationId: executeRemoteBrowserCommand
+      parameters:
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserRemoteCommandRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRemoteCommandResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run an agent-browser command on this host's self-hosted agent browser,
+        after the approval gate
       tags:
       - browser
   /api/v1/browser/status:
@@ -8633,6 +9039,57 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Write images into a running session's worktree and return their paths
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/attachments/leases:
+    post:
+      operationId: updateSessionAttachmentLeases
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionAttachmentLeasesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateSessionAttachmentLeasesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Release or renew files staged for an unsent chat draft
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/auto-inject-ci:
@@ -16312,6 +16769,43 @@ paths:
       summary: Choose how long archived sessions are kept before they are deleted
       tags:
       - settings
+  /api/v1/settings/skill-sharing:
+    patch:
+      operationId: updateSkillSharing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSkillSharingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn sharing the user's skills with every agent on or off
+      tags:
+      - settings
   /api/v1/settings/version-refresh:
     patch:
       operationId: updateVersionRefresh
@@ -17587,6 +18081,8 @@ components:
           type: string
         available:
           type: boolean
+        customEndpoint:
+          $ref: '#/components/schemas/AgentEndpointStatus'
         displayCommand:
           type: string
         documentationUrl:
@@ -17671,6 +18167,48 @@ components:
           type:
           - "null"
           - boolean
+      type: object
+    AgentEndpointResponse:
+      properties:
+        endpoint:
+          $ref: '#/components/schemas/AgentEndpointStatus'
+      required:
+      - endpoint
+      type: object
+    AgentEndpointStatus:
+      properties:
+        authStyle:
+          enum:
+          - bearer
+          - api-key
+          type: string
+        authStyles:
+          items:
+            type: string
+          type: array
+        baseUrl:
+          type: string
+        configured:
+          type: boolean
+        defaultAuthStyle:
+          enum:
+          - bearer
+          - api-key
+          type: string
+        error:
+          type: string
+        hasApiKey:
+          type: boolean
+        model:
+          type: string
+        supportsModel:
+          type: boolean
+      required:
+      - configured
+      - hasApiKey
+      - authStyles
+      - defaultAuthStyle
+      - supportsModel
       type: object
     AgentInfo:
       properties:
@@ -18171,6 +18709,203 @@ components:
       - processCount
       - cpuPercent
       - cpuMeasured
+      type: object
+    ApprovalAuditEntryResponse:
+      properties:
+        action:
+          type: string
+        category:
+          type: string
+        decidedAt:
+          format: date-time
+          type: string
+        decision:
+          enum:
+          - allow-once
+          - allow-site
+          - deny
+          - timeout
+          - cancelled
+          - site-allowed
+          type: string
+        id:
+          type: string
+        kind:
+          type: string
+        reason:
+          type: string
+        sessionId:
+          type: string
+        site:
+          type: string
+        time:
+          format: date-time
+          type: string
+        url:
+          type: string
+      required:
+      - id
+      - time
+      - kind
+      - sessionId
+      - site
+      - action
+      - category
+      - decision
+      - decidedAt
+      type: object
+    ApprovalAuditResponse:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/ApprovalAuditEntryResponse'
+          type: array
+      required:
+      - entries
+      type: object
+    ApprovalDecisionRequest:
+      properties:
+        decision:
+          enum:
+          - allow-once
+          - allow-site
+          - deny
+          type: string
+      required:
+      - decision
+      type: object
+    ApprovalDecisionResponse:
+      properties:
+        decision:
+          enum:
+          - allow-once
+          - allow-site
+          - deny
+          - timeout
+          - cancelled
+          - site-allowed
+          type: string
+        id:
+          type: string
+      required:
+      - id
+      - decision
+      type: object
+    ApprovalListResponse:
+      properties:
+        pending:
+          items:
+            $ref: '#/components/schemas/ApprovalPendingResponse'
+          type: array
+      required:
+      - pending
+      type: object
+    ApprovalPendingResponse:
+      properties:
+        action:
+          description: What will happen, e.g. Click "Place order" on shop.example.
+          type: string
+        category:
+          description: payment, message, publish, delete, security, account, submit,
+            or credential.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        element:
+          description: The target element's role and label.
+          type: string
+        expiresAt:
+          description: When the request is denied if nobody answers.
+          format: date-time
+          type: string
+        id:
+          type: string
+        image:
+          description: Base64 PNG of the element in its page.
+          type: string
+        kind:
+          description: 'What is asking: a browser action, or the first use of a saved
+            login.'
+          enum:
+          - browser-action
+          - credential-use
+          type: string
+        pageTitle:
+          type: string
+        reason:
+          description: Why it was flagged.
+          type: string
+        sessionId:
+          type: string
+        site:
+          description: Origin (scheme, host, and non-default port) the action happens
+            on; Always allow is remembered for it.
+          type: string
+        url:
+          type: string
+      required:
+      - id
+      - kind
+      - sessionId
+      - site
+      - action
+      - category
+      - reason
+      - createdAt
+      - expiresAt
+      type: object
+    ApprovalPolicyRequest:
+      properties:
+        mode:
+          enum:
+          - "off"
+          - risky
+          - every-submit
+          type: string
+        sessionId:
+          type: string
+      required:
+      - mode
+      type: object
+    ApprovalPolicyResponse:
+      properties:
+        defaultMode:
+          description: The mode for sessions that have not chosen their own.
+          enum:
+          - "off"
+          - risky
+          - every-submit
+          type: string
+        mode:
+          description: The session's mode, or the default when no session was named.
+          enum:
+          - "off"
+          - risky
+          - every-submit
+          type: string
+        sites:
+          items:
+            $ref: '#/components/schemas/ApprovalSiteRuleResponse'
+          type: array
+      required:
+      - mode
+      - defaultMode
+      - sites
+      type: object
+    ApprovalSiteRuleResponse:
+      properties:
+        category:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        site:
+          type: string
+      required:
+      - site
+      - category
+      - createdAt
       type: object
     ArtifactFileResponse:
       properties:
@@ -18995,6 +19730,38 @@ components:
       - sessionId
       - action
       - result
+      type: object
+    BrowserRemoteCommandRequest:
+      properties:
+        args:
+          description: agent-browser arguments, e.g. ["click", "@e2"].
+          items:
+            type: string
+          type: array
+        files:
+          additionalProperties:
+            type: string
+          description: Uploaded files by path, base64.
+          type: object
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - args
+      type: object
+    BrowserRemoteCommandResponse:
+      properties:
+        error:
+          type: string
+        files:
+          additionalProperties:
+            type: string
+          description: Files the command wrote, by path, base64.
+          type: object
+        output:
+          type: string
+      required:
+      - output
       type: object
     BrowserStatusResponse:
       properties:
@@ -20965,6 +21732,8 @@ components:
           - Closed without merge
           - Terminated
           type: string
+        effort:
+          type: string
         harness:
           type: string
         hibernatedAt:
@@ -21010,6 +21779,8 @@ components:
           type: string
         model:
           type: string
+        modelPending:
+          type: boolean
         moveStarted:
           type: string
         movedTo:
@@ -23258,6 +24029,25 @@ components:
         expectedDestination:
           description: Expected or adapter-resolved executable destination.
           type: string
+        failureCause:
+          description: 'Set only when status is failed: why, from a closed list read
+            from the error and output.'
+          enum:
+          - timeout
+          - not_found_after_install
+          - verify_failed
+          - node_missing
+          - npm_missing
+          - brew_missing
+          - tool_missing
+          - xcode_tools_missing
+          - disk_full
+          - permission_denied
+          - network
+          - locked
+          - exit_nonzero
+          - other
+          type: string
         finishedAt:
           description: Absent until the job finishes.
           format: date-time
@@ -24937,6 +25727,14 @@ components:
           type: string
         attribution:
           $ref: '#/components/schemas/AttributionConfig'
+        autoInjectCI:
+          type:
+          - "null"
+          - boolean
+        autoInjectReview:
+          type:
+          - "null"
+          - boolean
         autoReview:
           type: boolean
         canonicalRepoURL:
@@ -27307,6 +28105,27 @@ components:
       - sessionId
       - state
       type: object
+    SetAgentEndpointRequest:
+      properties:
+        apiKey:
+          description: API key; omit to keep the stored key.
+          type: string
+        authStyle:
+          description: Credential form; defaults per harness.
+          enum:
+          - bearer
+          - api-key
+          type: string
+        baseUrl:
+          description: Absolute http(s) provider endpoint URL.
+          type: string
+        model:
+          description: Default model. Omit it to keep the saved model or use the first
+            model the endpoint lists.
+          type: string
+      required:
+      - baseUrl
+      type: object
     SetBrowserRemoteAccessRequest:
       properties:
         enabled:
@@ -27570,6 +28389,11 @@ components:
           description: Days an archived session whose worktree is released is kept
             before the daemon deletes it permanently; 0 keeps it.
           type: integer
+        skillSharing:
+          description: Sessions get the user's skills from ~/.agents, ~/.claude and
+            ~/.codex that their agent does not load itself, inside Orchestrator only.
+            A running session follows at its next resume.
+          type: boolean
         trackerIntakeEnabled:
           type: boolean
         versionRefresh:
@@ -27586,6 +28410,7 @@ components:
       - computerUse
       - accountHandoff
       - commitAttribution
+      - skillSharing
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -28242,6 +29067,8 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        draft:
+          type: boolean
       required:
       - attachments
       type: object
@@ -28690,6 +29517,10 @@ components:
           type:
           - "null"
           - integer
+        lifetimeWorkSessions:
+          type:
+          - "null"
+          - integer
         optedOut:
           type: boolean
       required:
@@ -29018,6 +29849,26 @@ components:
       - displayName
       - config
       type: object
+    UpdateSessionAttachmentLeasesRequest:
+      properties:
+        release:
+          items:
+            type: string
+          type: array
+        renew:
+          items:
+            type: string
+          type: array
+      type: object
+    UpdateSessionAttachmentLeasesResponse:
+      properties:
+        missing:
+          items:
+            type: string
+          type: array
+      required:
+      - missing
+      type: object
     UpdateSessionInterfaceRequest:
       properties:
         defaultSessionMode:
@@ -29048,6 +29899,15 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateSkillSharingRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UpdateVersionRefreshRequest:
       properties:
@@ -29115,6 +29975,12 @@ components:
           type: string
         email:
           type: string
+        loginId:
+          type: string
+        organizationName:
+          type: string
+        organizationUnknown:
+          type: boolean
         plan:
           type: string
         provider:

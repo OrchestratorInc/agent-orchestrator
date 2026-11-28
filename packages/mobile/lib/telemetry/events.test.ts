@@ -16,6 +16,7 @@ describe("mobile event names", () => {
 			usageSummary: "mobile.ui.usage_summary",
 			errorShown: "mobile.ui.error_shown",
 			launchTimed: "mobile.launches.timed",
+			uiPerformance: "mobile.usage.ui_performance",
 		});
 		for (const name of Object.values(MOBILE_EVENTS)) expect(MOBILE_ALLOWLIST[name]).toBeDefined();
 		expect(Object.keys(MOBILE_ALLOWLIST).some((name) => name.startsWith("ao."))).toBe(false);
@@ -48,6 +49,31 @@ describe("mobile event names", () => {
 		tracker.setForeground(false);
 		expect(summary).toBeDefined();
 		expect(sanitizeMobileProperties(MOBILE_EVENTS.usageSummary, summary)).toEqual(summary);
+	});
+
+	it("keeps every property of a performance summary", async () => {
+		const { createUiUsageTracker, UI_WINDOW_MS } = await import("./uiUsage");
+		let now = 0;
+		let perf: Record<string, unknown> | undefined;
+		const tracker = createUiUsageTracker({
+			now: () => now,
+			capture: (event, props) => { if (event === MOBILE_EVENTS.uiPerformance) perf = props; return true; },
+			save: () => {},
+			clear: () => {},
+		});
+		tracker.setRoute("board");
+		tracker.setRoute("session");
+		now += 900;
+		tracker.sessionOpened("h|s1");
+		for (const transport of ["lan", "tailscale", "tunnel", "relay", "unknown"] as const) tracker.requestTimed(450, transport, true);
+		tracker.requestTimed(null, "lan", false);
+		tracker.stalled(700);
+		tracker.resumed();
+		tracker.dataRefreshed(now + 1_200);
+		now += UI_WINDOW_MS;
+		tracker.setForeground(false);
+		expect(perf).toBeDefined();
+		expect(sanitizeMobileProperties(MOBILE_EVENTS.uiPerformance, perf)).toEqual(perf);
 	});
 
 	it("drops a surface outside the closed list", () => {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,6 +39,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -49,6 +51,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -490,6 +493,7 @@ func Run(buildVersion string) (retErr error) {
 		Sessions:            store,
 		Renders:             attachmentstore.New(cfg.DataDir),
 		DataDir:             cfg.DataDir,
+		SkillSharingEnabled: settingsSvc.SkillSharingEnabled,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
 		VersionRefresh: func() (time.Duration, bool) {
@@ -576,6 +580,15 @@ func Run(buildVersion string) (retErr error) {
 			if err := sessMgr.PersistChatModel(ctx, sessionID, model); err != nil {
 				log.Warn("persist ChatUI model on session failed; a TUI rebuild may resume with a different model",
 					"sessionID", sessionID, "model", model, "error", err)
+			}
+		},
+		OnEffortChanged: func(sessionID domain.SessionID, effort string) {
+			if sessMgr == nil {
+				return
+			}
+			if err := sessMgr.PersistChatEffort(ctx, sessionID, effort); err != nil {
+				log.Warn("persist ChatUI effort on session failed; session selection may be stale",
+					"sessionID", sessionID, "effort", effort, "error", err)
 			}
 		},
 	})
@@ -826,9 +839,25 @@ func Run(buildVersion string) (retErr error) {
 	if resume, ok := sessMgr.(interface {
 		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
 	}); ok {
+		join, joins := sessMgr.(interface {
+			WakeHibernatedChat(context.Context, domain.SessionID) error
+		})
 		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			if joins {
+				// Waits for a resume the user already started (Resume clicked while
+				// the switch runs) and resumes only if that left no controller, so
+				// the two never refuse each other as "already in progress".
+				return join.WakeHibernatedChat(ctx, id)
+			}
 			_, err := resume.ResumeAgentWithMode(ctx, id)
 			return err
+		})
+	}
+	if cold, ok := sessMgr.(interface {
+		LaunchColdChatSwitch(context.Context, domain.SessionID, domain.AgentHarness, func(context.Context, sessionmanager.ChatStart) error) error
+	}); ok {
+		chatSvc.SetColdSwitchLauncher(func(ctx context.Context, id domain.SessionID, target domain.AgentHarness, start func(context.Context, chatsvc.StartConfig) error) error {
+			return cold.LaunchColdChatSwitch(ctx, id, target, start)
 		})
 	}
 	if tunable, ok := sessMgr.(interface {
@@ -858,6 +887,7 @@ func Run(buildVersion string) (retErr error) {
 	// commits and PRs. Wired before tracker intake starts, so a session its
 	// first poll spawns already sees the setting.
 	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
+	sessMgr.SetSkillSharingEnabled(settingsSvc.SkillSharingEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -999,6 +1029,30 @@ func Run(buildVersion string) (retErr error) {
 	// delay the daemon's first response.
 	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	// Consequential agent browser actions wait for the user; the policy and
+	// audit log live under the data dir.
+	var approvals controllers.ApprovalService
+	// A self-hosted host's agent browser is reached only through the gate:
+	// agents send their commands to this daemon, which holds the token.
+	if cfg.AgentBrowserURL != "" {
+		browserService.UseRemoteBrowser(browsersvc.NewHTTPRemoteBrowser(cfg.AgentBrowserURL, cfg.AgentBrowserToken))
+	}
+	if gate, err := approval.Open(filepath.Join(cfg.DataDir, "approvals")); err != nil {
+		// Fail closed: without the gate, actions that may need approval are
+		// refused, never run unasked.
+		log.Error("browser approvals unavailable; consequential browser actions are refused until it loads", "err", err)
+		browserService.ApprovalsUnavailable(err)
+	} else {
+		browserService.UseApprovals(gate, 0)
+		approvals = gate
+		// Modes of sessions deleted since the last start are dropped.
+		if err := gate.PruneSessions(func(id string) (bool, error) {
+			_, ok, err := store.GetSession(ctx, domain.SessionID(id))
+			return ok, err
+		}); err != nil {
+			log.Warn("browser approvals: could not prune deleted sessions' modes", "err", err)
+		}
+	}
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {
 		browserService.UseChrome(chrome.broker, chrome.targets, log)
@@ -1399,6 +1453,7 @@ func Run(buildVersion string) (retErr error) {
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
 		LifetimeSessions:   store.LifetimeSessions,
+		LifetimeWork:       store.LifetimeWorkSessions,
 		DaemonVersion:      cfg.Telemetry.AppVersion,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
@@ -1416,6 +1471,7 @@ func Run(buildVersion string) (retErr error) {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Approvals:                approvals,
 		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PRPreview:                prPreview,
@@ -1485,6 +1541,9 @@ func Run(buildVersion string) (retErr error) {
 	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
 	lan.UseDeviceCredentials(accessDevices, pairingCodes)
+	if tcp, ok := srv.Addr().(*net.TCPAddr); ok {
+		lan.SetDaemonPort(tcp.Port)
+	}
 	bs.LAN = lan
 
 	// Restore Connect Mobile across a daemon restart: if the bridge was left
@@ -1561,15 +1620,19 @@ func Run(buildVersion string) (retErr error) {
 			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
 			// Recover them only after the listener is ready and the gate is closed, or
 			// startup can deadlock before the daemon binds its port.
-			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
-				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
-			}
-			restore.done(stepReviewerRecovery)
-			close(reviewerChatsRecovered)
+			go func() {
+				defer sentryobs.RecoverBackground()
+				defer close(reviewerChatsRecovered)
+				if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
+					log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
+				}
+			}()
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}
 			restore.done(stepSessions)
+			<-reviewerChatsRecovered
+			restore.done(stepReviewerRecovery)
 			if reconcileErr := lcStack.ReconcileRuntime(ctx); reconcileErr != nil {
 				log.Error("background agent-process reconciliation on boot failed", "err", reconcileErr)
 				sentryobs.CaptureBackground(ctx, reconcileErr, "lifecycle", "reconcile", map[string]string{"reason": "runtime"})
@@ -2106,6 +2169,16 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	// A harness on a custom endpoint sends its key, not an account's sign-in.
+	accounts.SetCustomEndpoint(func(p domain.AgentAccountProvider) bool {
+		for _, agentID := range harnessendpoint.AgentIDs() {
+			if provider, ok := domain.AgentAccountProviderFor(domain.AgentHarness(agentID)); ok && provider == p {
+				configured, err := harnessendpoint.ForDataDir(cfg.DataDir).Configured(agentID)
+				return err == nil && configured
+			}
+		}
+		return false
+	})
 	// An account's API key is checked with its provider before it is saved.
 	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
 		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]

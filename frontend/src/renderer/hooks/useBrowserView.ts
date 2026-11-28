@@ -110,6 +110,7 @@ export type BrowserViewModel = {
 	tabNotice: string;
 	selectTab: (tabId: string) => Promise<void>;
 	closeTab: (tabId: string) => Promise<void>;
+	muteTab: (tabId: string, muted: boolean) => Promise<void>;
 	openTab: (url?: string) => Promise<void>;
 	openLink: (url: string) => Promise<void>;
 	reorderTabs: (orderedIds: string[]) => void;
@@ -1035,8 +1036,25 @@ export function useBrowserView({
 		[hasNativeBrowser, showTabNotice, updateClosedTabs],
 	);
 
+	const muteTab = useCallback(
+		async (tabId: string, muted: boolean) => {
+			const viewId = viewIdRef.current;
+			if (!viewId || !hasNativeBrowser) return;
+			try {
+				const state = await window.ao!.browser.muteTab({ viewId, tabId, muted });
+				if (viewIdRef.current === state.viewId) setTabsState(state);
+			} catch {
+				// Mute is a toggle, so a stale push is self-correcting on the next
+				// click; resync quietly rather than showing a failure notice.
+				const state = await window.ao!.browser.getTabs(viewId).catch(() => undefined);
+				if (state && viewIdRef.current === state.viewId) setTabsState(state);
+			}
+		},
+		[hasNativeBrowser],
+	);
+
 	const openTab = useCallback(
-		async (url?: string) => {
+		async (url?: string, preview?: boolean) => {
 			if (!hasNativeBrowser || transientClosedRef.current) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
@@ -1050,7 +1068,7 @@ export function useBrowserView({
 				setViewId(viewId);
 				setNavState(ensured);
 			}
-			const state = await window.ao!.browser.openTab({ viewId, url });
+			const state = await window.ao!.browser.openTab({ viewId, url, ...(preview ? { preview } : {}) });
 			if (viewIdRef.current === state.viewId) setTabsState(state);
 		},
 		[hasNativeBrowser, sessionId],
@@ -1168,7 +1186,7 @@ export function useBrowserView({
 	}, [navState.url, setAnnotationMode]);
 
 	const navigate = useCallback(
-		(url: string) => {
+		(url: string, preview?: boolean) => {
 			if (!hasNativeBrowser) {
 				const normalized = url.trim();
 				setNavState((current) => ({
@@ -1179,7 +1197,7 @@ export function useBrowserView({
 				}));
 				return Promise.resolve();
 			}
-			return withView((id) => window.ao!.browser.navigate({ viewId: id, url }));
+			return withView((id) => window.ao!.browser.navigate({ viewId: id, url, ...(preview ? { preview } : {}) }));
 		},
 		[hasNativeBrowser, withView],
 	);
@@ -1190,12 +1208,11 @@ export function useBrowserView({
 		async (url: string) => {
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
-			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
-			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
-			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
-			if (!own) return openTab(url);
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url, true);
+			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || tab.preview));
+			if (!own) return openTab(url, true);
 			await selectTab(own.id);
-			return navigate(url);
+			return navigate(url, true);
 		},
 		[hasNativeBrowser, navigate, openTab, selectTab],
 	);
@@ -1393,6 +1410,7 @@ export function useBrowserView({
 			tabNotice: modelTabNotice,
 			selectTab,
 			closeTab,
+			muteTab,
 			openTab,
 			openLink,
 			reorderTabs,
@@ -1414,7 +1432,7 @@ export function useBrowserView({
 		[
 			modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
 			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
-			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
+			closeTab, muteTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
 			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
 			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
 		],

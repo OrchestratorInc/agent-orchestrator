@@ -6,6 +6,7 @@ import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-ic
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useHostConnection } from "../hooks/useHostConnection";
 import { fetchWorkspaceFilePaths, seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiErrorMessage } from "../lib/api-client";
@@ -88,6 +89,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	}, []);
 	// One draft per host, so switching project keeps what was typed.
 	const hostKey = hostId ?? "local";
+	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	const draftId = `new-chat:${hostKey}`;
 	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
 	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
@@ -511,6 +513,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				key={`${projectId}:${draftRevision}`}
 				snapshot={snapshot}
 				uiSessionId={draftId}
+				assetBaseUrl={remoteBase}
+				assetSessionId={preparedId ?? ""}
+				remoteHostId={hostId}
 				// The pending launch below tracks its own unanswered send.
 				parkUnsentSends={false}
 				// The session is titled after its brief, so the tab already reads that way.

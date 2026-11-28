@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { Dimensions, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, Easing, ReduceMotion, useAnimatedStyle, useDerivedValue, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
@@ -80,7 +80,10 @@ export function WorkerRowInteraction({
 	// row hides it behind its foreground, and building it under every mounted
 	// row was most of a row's cost.
 	const [railMounted, setRailMounted] = useState(false);
-	const menuWidth = useMenuRowWidth();
+	// A row spans the board, so until its slot measures, the window's width is
+	// its estimate: on iOS a row first drawn unsized keeps a title that runs off
+	// the screen (see useMenuRowWidth).
+	const menuWidth = useMenuRowWidth(Dimensions.get("window").width);
 	// Where the foreground sits: 0 at rest, minus the rail when open, further
 	// while a full swipe is dragged.
 	const translation = useSharedValue(0);

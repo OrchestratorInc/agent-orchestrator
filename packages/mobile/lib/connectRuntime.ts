@@ -14,7 +14,7 @@ import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
-import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
+import { adoptHostIdentity, endpointRevisionOf, findHost, touchHost, updateHostEndpoints } from "./hosts";
 import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints, type RaceOutcome } from "./race";
 
 function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
@@ -230,14 +230,58 @@ export type ConnectOptions = {
  * bounded by SLOW_LINK_PROBE_TIMEOUT_MS. Each answer still goes through the
  * same identity and version checks.
  */
-export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint): Promise<RaceOutcome> {
+export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint, now: () => number = Date.now): Promise<RaceOutcome> {
+	const slow = (endpoint: Endpoint, signal: AbortSignal) => probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false });
+	// A machine that last answered only on the slow race goes straight to it:
+	// the quick race would spend PROBE_TIMEOUT_MS failing first on every
+	// resume. The longer limit is only a ceiling, so a link that got fast
+	// again still answers at once. Unlike the second race below, a tunnel that
+	// fails fast (a rotated hostname still resolving) keeps its propagation
+	// retry here: nothing comes after this race to give it one.
+	const knownSlow = hostId !== "" && now() - (slowLinkAt.get(hostId) ?? -Infinity) < SLOW_LINK_MEMORY_MS;
+	if (knownSlow) {
+		const outcome = await raceEndpoints(endpoints, hostId, (endpoint, signal) =>
+			probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, endOnTimeout: true }));
+		if (!outcome.ok) slowLinkAt.delete(hostId);
+		return outcome;
+	}
 	const quick = await raceEndpoints(endpoints, hostId, (endpoint, signal) => probe(endpoint, signal, { endOnTimeout: true }));
 	if (quick.ok || !quick.timedOut?.length) return quick;
-	const slow = await raceEndpoints(quick.timedOut, hostId, (endpoint, signal) =>
-		probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false }));
+	const outcome = await raceEndpoints(quick.timedOut, hostId, slow);
+	if (outcome.ok && hostId !== "") slowLinkAt.set(hostId, now());
 	// Nothing compatible answered even slowly: an incompatible answer from the
 	// first race still explains it better than "unreachable".
-	return !slow.ok && quick.reason === "incompatible" ? { ok: false, reason: "incompatible" } : slow;
+	return !outcome.ok && quick.reason === "incompatible" ? { ok: false, reason: "incompatible" } : outcome;
+}
+
+/** How long a machine that needed the slow race is raced that way first. */
+export const SLOW_LINK_MEMORY_MS = 10 * 60 * 1000;
+const slowLinkAt = new Map<string, number>();
+
+/** For tests: forget which machines were slow. */
+export function forgetSlowLinks(): void {
+	slowLinkAt.clear();
+}
+
+/**
+ * Whether the connection in use still reaches its machine: its own address,
+ * asked who it is with the slow-link limit. A re-check (a network change, the
+ * look for a better address) whose race found nothing keeps a connection that
+ * still answers instead of dropping it.
+ */
+export async function endpointStillAnswers(cfg: ServerConfig): Promise<boolean> {
+	if (!cfg.hostId) return false;
+	try {
+		const answer = await probeOnce({
+			kind: cfg.endpointKind ?? "lan",
+			host: cfg.host,
+			port: Number(cfg.httpPort),
+			secure: !!cfg.secure,
+		}, new AbortController().signal, SLOW_LINK_PROBE_TIMEOUT_MS);
+		return answer.hostId === cfg.hostId;
+	} catch {
+		return false;
+	}
 }
 
 /** The production dependency set for connectHost. */
@@ -251,6 +295,7 @@ export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 				? Promise.resolve([])
 				: fetchAdvertisedEndpoints(config),
 		saveEndpoints: updateHostEndpoints,
+		endpointRevision: endpointRevisionOf,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,
 		...deviceTokenConnectDeps(),

@@ -64,16 +64,10 @@ func IsServerTimeout(status int, err error) bool {
 	return status == http.StatusServiceUnavailable && err != nil && errors.Is(err, context.DeadlineExceeded)
 }
 
-// spawnFailedSteps and spawnFailureCauses are the closed vocabularies spawn
-// telemetry reports as failed_step and cause (see the session service); only
-// these values may reach Sentry as tags.
+// spawnFailedSteps is the closed vocabulary spawn telemetry reports as
+// failed_step (see the session service); only these values may reach Sentry
+// as tags. The cause vocabulary is telemetrymeta.IsSpawnFailureCause.
 var spawnFailedSteps = map[string]struct{}{
 	"model_check": {}, "branch_fetch": {}, "worktree": {}, "setup": {},
 	"agent_start": {}, "prompt": {}, "other": {},
-}
-
-var spawnFailureCauses = map[string]struct{}{
-	"branch_exists": {}, "path_exists": {}, "locked": {}, "permission": {},
-	"path_too_long": {}, "not_a_repo": {}, "killed": {}, "exited": {},
-	"no_response": {}, "not_logged_in": {}, "timeout": {}, "other": {},
 }

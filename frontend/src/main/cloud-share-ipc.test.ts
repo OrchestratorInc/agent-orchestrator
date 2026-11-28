@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import { openSync, closeSync, writeSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +41,7 @@ const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
 type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void; status?: number; resolvesTo?: string; sendsResolved?: false };
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean; cloudFiles?: Map<string, string>; cloudListStatus?: number; cloudListUnreachable?: boolean; sharePredatesFiles?: boolean; sharePageFiles?: unknown } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -117,11 +118,24 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			}
 			if (pathname.endsWith("/uploads/abort")) return new Response(null, { status: 204 });
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts`) {
-				return json({ artifacts: [{ path: "reports/q3 plan.md", name: "q3 plan.md", kind: "markdown", size: 4096, sha256: "0".repeat(64) }] });
+				// A dropped connection: fetch itself rejects.
+				if (options.cloudListUnreachable) throw new TypeError("fetch failed");
+				if (options.cloudListStatus) return json({ code: "unavailable", message: "Try again later." }, options.cloudListStatus);
+				// A session's committed files: the plan, and any the test names, each with its SHA-256.
+				const listed = [...(options.cloudFiles ?? [])].map(([name, body]) => ({ path: name, name: name.split("/").pop(), kind: "file", size: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex") }));
+				return json({ artifacts: [{ path: "reports/q3 plan.md", name: "q3 plan.md", kind: "markdown", size: 4096, sha256: "0".repeat(64) }, ...listed] });
+			}
+			if (pathname === `${CLOUD_SESSION_PATH}/artifacts/access`) return json({ filesPrefix: "/api/cloud/v1/artifact-files/acc-tok/", expiresAt: "" });
+			if (pathname.startsWith("/api/cloud/v1/artifact-files/acc-tok/")) {
+				const body = options.cloudFiles?.get(pathname.slice("/api/cloud/v1/artifact-files/acc-tok/".length).split("/").map(decodeURIComponent).join("/"));
+				return body === undefined ? new Response("", { status: 404 }) : new Response(body);
 			}
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts/share`) {
 				if (options.shareStatus) return json({ code: options.shareCode, message: "Refused." }, options.shareStatus);
-				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
+				const listsFiles = "files" in (JSON.parse(String(init.body)) as object);
+				// A control plane that predates a page's files refuses the field, as its strict decoder does.
+				if (listsFiles && options.sharePredatesFiles) return json({ code: "invalid_request", message: "The request body is invalid." }, 400);
+				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false, ...(listsFiles && !options.sharePredatesFiles ? { pageFiles: options.sharePageFiles } : {}) }, 201);
 			}
 			if (pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`) {
 				const body = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails?: string[]; orgId?: string; teamIds?: string[]; workspace?: boolean }) : { emails: ["maya@acme.co"] };
@@ -398,6 +412,101 @@ describe("cloudShare IPC", () => {
 		await invoke("cloudShare:cancel");
 		await expect(publishing).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
 		expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256, shareId: SHARE_ID });
+	});
+
+	describe("a cloud session's HTML page", () => {
+		const PAGE = "site/index.html";
+		const HTML = `<img src="img/a.png"><img src="img/b.png"><img src="gone.png"><img src="../up.png"><video src="clip.webm"></video>`;
+		const sha = (body: string) => createHash("sha256").update(body).digest("hex");
+		const page = { source: "cloud", baseUrl: "https://cp.test", orgId: ORG_ID, sessionId: CLOUD_SESSION_ID, path: PAGE, projectId: "", fingerprint: sha(HTML) };
+		const session = () => new Map([[PAGE, HTML], ["site/img/a.png", "png-a"], ["site/img/b.png", "png-b"], ["site/clip.webm", "video"], ["up.png", "png"]]);
+
+		it("lists the files it uses for the control plane to copy beside it, and says what was left out", async () => {
+			const { invoke, requests, bodies } = setup({
+				cloudFiles: session(),
+				// The control plane no longer finds b.png and does not serve videos.
+				sharePageFiles: { included: 1, refusedVideos: ["clip.webm"], tooLargeVideos: [], missing: ["img/b.png"] },
+			});
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({
+				status: "published", share: { id: SHARE_ID },
+				// gone.png and ../up.png are left out here; b.png and the video by the control plane.
+				pageFiles: { included: 1, skipped: 4, videos: 1, unsupported: false },
+			});
+			expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({
+				path: PAGE, sha256: sha(HTML),
+				// Each bound to the version listed, which the control plane copies or leaves out as missing.
+				files: [
+					{ path: "img/a.png", artifactPath: "site/img/a.png", sha256: sha("png-a") },
+					{ path: "img/b.png", artifactPath: "site/img/b.png", sha256: sha("png-b") },
+					{ path: "clip.webm", artifactPath: "site/clip.webm", sha256: sha("video") },
+				],
+			});
+			// Only the page is read; its files are copied by the control plane, never downloaded here.
+			expect(requests.filter((request) => request.includes("/artifact-files/"))).toEqual([`GET /api/cloud/v1/artifact-files/acc-tok/site/index.html`]);
+		});
+
+		it("offers to republish the page when a file it uses is committed again, deleted or appears, though the page did not", async () => {
+			const files = session();
+			const { invoke, records } = setup({ cloudFiles: files, sharePageFiles: { included: 3, refusedVideos: [], tooLargeVideos: [], missing: [] } });
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({ status: "published" });
+			const inspect = () => invoke("cloudShare:inspect", page) as Promise<{ pageFilesChanged?: boolean }>;
+			expect((await inspect()).pageFilesChanged).toBeUndefined();
+			// Each file the page used, by its path in the session, with its committed SHA-256; a missing one as "".
+			await expect(records.publishedPageFiles(shareRecordKey("https://cp.test", `cloud:${ORG_ID}/${CLOUD_SESSION_ID}`, PAGE))).resolves.toEqual({
+				"site/img/a.png": sha("png-a"), "site/img/b.png": sha("png-b"), "site/clip.webm": sha("video"), "site/gone.png": "",
+			});
+			files.set("site/img/a.png", "png-a-v2");
+			expect((await inspect()).pageFilesChanged).toBe(true);
+			files.set("site/img/a.png", "png-a");
+			expect((await inspect()).pageFilesChanged).toBeUndefined();
+			files.delete("site/img/b.png");
+			expect((await inspect()).pageFilesChanged).toBe(true);
+			files.set("site/img/b.png", "png-b");
+			// gone.png was missing when the page was published.
+			files.set("site/gone.png", "png");
+			expect((await inspect()).pageFilesChanged).toBe(true);
+			// A delete that unpublishes the link reads the link alone.
+			await expect(invoke("cloudShare:inspect", page, { linkOnly: true })).resolves.not.toHaveProperty("pageFilesChanged");
+		});
+
+		it("still shows the page's link when its files cannot be looked up", async () => {
+			const options: Parameters<typeof setup>[0] = { cloudFiles: session(), sharePageFiles: { included: 3, refusedVideos: [], tooLargeVideos: [], missing: [] } };
+			const { invoke } = setup(options);
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({ status: "published" });
+			options.cloudListStatus = 503;
+			const inspection = await invoke("cloudShare:inspect", page);
+			expect(inspection).toMatchObject({ shareId: SHARE_ID, fingerprint: sha(HTML), publishedFingerprint: sha(HTML) });
+			expect(inspection).not.toHaveProperty("pageFilesChanged");
+			options.cloudListStatus = undefined;
+			options.cloudListUnreachable = true;
+			await expect(invoke("cloudShare:inspect", page)).resolves.toMatchObject({ shareId: SHARE_ID, fingerprint: sha(HTML) });
+		});
+
+		it("publishes the page alone, and says so, to a control plane that predates a page's files", async () => {
+			const { invoke, bodies } = setup({ cloudFiles: session(), sharePredatesFiles: true });
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({
+				status: "published", pageFiles: { included: 0, skipped: 2, unsupported: true },
+			});
+			expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: PAGE, sha256: sha(HTML) });
+		});
+
+		it("shares nothing when the session committed another version of the page since it was shown", async () => {
+			const files = session();
+			const { invoke, requests } = setup({ cloudFiles: files });
+			files.set(PAGE, `${HTML}<p>rewritten</p>`);
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({ status: "changed", inspection: { fingerprint: sha(`${HTML}<p>rewritten</p>`) } });
+			expect(requests).not.toContain(`POST ${CLOUD_SESSION_PATH}/artifacts/share`);
+		});
+
+		it("shares nothing when the page read is not the version its list names", async () => {
+			const files = session();
+			// The list still names the shown version, but the bytes served are a newer one.
+			const { invoke, requests } = setup({ cloudFiles: files });
+			const listedGet = files.get.bind(files);
+			files.get = (key: string) => (key === PAGE ? "<p>newer</p>" : listedGet(key));
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({ status: "changed" });
+			expect(requests).not.toContain(`POST ${CLOUD_SESSION_PATH}/artifacts/share`);
+		});
 	});
 
 	it("turns a cloud file's refusals into results the popover can act on", async () => {
@@ -929,6 +1038,77 @@ describe("cloudShare IPC for a remote host's file", () => {
 		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:b.png" }] });
 		expect(await snapshots()).toEqual([]);
+	});
+
+	it("finds a symlinked host page's files beside the file it resolves to, as a local page's are", async () => {
+		const hostFiles = hostPage(`<img src="logo.png">`, { "logo.png": { body: "wrong" } });
+		hostFiles.get("sess-1/docs/deck.html")!.resolvesTo = "slides/deck.html";
+		hostFiles.set("sess-1/slides/logo.png", { body: "right", mtimeNs: MTIME_NS });
+		const { publish, hostFile, hostRequests, records } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 0 } });
+		expect(hostRequests.some((request) => request.includes("/preview/files/slides/logo.png?"))).toBe(true);
+		expect(hostRequests.some((request) => request.includes("/preview/files/docs/logo.png?"))).toBe(false);
+		await expect(records.publishedPageFiles(artifactRecordKey("https://cp.test", `host:${HOST_ID}/sess-1`, "art-7"))).resolves.toEqual({
+			"slides/logo.png": `slides/logo.png\n5:${MTIME_NS / 1_000_000n}`,
+		});
+	});
+
+	it("publishes nothing from a symlinked host page pointed elsewhere while it downloads", async () => {
+		const hostFiles = hostPage(`<img src="logo.png">`, { "logo.png": { body: "png" } });
+		const deck = hostFiles.get("sess-1/docs/deck.html")!;
+		deck.resolvesTo = "slides/deck.html";
+		let served = 0;
+		// Checked in slides/ (by the panel, then by publish), downloaded once it points at docs/.
+		deck.served = () => { if (++served === 2) deck.resolvesTo = "docs/deck.html"; };
+		const { publish, hostFile, requests } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "changed" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("does not offer to republish a host page for a file that now resolves outside its folder, until it resolves back", async () => {
+		const hostFiles = hostPage(`<img src="link.png">`, { "link.png": { body: "png" } });
+		const link = hostFiles.get("sess-1/docs/link.png")!;
+		// Pointed out of the folder between its lookup and its download: left out, recorded as "".
+		link.served = () => { link.resolvesTo = "private/customer.png"; link.served = undefined; };
+		const { invoke, publish, hostFile } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1 } });
+		const inspect = () => invoke("cloudShare:inspect", hostFile) as Promise<{ pageFilesChanged?: boolean }>;
+		// Republishing would leave it out again.
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		link.resolvesTo = undefined;
+		expect((await inspect()).pageFilesChanged).toBe(true);
+	});
+
+	it("never reports a host page's progress past its total when a file grew after it was listed", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png" } });
+		const image = hostFiles.get("sess-1/docs/a.png")!;
+		// Looked up at 3 bytes, downloaded at 30.
+		image.served = () => { image.body = "p".repeat(30); image.served = undefined; };
+		const { publish, hostFile, sent } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1 } });
+		const reports = sent as Array<{ sentBytes: number; totalBytes: number }>;
+		expect(reports.every((report) => report.sentBytes <= report.totalBytes)).toBe(true);
+		// The upload's total is the bytes it sent: the page and the file as downloaded.
+		const total = (`<img src="a.png">`.length + 30) * 2;
+		expect(reports.at(-1)).toEqual({ sessionId: "sess-1", path: "docs/deck.html", sentBytes: total, totalBytes: total });
+	});
+
+	it("returns a published host page though a snapshot could not be removed, and still removes the others", async () => {
+		const { publish, hostFile } = setup({ files: true, hostFiles: hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } }) });
+		const realRm = fs.rm.bind(fs);
+		let attempts = 0;
+		const rm = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+			if (++attempts === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+			return realRm(target, options);
+		});
+		try {
+			await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 2 } });
+			expect(attempts).toBe(3);
+		} finally {
+			rm.mockRestore();
+		}
+		expect(await snapshots()).toHaveLength(1);
 	});
 
 	it("offers to republish a host page when a file it uses changes, is pointed elsewhere or appears, though the page did not", async () => {

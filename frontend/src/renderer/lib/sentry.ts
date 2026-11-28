@@ -3,7 +3,7 @@
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
 import { isExpectedSentryError, sentryErrorCode } from "../../../../packages/shared/telemetry/ao-error";
-import { onboardingFailureCode, ONBOARDING_SENTRY_REASONS, type OnboardingAction, type OnboardingFailureReason } from "../../shared/onboarding-failures";
+import { onboardingFailureCode, ONBOARDING_SENTRY_REASONS, type OnboardingAction, type OnboardingFailureCause, type OnboardingFailureReason } from "../../shared/onboarding-failures";
 import { aoBridge } from "./bridge";
 import { onboardingSentryFlow } from "./onboarding-flow";
 import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-policy";
@@ -104,15 +104,16 @@ export function captureApiErrorToSentry(operation: string, category: string, sta
 
 /**
  * An onboarding install or sign-in that broke, as its own Sentry issue titled
- * and grouped by action and reason, tagged with what it was for (`target`,
- * which main checks against its list). Setup states (a login not finished, no
- * installer for this platform) are not sent. Electron main's consent gate and
- * daily caps decide whether it leaves the machine.
+ * and grouped by action and reason, tagged with what it was for (`target`) and,
+ * for a failed install, the daemon's closed-list cause (`cause`); main checks
+ * both against its lists. Setup states (a login not finished, no installer for
+ * this platform) are not sent. Electron main's consent gate and daily caps
+ * decide whether it leaves the machine.
  */
-export function captureOnboardingFailureToSentry(action: OnboardingAction, reason: OnboardingFailureReason, target?: string): void {
+export function captureOnboardingFailureToSentry(action: OnboardingAction, reason: OnboardingFailureReason, target?: string, cause?: OnboardingFailureCause): void {
 	if (!ONBOARDING_SENTRY_REASONS.has(reason)) return;
 	const meta: CaptureMeta = { category: "onboarding", code: onboardingFailureCode(action, reason) };
 	const triage = classifyError(meta);
-	const tags = { ...tagsFor(meta, triage), flow: "onboarding", ...(target ? { target } : {}) };
+	const tags = { ...tagsFor(meta, triage), flow: "onboarding", ...(target ? { target } : {}), ...(reason === "install_failed" && cause ? { cause } : {}) };
 	forwardCapture({ kind: "message", message: "Onboarding action failed", level: triage.level, tags });
 }

@@ -71,6 +71,11 @@ UPDATE sessions
 SET model = sqlc.arg(model)
 WHERE id = sqlc.arg(id);
 
+-- name: UpdateSessionEffort :execrows
+UPDATE sessions
+SET effort = sqlc.arg(effort)
+WHERE id = sqlc.arg(id);
+
 -- name: SetSessionHibernated :execrows
 -- Revision fencing keeps an idle decision from overwriting a later send,
 -- controller change, or lifecycle write. Generic updates leave this fact alone.
@@ -111,7 +116,8 @@ WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND activity_last_at <= sqlc.arg(idle_before)
     AND trim(provider_conversation_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
-    AND stale_binary_launch = controller_generation;
+    AND stale_binary_launch = controller_generation
+    AND NOT EXISTS (SELECT 1 FROM session_version_moves m WHERE m.session_id = sessions.id);
 
 -- name: ListVersionRefreshTerminalCandidates :many
 -- Idle terminal sessions whose current launch still runs a replaced release
@@ -123,7 +129,8 @@ WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
     AND activity_last_at <= sqlc.arg(idle_before)
     AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
-    AND stale_binary_launch = runtime_launch_id;
+    AND stale_binary_launch = runtime_launch_id
+    AND NOT EXISTS (SELECT 1 FROM session_version_moves m WHERE m.session_id = sessions.id);
 
 -- name: CountStaleBinarySessions :many
 -- Live launches still on a replaced release, per harness.

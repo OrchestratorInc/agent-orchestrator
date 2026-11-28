@@ -18,6 +18,21 @@ describe("workerRowPullRequest", () => {
 		expect(lead([pr(4, "closed")])).toMatchObject({ label: "#4", lifecycle: "closed", tone: "error", glyph: "git-pull-request-closed", more: 0 });
 	});
 
+	// The +N speaks for the pull requests it counts, not for the lead.
+	it("tones the +N by the others: red if any closed, purple when all merged", () => {
+		const extra = (prs: unknown[]) => workerRowPullRequest({ prs } as never)!;
+		expect(extra([pr(15, "open"), pr(12, "merged"), pr(11, "merged"), pr(10, "merged")])).toMatchObject({ tone: "success", moreTone: "merged", more: 3 });
+		expect(extra([pr(15, "open"), pr(12, "merged"), pr(9, "closed")])).toMatchObject({ moreTone: "error" });
+		expect(extra([pr(7, "merged"), pr(3, "closed")])).toMatchObject({ tone: "merged", moreTone: "error" });
+		expect(extra([pr(15, "open"), pr(16, "open"), pr(12, "merged")])).toMatchObject({ moreTone: "success" });
+		expect(extra([pr(15, "open"), pr(18, "open", true), pr(12, "merged")])).toMatchObject({ moreTone: "passive" });
+		expect(extra([pr(15, "open")])).toMatchObject({ moreTone: null, moreLifecycles: [] });
+		expect(extra([pr(15, "open"), pr(9, "closed"), pr(12, "merged"), pr(11, "merged")]).moreLifecycles).toEqual([
+			{ lifecycle: "merged", count: 2 },
+			{ lifecycle: "closed", count: 1 },
+		]);
+	});
+
 	it("falls back to the single pr field", () => {
 		expect(workerRowPullRequest({ pr: pr(1253, "open") } as never)?.label).toBe("#1253");
 	});
@@ -37,12 +52,17 @@ describe("workerRowAccessibilityLabel", () => {
 		const label = workerRowAccessibilityLabel({
 			...base,
 			indicator: "ready",
-			pr: { label: "#15 +1", lead: { number: 15, state: "open" } as never, number: 15, lifecycle: "open", more: 1, tone: "success", glyph: "git-pull-request" },
+			pr: { label: "#15 +1", lead: { number: 15, state: "open" } as never, number: 15, lifecycle: "open", more: 1, moreTone: "error", moreLifecycles: [{ lifecycle: "closed", count: 1 }], tone: "success", glyph: "git-pull-request" },
 			machine: "Studio",
 			updated: "1h",
 			unreachable: true,
 		});
-		expect(label).toBe("Fix login. Ready to merge. Pull request 15, open, and 1 more. web on Studio. Updated 1 hour ago. Last known; its machine can't be reached.");
+		expect(label).toBe("Fix login. Ready to merge. Pull request 15, open, and 1 more closed. web on Studio. Updated 1 hour ago. Last known; its machine can't be reached.");
+	});
+
+	it("says what a mixed +N counts, since its colour says nothing to a screen reader", () => {
+		const pr = workerRowPullRequest({ prs: [{ number: 15, state: "open" }, { number: 9, state: "closed" }, { number: 12, state: "merged" }, { number: 11, state: "merged" }] } as never);
+		expect(workerRowAccessibilityLabel({ ...base, indicator: null, pr })).toContain(". Pull request 15, open, and 3 more: 2 merged, 1 closed.");
 	});
 
 	it("says just now for a fresh row", () => {

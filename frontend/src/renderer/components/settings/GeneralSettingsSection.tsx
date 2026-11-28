@@ -28,7 +28,7 @@ import { IS_DEV } from "../../lib/is-dev";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import { githubAuthRequirementQueryOptions, systemRequirementsQueryKey } from "../../hooks/useSystemRequirementsGate";
-import { useSettings, useUpdateCommitAttribution, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCommitAttribution, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateSkillSharing, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -143,6 +143,36 @@ function VersionRefreshRow() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Every agent can use the user's skills, whichever agent they were written for.
+ * Daemon-owned, because the daemon prepares them at launch. Hidden on a daemon
+ * that predates the setting, where the switch would do nothing.
+ */
+function SkillSharingRow() {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateSkillSharing();
+	if (settings?.skillSharing === undefined) return null;
+	return (
+		<SettingsRow
+			className="rounded-none"
+			label={t("settings.skillSharing.label")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.skillSharing.saveFailed") : t("settings.skillSharing.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.skillSharing.label")}
+				checked={settings.skillSharing}
+				disabled={saving}
+				onCheckedChange={update}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -466,6 +496,7 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				<VersionRefreshRow />
+				<SkillSharingRow />
 				<SessionRetentionRow />
 				<TerminalShellRows />
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>

@@ -202,7 +202,12 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 								aria-label={entry.ariaLabel}
 								aria-keyshortcuts={accelerator?.toUpperCase()}
 								data-menu-accelerator={accelerator?.toLowerCase()}
-								className={cn(entry.destructive && actionMenuDestructiveItemClass)}
+								className={cn(
+									entry.destructive && actionMenuDestructiveItemClass,
+									// A disabled row normally ignores the pointer; one that explains why
+									// takes it back so its tooltip shows. Radix still won't select it.
+									entry.disabled && entry.title && "data-[disabled]:pointer-events-auto",
+								)}
 								disabled={entry.disabled || !entry.onSelect}
 								onSelect={entry.onSelect ? () => entry.onSelect?.() : undefined}
 								title={entry.title}
@@ -214,7 +219,8 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 										<span className="text-xs text-muted-foreground">{entry.description}</span>
 									</span>
 								) : (
-									entry.label
+									// A fixed-width menu truncates a long label instead of growing.
+									<span className="min-w-0 truncate">{entry.label}</span>
 								)}
 								{entry.shortcut ? <kit.Shortcut aria-hidden="true">{entry.shortcut}</kit.Shortcut> : null}
 								{!entry.shortcut && entry.shortcutId ? <AppShortcutHint id={entry.shortcutId} /> : null}
