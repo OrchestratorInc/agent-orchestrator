@@ -104,8 +104,10 @@ that worker with `ao session get <id>`.
   retry``. Show it to the user; signing in is theirs to do.
 - `taskId` is the worker's session id, or `<orchestrator-session>:<turn>` for a
   task sent to a Chat orchestrator. A terminal (TUI) orchestrator's task id is
-  `<orchestrator-session>:tui-<unix ms>`: the first turn that session recorded
-  from when the brief was sent. `taskId` is empty when no task id could be reported. That
+  `<orchestrator-session>:tui-<unix ms>-<length>-<hash>`: the first turn that
+  session recorded from when the brief was sent that carries this brief.
+  Other work recorded after the send is never taken for the task, and session
+  activity alone never confirms it. `taskId` is empty when no task id could be reported. That
   is not proof that no task exists: if the reason says the daemon accepted the
   task without a turn id, or that delivery could not be confirmed, the task may
   still run, so check the session (`ao session history <id>`) before starting it
@@ -115,8 +117,11 @@ that worker with `ao session get <id>`.
 - A task that finished stays `done` after its session or a worker is archived
   (normal cleanup after a merge). Only a session archived before its turn
   finished makes the task `failed`.
-- A task id whose turn is not in the session's history (a typo, or an id from
-  another session) fails at once; check the id `ao task start` printed.
+- A chat task id whose turn is not in the session's history (a typo, or an id
+  from another session) fails once the CLI has read back to the start of that
+  history; before that (a long history beyond its paging limit) it reads
+  `starting` and a wait times out with exit 4. Check the id `ao task start`
+  printed.
 - A terminal session is judged by its recorded turns when its agent records
   them. Without them it is never `done`: if `ao task wait` sees the agent
   working and then back at its prompt, it reports `running` (started), because

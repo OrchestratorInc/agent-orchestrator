@@ -11,11 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestParseTaskID(t *testing.T) {
@@ -221,10 +224,11 @@ func TestEvaluateTask(t *testing.T) {
 
 // taskDaemon is a scripted daemon for `ao task` command tests.
 type taskDaemon struct {
-	mu        sync.Mutex
-	lastQuery string
-	requests  []string
-	bodies    map[string]string
+	mu         sync.Mutex
+	lastQuery  string
+	allQueries []string
+	requests   []string
+	bodies     map[string]string
 	// routes maps "METHOD /path" to a status and body.
 	routes map[string]func() (int, string)
 }
@@ -252,6 +256,7 @@ func newTaskDaemon(t *testing.T) *taskDaemon {
 			d.bodies[key] = string(body)
 		}
 		d.lastQuery = r.URL.RawQuery
+		d.allQueries = append(d.allQueries, r.URL.RawQuery)
 		route := d.routes[key]
 		d.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -287,6 +292,12 @@ func (d *taskDaemon) setFunc(key string, fn func() (int, string)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.routes[key] = fn
+}
+
+func (d *taskDaemon) queries() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.allQueries...)
 }
 
 func (d *taskDaemon) saw(key string) bool {
@@ -461,7 +472,8 @@ func TestTaskStartOrchestratorTerminalFallsBackToSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exit = %d: %v", ExitCode(err), err)
 	}
-	if !strings.HasPrefix(out, "task repo-orchestrator:tui-") || !strings.Contains(out, ": running") {
+	// No recorded turns: session activity alone never confirms the brief.
+	if !strings.HasPrefix(out, "task repo-orchestrator:tui-") || !strings.Contains(out, ": starting (the session is active, but no turn for this task is recorded yet") {
 		t.Fatalf("stdout = %q", out)
 	}
 	var sent map[string]any
@@ -929,52 +941,32 @@ func TestTaskStartTerminalSendLostReplyKeepsTheTaskID(t *testing.T) {
 }
 
 // A terminal orchestrator that was just started gets its boot time before the
-// brief is typed into it.
-func TestTaskStartWaitsForAFreshTerminalOrchestratorToBoot(t *testing.T) {
-	d := newTaskDaemon(t)
-	deps := fakeClockDeps()
-	start := deps.Now()
-	created := start.Add(-3 * time.Second).UTC().Format(time.RFC3339Nano)
-	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-1","projectId":"repo"}}`)
-	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","createdAt":"`+created+`","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"active"}}}`)
-	d.set("POST /api/v1/sessions/repo-1/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
-	var sentAfter time.Duration
-	d.setFunc("POST /api/v1/sessions/repo-1/send", func() (int, string) {
-		sentAfter = deps.Now().Sub(start)
-		return 200, `{"ok":true,"sessionId":"repo-1","message":"fix calc"}`
-	})
-	t.Setenv("AO_SESSION_ID", "")
-
-	if _, _, err := executeCLI(t, deps, "task", "start", "fix calc", "--project", "repo", "--json"); err != nil {
-		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
-	}
-	if sentAfter < 12*time.Second {
-		t.Fatalf("brief sent %s after start; want it held until the 15 s boot window passed (session was 3 s old)", sentAfter)
-	}
-}
-
-func TestTaskStartWaitKeepsTheTerminalWorkSeenAtStart(t *testing.T) {
+// A terminal orchestrator whose agent records no turns cannot confirm the
+// brief from activity alone: working then back at the prompt may be other work.
+// The wait ends unconfirmed (exit 4), never "running".
+func TestTaskStartTerminalOrchestratorWithoutHistoryStaysUnconfirmed(t *testing.T) {
 	d := newTaskDaemon(t)
 	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
 	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
 	d.set("POST /api/v1/sessions/repo-orchestrator/send", 200, `{"ok":true,"sessionId":"repo-orchestrator","message":"fix calc"}`)
 	reads := 0
 	d.setFunc("GET /api/v1/sessions/repo-orchestrator", func() (int, string) {
+		d.mu.Lock()
 		reads++
-		// Reads 1 (preflight) and 2 (the start's status) see the agent working;
-		// it is back at its prompt by the first wait poll.
 		state := "waiting_input"
 		if reads <= 2 {
 			state = "active"
 		}
+		d.mu.Unlock()
 		return 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"` + state + `"}}}`
 	})
+	t.Setenv("AO_SESSION_ID", "")
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--wait", "--timeout", "10s", "--json")
-	if err != nil {
-		t.Fatalf("exit = %d: %v\n%s", ExitCode(err), err, out)
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4: activity alone must not confirm a terminal orchestrator task", got, err)
 	}
-	if res := decodeTaskResult(t, out); res["status"] != "running" || !strings.Contains(res["reason"].(string), "does not report whether this task is done") {
+	if res := decodeTaskResult(t, out); res["status"] == "running" || res["status"] == "done" {
 		t.Fatalf("result = %v", res)
 	}
 }
@@ -1439,7 +1431,7 @@ func TestTaskWaitFailedFinalReadSaysCheckFirst(t *testing.T) {
 		t.Fatalf("exit = %d (%v), want 4", got, err)
 	}
 	res := decodeTaskResult(t, out)
-	if res["taskId"] != "repo-orchestrator:t2" || !strings.Contains(res["reason"].(string), "final status read failed") || !strings.Contains(res["reason"].(string), "do not start it again") ||
+	if res["taskId"] != "repo-orchestrator:t2" || !strings.Contains(res["reason"].(string), "final status read failed") || !strings.Contains(res["reason"].(string), "(TEMPORARY)") || !strings.Contains(res["reason"].(string), "do not start it again") ||
 		res["fix"] != "check `ao task status repo-orchestrator:t2` before doing anything else" {
 		t.Fatalf("result = %v", res)
 	}
@@ -1812,6 +1804,11 @@ func TestTaskStatusTerminalTaskPagesBackToTheSendBoundary(t *testing.T) {
 	if err != nil || decodeTaskResult(t, out)["status"] != "done" {
 		t.Fatalf("err = %v, out = %s; want the task's own (finished) turn, found by paging back", err, out)
 	}
+	// The older page must actually be read (skipping it would still read done,
+	// because later turns exist).
+	if !d.saw("GET /api/v1/sessions/repo-1/history") || !slices.Contains(d.queries(), "offset=50&limit=50") {
+		t.Fatalf("queries = %v; want the older page offset=50&limit=50", d.queries())
+	}
 }
 
 // A failed read of a worker's oldest turn is a read failure, never a
@@ -1908,5 +1905,99 @@ func TestTaskWaitCancelAfterTheLastPollIsInterrupted(t *testing.T) {
 	res := c.waitTask(ctx, taskResult{TaskID: "repo-1"}, 5*time.Second)
 	if !res.waitInterrupted || strings.Contains(res.Reason, "workspace setup had not finished") {
 		t.Fatalf("result = %+v; want an interrupted wait", res)
+	}
+}
+
+func fingerprintedTaskID(brief string) taskID {
+	return taskID{session: "repo-1", turn: fmt.Sprintf("tui-%d-%d-%s", time.Unix(1_800_000_000, 0).UnixMilli(), len(brief), briefHash(brief))}
+}
+
+// The terminal task's turn is the brief's own turn: other work recorded after
+// the send is skipped, and a sender header before the brief still matches.
+func TestSelectTerminalTaskTurnMatchesTheBrief(t *testing.T) {
+	since := time.Unix(1_800_000_000, 0)
+	turn := func(req string, d time.Duration) domain.HandoffTurn {
+		return domain.HandoffTurn{UserRequest: req, At: since.Add(d)}
+	}
+	turns := []domain.HandoffTurn{
+		turn("Reply OK", -time.Second),                                    // same text, before the send
+		turn("<task-notification>other</task-notification>", time.Second), // unrelated, after
+		turn("[from repo-9]\nReply OK", 2*time.Second),                    // the brief, with a sender header
+	}
+	if got := selectTerminalTaskTurn(turns, fingerprintedTaskID("Reply OK"), since); got != 2 {
+		t.Fatalf("selected turn %d, want 2 (the brief's own turn)", got)
+	}
+	if got := selectTerminalTaskTurn(turns[:2], fingerprintedTaskID("Reply OK"), since); got != -1 {
+		t.Fatalf("selected turn %d, want -1 while the brief's turn is not recorded", got)
+	}
+	if got := selectTerminalTaskTurn(turns, fingerprintedTaskID("Something else"), since); got != -1 {
+		t.Fatalf("selected turn %d for an unrelated brief, want -1", got)
+	}
+}
+
+// A worker read as done can get follow-up work before the pass ends; done is
+// reported only when a second read agrees.
+func TestTaskStatusFoldRechecksWorkersBeforeDone(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"completed"}],"activities":[
+		{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}}]}`)
+	d.set("GET /api/v1/sessions/repo-3", 200, `{"session":{"id":"repo-3","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	reads := 0
+	d.setFunc("GET /api/v1/sessions/repo-3/conversation", func() (int, string) {
+		d.mu.Lock()
+		reads++
+		n := reads
+		d.mu.Unlock()
+		if n == 1 {
+			return 200, `{"turns":[{"id":"w1","state":"completed"}]}`
+		}
+		return 200, `{"turns":[{"id":"w1","state":"completed"},{"id":"w2","state":"running"}]}`
+	})
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v)", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "running" || !strings.Contains(res["reason"].(string), "repo-3 (running)") {
+		t.Fatalf("result = %v; want running once the recheck sees follow-up work", res)
+	}
+}
+
+// History that grows between the page read and the oldest-turn read is
+// unresolved, not a later turn taken for the first.
+func TestTaskStatusTerminalWorkerHistoryGrowthIsUnresolved(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-2", 200, `{"session":{"id":"repo-2","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-2/history", func() (int, string) {
+		d.mu.Lock()
+		query := d.lastQuery
+		d.mu.Unlock()
+		if query == "offset=50&limit=1" {
+			return 200, `{"total":52,"offset":50,"turns":[{"userRequest":"second","agentResponse":"done","at":"` + fakeNowRFC3339(0) + `"}]}`
+		}
+		return 200, `{"total":51,"offset":0,"turns":[{"userRequest":"later","agentResponse":"done later","at":"` + fakeNowRFC3339(time.Hour) + `"}]}`
+	})
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-2", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v)", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "starting" || !strings.Contains(res["reason"].(string), "could not be located") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// A start whose first status read failed synthesizes "starting"; if every
+// later read fails too, the wait says the state could not be confirmed.
+func TestTaskStartWaitAllReadsFailedSaysUnknown(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"repo-1"}`)
+	d.set("GET /api/v1/sessions/repo-1", 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--wait", "--timeout", "5s", "--json")
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["taskId"] != "repo-1" || !strings.Contains(res["reason"].(string), "state could not be confirmed") {
+		t.Fatalf("result = %v", res)
 	}
 }

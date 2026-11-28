@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -83,6 +85,8 @@ type taskResult struct {
 	waitTimedOut bool
 	// waitInterrupted marks a wait its caller stopped (not printed).
 	waitInterrupted bool
+	// unread marks a status synthesized without a successful read (not printed).
+	unread bool
 }
 
 // taskExitError carries a task outcome's exit code to the process entrypoint.
@@ -249,15 +253,50 @@ const terminalTaskTurnPrefix = "tui-"
 var taskTerminalBootWait = 15 * time.Second
 
 func (id taskID) terminalSince() (time.Time, bool) {
-	ms, ok := strings.CutPrefix(id.turn, terminalTaskTurnPrefix)
+	rest, ok := strings.CutPrefix(id.turn, terminalTaskTurnPrefix)
 	if !ok {
 		return time.Time{}, false
 	}
+	ms, _, _ := strings.Cut(rest, "-")
 	n, err := strconv.ParseInt(ms, 10, 64)
 	if err != nil {
 		return time.Time{}, false
 	}
 	return time.UnixMilli(n), true
+}
+
+// terminalBriefFingerprint returns the "<len>-<hash>" part of a terminal task
+// id, which identifies the brief's own turn in history. Older ids have none.
+func (id taskID) terminalBriefFingerprint() (length int, hash string, ok bool) {
+	rest, found := strings.CutPrefix(id.turn, terminalTaskTurnPrefix)
+	if !found {
+		return 0, "", false
+	}
+	parts := strings.Split(rest, "-")
+	if len(parts) != 3 {
+		return 0, "", false
+	}
+	n, err := strconv.Atoi(parts[1])
+	if err != nil || n <= 0 {
+		return 0, "", false
+	}
+	return n, parts[2], true
+}
+
+// briefHash is the short fingerprint of a brief's trimmed text.
+func briefHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:4])
+}
+
+// turnCarriesBrief reports whether a recorded request is the brief: its
+// trimmed text ends with exactly the brief (a sender header may precede it).
+func turnCarriesBrief(request string, length int, hash string) bool {
+	request = strings.TrimSpace(request)
+	if len(request) < length {
+		return false
+	}
+	return briefHash(request[len(request)-length:]) == hash
 }
 
 func (id taskID) String() string {
@@ -484,7 +523,10 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 			}
 		}
 		sentAt := c.deps.Now()
-		id := taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d", terminalTaskTurnPrefix, sentAt.UnixMilli())}
+		// The id carries the send time and the brief's fingerprint, so status
+		// matches the brief's own turn, not other work recorded after the send.
+		trimmed := strings.TrimSpace(message)
+		id := taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d-%d-%s", terminalTaskTurnPrefix, sentAt.UnixMilli(), len(trimmed), briefHash(trimmed))}
 		err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil)
 		if errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_DELIVERY_UNCONFIRMED" {
 			// The brief is in the terminal's composer but not submitted.
@@ -813,7 +855,7 @@ func isTransientReadErr(err error) bool {
 func (c *commandContext) createdTaskStatus(ctx context.Context, id taskID) taskResult {
 	obs := c.observeTask(ctx, id)
 	if obs.readFailed && obs.transient {
-		return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: []string{id.session},
+		return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: []string{id.session}, unread: true,
 			Reason: "the task was created, but its first status read failed: " + obs.result.Reason}
 	}
 	if obs.phase == taskPhaseTurnMissing {
@@ -881,6 +923,9 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 			}
 		case hist != nil:
 			eval = evaluateTerminalHistory(sess, hist, id)
+		case terminalTask:
+			// No recorded turns at all: activity cannot confirm this brief.
+			eval = terminalTaskUnconfirmed(sess)
 		default:
 			eval = evaluateTaskTurn(sess, conv, "", id.latest)
 		}
@@ -970,9 +1015,32 @@ func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, wo
 			res.Reason = "the orchestrator is working on it; workers started so far: " + strings.Join(workers, ", ")
 		}
 	case turnDone:
+		// Report done only from a consistent view: a worker read as done
+		// early in the pass may have been sent follow-up work since.
+		if busy := c.recheckTaskWorkers(ctx, workers); len(busy) > 0 {
+			res.Status = taskStatusRunning
+			res.Reason = "the orchestrator handed the task to its workers; still working: " + strings.Join(busy, ", ")
+			break
+		}
 		res.Reason = fmt.Sprintf("the orchestrator and its %d worker(s) finished", len(workers))
 	}
 	return res
+}
+
+// recheckTaskWorkers re-reads every worker after a pass that found all of
+// them done, and returns any that is no longer done (or could not be read).
+func (c *commandContext) recheckTaskWorkers(ctx context.Context, workers []string) []string {
+	var busy []string
+	for _, worker := range workers {
+		obs := c.observeTask(ctx, taskID{session: worker, latest: true})
+		switch {
+		case obs.readFailed:
+			busy = append(busy, fmt.Sprintf("%s (could not be read: %s)", worker, obs.result.Reason))
+		case obs.result.Status != taskStatusDone && obs.result.Status != taskStatusFailed:
+			busy = append(busy, fmt.Sprintf("%s (%s)", worker, obs.result.Status))
+		}
+	}
+	return busy
 }
 
 type taskEvaluation struct {
@@ -1219,7 +1287,9 @@ func (c *commandContext) fetchTaskHistory(ctx context.Context, id taskID) (*task
 		if err := c.getJSON(ctx, fmt.Sprintf("%s?offset=%d&limit=1", path, page.Total-1), &first); err != nil {
 			return nil, err
 		}
-		if len(first.Turns) != 1 {
+		// A turn recorded between the two reads shifts the offset by one, so a
+		// changed total means this is not the oldest turn.
+		if len(first.Turns) != 1 || first.Total != page.Total {
 			return &taskTerminalHistory{unresolved: true}, nil
 		}
 		newest = append(newest, first.Turns[0])
@@ -1239,32 +1309,64 @@ func transientOnly(err error) error {
 	return nil
 }
 
+// terminalTaskUnconfirmed is a terminal task whose brief has no recorded turn
+// yet. The session's activity is reported but never confirms the task.
+func terminalTaskUnconfirmed(sess taskSession) taskEvaluation {
+	switch {
+	case sess.IsTerminated:
+		return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("session %s was archived before the task's turn was recorded", sess.ID)}
+	case sess.Activity.State == "exited":
+		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited before the task's turn was recorded (terminal session)"}
+	case sess.Activity.State == "blocked":
+		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
+	}
+	state := sess.Activity.State
+	if state == "" {
+		state = "idle"
+	}
+	return taskEvaluation{status: taskStatusStarting, reason: fmt.Sprintf("the session is %s, but no turn for this task is recorded yet (terminal session)", state), phase: taskPhaseTerminalIdle}
+}
+
+// selectTerminalTaskTurn finds a terminal task's turn: recorded at or after the
+// send, and, when the id carries the brief's fingerprint, carrying that brief.
+// Other work recorded after the send is never taken for the task. -1 when no
+// such turn is recorded yet.
+func selectTerminalTaskTurn(turns []domain.HandoffTurn, id taskID, since time.Time) int {
+	length, hash, fingerprinted := id.terminalBriefFingerprint()
+	for i, turn := range turns {
+		if turn.At.Before(since) {
+			continue
+		}
+		if !fingerprinted || turnCarriesBrief(turn.UserRequest, length, hash) {
+			return i
+		}
+	}
+	return -1
+}
+
 // evaluateTerminalHistory judges a terminal task by the session's recorded
 // turns: the first turn from the send time for an orchestrator task, the first
 // turn for a worker task, or the latest turn for a worker an orchestrator task
 // started. A recorded turn with a reply, or one that later turns followed, is
 // done, which a terminal session's activity alone cannot show.
 func evaluateTerminalHistory(sess taskSession, hist *taskTerminalHistory, id taskID) taskEvaluation {
-	idx := -1
+	var idx int
 	since, terminalTask := id.terminalSince()
 	switch {
 	case hist.unresolved:
 		return taskEvaluation{status: taskStatusStarting, reason: "the task's turn could not be located in the session's history yet", phase: taskPhaseAwaitingTurn}
 	case terminalTask:
-		// Only a turn recorded at or after the send can be this task: earlier
-		// work, however recent, is not.
-		for i, turn := range hist.turns {
-			if !turn.At.Before(since) {
-				idx = i
-				break
-			}
-		}
+		idx = selectTerminalTaskTurn(hist.turns, id, since)
 	case id.latest:
 		idx = len(hist.turns) - 1
 	default:
 		idx = 0
 	}
 	if idx < 0 {
+		if terminalTask {
+			// The session's activity cannot show whether it took this brief.
+			return terminalTaskUnconfirmed(sess)
+		}
 		// Not recorded yet: fall back to the session's activity.
 		return evaluateTaskTurn(sess, nil, "", false)
 	}
@@ -1336,7 +1438,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	sawTerminalWork := res.phase == taskPhaseTerminalActive
 	// anyRead: a status read succeeded during this wait, or the start already
 	// read the task (a standalone wait begins with only the caller's id).
-	anyRead := res.Status != ""
+	anyRead := res.Status != "" && !res.unread
 	var runningTurn string
 	var runningSince time.Time
 	for {
@@ -1383,7 +1485,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		if obs.phase == taskPhaseTerminalActive {
 			sawTerminalWork = true
 		}
-		if obs.phase == taskPhaseTerminalPrompt && sawTerminalWork {
+		if _, timestamped := id.terminalSince(); !timestamped && obs.phase == taskPhaseTerminalPrompt && sawTerminalWork {
 			// The agent worked and is back at its prompt. That work may predate
 			// the brief, so this is never "done": report it as started, and say
 			// that a terminal session cannot confirm completion.
@@ -1416,7 +1518,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 
 	// Nothing settled in time. A queued task is accepted and will still run,
 	// so it is reported apart from a failure: retrying it would send it twice.
-	finalReadFailed := false
+	finalReadFailed, finalReadReason := false, ""
 	if last.Status == taskStatusQueued {
 		// Re-read once, bounded, so the answer matches the task's state now:
 		// the queued turn may have started, failed or been cancelled during
@@ -1433,6 +1535,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			return interruptedTask(id, last)
 		}
 		finalReadFailed = final.readFailed
+		finalReadReason = final.result.Reason
 		if !final.readFailed {
 			switch final.result.Status {
 			case taskStatusFailed, taskStatusNeedsInput, taskStatusDone:
@@ -1466,7 +1569,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	check := fmt.Sprintf("`ao session get %s`", id.session)
 	switch {
 	case last.Status == taskStatusQueued && finalReadFailed:
-		out.Reason = fmt.Sprintf("timed out after %s; the task was queued at the last check, but the final status read failed, so its state is unknown; %s", timeout, notAgain)
+		out.Reason = fmt.Sprintf("timed out after %s; the task was queued at the last check, but the final status read failed (%s), so its state is unknown; %s", timeout, finalReadReason, notAgain)
 		out.Fix = fmt.Sprintf("check `ao task status %s` before doing anything else", id)
 	case last.Status == taskStatusQueued:
 		out.Reason = fmt.Sprintf("timed out after %s while still queued behind the agent's current turn; the task is accepted and will run, so do not start it again", timeout)
