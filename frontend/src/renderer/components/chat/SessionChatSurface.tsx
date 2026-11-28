@@ -1013,14 +1013,20 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 	const listed = () => queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
 		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === held.id);
 	const cached = () => listed() ?? (hostId ? undefined : queryClient.getQueryData<WorkspaceSession>(directKey));
+	const gone = () => {
+		if (queryClient.getQueryState(workspacesKey)?.status !== "success" || listed()) return false;
+		if (hostId) return true;
+		const direct = queryClient.getQueryState(directKey);
+		return direct?.data === undefined || apiErrorCode(direct.error) === "SESSION_NOT_FOUND";
+	};
 	const refusal = () => {
 		const hostError = hostId ? queryClient.getQueryState(workspacesKey)?.error : undefined;
 		if (HOST_REFUSALS.has(apiErrorCode(hostError) ?? "")) {
 			return new AoError("CHAT_CONTROLLER_NOT_READY", apiErrorMessage(hostError, "The host no longer accepts this computer, so the message was not sent."));
 		}
 		const session = cached();
-		return session && session.createdAt !== held.createdAt
-			? new AoError("SESSION_NOT_FOUND", "This chat was replaced, so the message was not sent.")
+		return gone() || (session && session.createdAt !== held.createdAt)
+			? new AoError("SESSION_NOT_FOUND", "This chat no longer exists, so the message was not sent.")
 			: undefined;
 	};
 	const recovered = () => {
@@ -1047,7 +1053,8 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 				stop();
 				return reject(refused);
 			}
-			if (cached()?.statusReadiness !== "checking") clearInterval(poll);
+			const session = cached();
+			if (session && session.statusReadiness !== "checking") clearInterval(poll);
 			if (!recovered()) return;
 			stop();
 			resolve();

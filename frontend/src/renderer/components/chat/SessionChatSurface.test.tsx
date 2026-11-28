@@ -556,11 +556,12 @@ describe("SessionChatSurface startup check", () => {
 	const listed = (client: QueryClient, target: WorkspaceSession) =>
 		client.setQueryData(["workspaces"], [{ id: target.workspaceId, sessions: [target] }]);
 	const checking = { ...session, statusReadiness: "checking" } satisfies WorkspaceSession;
-	const sendDuringCheck = async (target: WorkspaceSession, cached: WorkspaceSession = target) => {
+	const sendDuringCheck = async (target: WorkspaceSession, cached: WorkspaceSession = target, seed?: (client: QueryClient) => void) => {
 		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
 		conversationCommandState.send = vi.fn().mockResolvedValue({});
 		const client = new QueryClient();
 		listed(client, cached);
+		seed?.(client);
 		const view = render(<Wrapper client={client}><SessionChatSurface session={target} /></Wrapper>);
 		await act(async () => {
 			await sideMocks.workspaceSend?.("go on", undefined, "held-1");
@@ -598,9 +599,7 @@ describe("SessionChatSurface startup check", () => {
 	});
 
 	it("waits on the session's own lookup when the list has no row for it", async () => {
-		const { client, released } = await sendDuringCheck(checking, { ...session, id: "another" });
-		expect(released()).toBe(false);
-		await act(async () => { client.setQueryData(["session", session.id], checking); });
+		const { client, released } = await sendDuringCheck(checking, { ...session, id: "another" }, (seeded) => seeded.setQueryData(["session", session.id], checking));
 		expect(released()).toBe(false);
 		await act(async () => { client.setQueryData(["session", session.id], { ...session, statusReadiness: "ready" }); });
 		expect(released()).toBe(true);
@@ -611,6 +610,22 @@ describe("SessionChatSurface startup check", () => {
 		const { client, whenReady } = await sendDuringCheck(held);
 		const outcome = whenReady?.catch((error: unknown) => error);
 		await act(async () => { listed(client, { ...session, statusReadiness: "ready", createdAt: "2026-11-28T01:00:00Z" }); });
+		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
+	});
+
+	it("hands the message back when the session is deleted during the check", async () => {
+		const { client, whenReady } = await sendDuringCheck(checking);
+		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => { client.setQueryData(["workspaces"], [{ id: session.workspaceId, sessions: [] }]); });
+		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
+	});
+
+	it("hands the message back when the session's own lookup finds it gone", async () => {
+		const { client, whenReady } = await sendDuringCheck(checking, { ...session, id: "another" }, (seeded) => seeded.setQueryData(["session", session.id], checking));
+		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => {
+			await client.prefetchQuery({ queryKey: ["session", session.id], retry: false, queryFn: () => Promise.reject({ code: "SESSION_NOT_FOUND" }) });
+		});
 		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
 	});
 
