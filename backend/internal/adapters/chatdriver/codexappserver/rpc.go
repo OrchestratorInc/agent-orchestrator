@@ -385,3 +385,15 @@ func (c *conn) notify(method string, params any) error {
 // closeWrite closes stdin, which is how app-server is asked to shut down
 // gracefully. The read loop then ends on EOF.
 func (c *conn) closeWrite() error { return c.w.Close() }
+
+// RPCCode and RPCMessage let codexrollout tell a removed method from an
+// ordinary refusal.
+func (e *rpcError) RPCCode() int       { return e.Code }
+func (e *rpcError) RPCMessage() string { return e.Message }
+
+// requester adapts a conn to codexrollout.Requester.
+type requester struct{ c *conn }
+
+func (r requester) Request(ctx context.Context, method string, params, result any) error {
+	return r.c.request(ctx, method, params, result)
+}

@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -60,19 +59,19 @@ const snapshotsPrefix = "refs/ao/snapshots/"
 const snapshotSubject = "ao file snapshot of "
 
 // SessionPrefix is the ref namespace holding one session's snapshots.
-func SessionPrefix(session domain.SessionID) string {
-	return snapshotsPrefix + string(session) + "/"
+func SessionPrefix(session string) string {
+	return snapshotsPrefix + session + "/"
 }
 
 // Ref names the snapshot taken before a session's turn.
-func Ref(session domain.SessionID, turnID string) string {
+func Ref(session, turnID string) string {
 	return SessionPrefix(session) + turnID
 }
 
 // BeforeRollbackRef names the record of the worktree just before a rollback
 // restored the snapshot of turnID, so what the restore overwrote stays
 // reachable instead of being left to garbage collection.
-func BeforeRollbackRef(session domain.SessionID, turnID string) string {
+func BeforeRollbackRef(session, turnID string) string {
 	return SessionPrefix(session) + "before-rollback/" + turnID
 }
 
@@ -360,7 +359,7 @@ func DeleteOrphans(ctx context.Context, repo string, worktrees []string) error {
 		if keep[session] {
 			continue
 		}
-		if err := DeleteAll(ctx, repo, SessionPrefix(domain.SessionID(session))); err != nil {
+		if err := DeleteAll(ctx, repo, SessionPrefix(session)); err != nil {
 			return err
 		}
 	}
@@ -701,6 +700,23 @@ func (e *commandError) Error() string {
 
 func (e *commandError) Unwrap() error { return e.err }
 
+// redirectingEnv are inherited variables that would send a command's objects
+// to another object store than the repository's own, so refs could point at
+// objects the repository lacks.
+var redirectingEnv = []string{"GIT_OBJECT_DIRECTORY=", "GIT_ALTERNATE_OBJECT_DIRECTORIES="}
+
+// processEnv is this process's environment without redirectingEnv.
+func processEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !slices.ContainsFunc(redirectingEnv, func(prefix string) bool { return strings.HasPrefix(kv, prefix) }) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // git runs one git command in dir and returns its trimmed standard output.
 func git(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) (string, error) {
 	full := append([]string{
@@ -717,7 +733,7 @@ func git(ctx context.Context, dir string, env []string, stdin io.Reader, args ..
 	cmd := aoprocess.CommandContext(ctx, "git", full...)
 	// A plain folder's commands run against its detached store; the caller's
 	// env comes last, so an override such as GIT_INDEX_FILE wins.
-	cmd.Env = append(append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never"), detachedEnv(ctx, dir)...), env...)
+	cmd.Env = append(append(append(processEnv(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never"), detachedEnv(ctx, dir)...), env...)
 	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

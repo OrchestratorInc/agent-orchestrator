@@ -13,16 +13,16 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/forkseed"
 )
 
 // forkSeedMaxAge is how long a fork's file snapshot may outlive its spawn

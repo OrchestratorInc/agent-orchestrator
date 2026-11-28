@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
 )
 
 type sessionForkMode int
@@ -111,7 +111,7 @@ func (s *Service) SessionForkSource(ctx context.Context, rec domain.SessionRecor
 	if next.ID != "" {
 		// The files as this turn left them are the ones saved before the
 		// next turn started, for rollback.
-		source.FilesSnapshotRef, source.FilesTurnID = filesnapshot.Ref(rec.ID, next.ID), next.ID
+		source.FilesSnapshotRef, source.FilesTurnID = filesnapshot.Ref(string(rec.ID), next.ID), next.ID
 		// The snapshot is taken as the next turn starts.
 		source.FilesAsOf = next.RequestedAt
 		if next.StartedAt != nil {

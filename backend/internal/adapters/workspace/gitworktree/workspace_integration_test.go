@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
 )
 
 func TestWorkspaceIntegrationCreateRestoreDestroy(t *testing.T) {

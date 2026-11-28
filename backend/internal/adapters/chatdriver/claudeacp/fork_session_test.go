@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/claudesession"
 )
 
 type forkConfigPlugin struct{ dir string }
@@ -30,7 +31,7 @@ func realDir(t *testing.T) string {
 
 func TestClaudeForkScriptMovesFile(t *testing.T) {
 	config, src, dst := realDir(t), realDir(t), realDir(t)
-	source := filepath.Join(config, "projects", claudeProjectKey(src), "source-id.jsonl")
+	source := filepath.Join(config, "projects", claudesession.ProjectKey(src), "source-id.jsonl")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestClaudeForkScriptMovesFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(source), "child-id.jsonl")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("child left in the source folder: %v", err)
 	}
-	moved, err := os.ReadFile(filepath.Join(config, "projects", claudeProjectKey(dst), "child-id.jsonl"))
+	moved, err := os.ReadFile(filepath.Join(config, "projects", claudesession.ProjectKey(dst), "child-id.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,14 +108,8 @@ func TestClaudeForkFailureLeavesSourceUntouched(t *testing.T) {
 	if _, err := d.ForkIntoWorkspace(context.Background(), "source-id", src, "", ports.ChatStartConfig{WorkspacePath: dst}); err == nil {
 		t.Fatal("want error")
 	}
-	if _, err := os.Stat(filepath.Join(config, "projects", claudeProjectKey(dst))); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(config, "projects", claudesession.ProjectKey(dst))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fork folder created: %v", err)
-	}
-}
-
-func TestClaudeProjectKey(t *testing.T) {
-	if got := claudeProjectKey("/Users/a/.ao/w_1"); got != "-Users-a--ao-w-1" {
-		t.Fatalf("key = %q", got)
 	}
 }
 
@@ -131,7 +126,7 @@ func TestClaudeForkRealSDK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(config, "projects", claudeProjectKey(src), sourceID+".jsonl")
+	source := filepath.Join(config, "projects", claudesession.ProjectKey(src), sourceID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +138,7 @@ func TestClaudeForkRealSDK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	moved, err := os.ReadFile(filepath.Join(config, "projects", claudeProjectKey(dst), id+".jsonl"))
+	moved, err := os.ReadFile(filepath.Join(config, "projects", claudesession.ProjectKey(dst), id+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,32 +150,9 @@ func TestClaudeForkRealSDK(t *testing.T) {
 	}
 }
 
-func TestResolveForkPointUsesLastLineInSourceFile(t *testing.T) {
-	dir := realDir(t)
-	file := filepath.Join(dir, "s.jsonl")
-	// One API message is streamed as several lines; the cut must include all.
-	lines := []string{
-		`{"type":"user","uuid":"u1","message":{"role":"user","content":"hi"}}`,
-		`{"type":"assistant","uuid":"a1","message":{"id":"msg_A","content":[{"type":"thinking"}]}}`,
-		`{"type":"assistant","uuid":"a2","message":{"id":"msg_A","content":[{"type":"text","text":"hello"}]}}`,
-		`{"type":"user","uuid":"u2","message":{"role":"user","content":"next"}}`,
-		`{"type":"assistant","uuid":"b1","message":{"id":"msg_B","content":[{"type":"text","text":"later"}]}}`,
-	}
-	if err := os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := resolveForkPoint(context.Background(), file, "msg_A")
-	if err != nil || got != "a2" {
-		t.Fatalf("fork point = %q, %v; want a2", got, err)
-	}
-	if _, err := resolveForkPoint(context.Background(), file, "msg_missing"); err == nil {
-		t.Fatal("an unknown message must not fork the whole session")
-	}
-}
-
 func TestClaudeForkPassesTheCutPoint(t *testing.T) {
 	config, src, dst := realDir(t), realDir(t), realDir(t)
-	source := filepath.Join(config, "projects", claudeProjectKey(src), "source-id.jsonl")
+	source := filepath.Join(config, "projects", claudesession.ProjectKey(src), "source-id.jsonl")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +209,7 @@ func TestClaudeForkRealSDKAtOlderMessage(t *testing.T) {
 	}
 	config, src, dst := realDir(t), realDir(t), realDir(t)
 	sourceID := strings.TrimSuffix(filepath.Base(sessionFile), ".jsonl")
-	source := filepath.Join(config, "projects", claudeProjectKey(src), sourceID+".jsonl")
+	source := filepath.Join(config, "projects", claudesession.ProjectKey(src), sourceID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +221,7 @@ func TestClaudeForkRealSDKAtOlderMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	moved, err := os.ReadFile(filepath.Join(config, "projects", claudeProjectKey(dst), id+".jsonl"))
+	moved, err := os.ReadFile(filepath.Join(config, "projects", claudesession.ProjectKey(dst), id+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,8 +242,8 @@ func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Saved under the resolved folder's key, as ForkIntoWorkspace does.
-	forked := filepath.Join(config, "projects", claudeProjectKey(resolved), "child-id.jsonl")
-	other := filepath.Join(config, "projects", claudeProjectKey(resolved), "other-id.jsonl")
+	forked := filepath.Join(config, "projects", claudesession.ProjectKey(resolved), "child-id.jsonl")
+	other := filepath.Join(config, "projects", claudesession.ProjectKey(resolved), "other-id.jsonl")
 	for _, path := range []string{forked, other} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -300,36 +272,5 @@ func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("a wildcard id removed another session: %v", err)
-	}
-}
-
-// The copied conversation names the original's worktree in tool inputs and
-// results too, not only in cwd. Left as they are, the fork's agent edits the
-// original's files, so every reference moves to the fork's worktree. A
-// sibling folder that only shares the name's start is left alone.
-func TestForkCopyPointsEveryWorktreePathAtTheFork(t *testing.T) {
-	src, dst := "/w/fork-test/fork-test-1", "/w/fork-test/fork-test-4"
-	record := map[string]any{
-		"cwd": src,
-		"message": map[string]any{"content": []any{
-			map[string]any{"type": "tool_use", "name": "Write", "input": map[string]any{"file_path": src + "/a.txt"}},
-			map[string]any{"type": "tool_result", "content": "Wrote " + src + "/a.txt; left " + src + "0/b.txt alone"},
-		}},
-	}
-	line, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(rewriteWorkspacePaths(line, []string{src}, dst))
-	for _, want := range []string{`"cwd":"` + dst + `"`, `"file_path":"` + dst + `/a.txt"`, "Wrote " + dst + "/a.txt", src + "0/b.txt"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("rewritten line lacks %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(strings.ReplaceAll(got, src+"0/", ""), src) {
-		t.Errorf("the original's worktree is still named:\n%s", got)
-	}
-	if !json.Valid([]byte(got)) {
-		t.Errorf("rewritten line is not JSON: %s", got)
 	}
 }

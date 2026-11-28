@@ -12,11 +12,11 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
 )
 
 // A rollback with files puts the worktree back to the moment the rolled-back turn
@@ -63,7 +63,7 @@ func TestRollbackWithFilesRestoresTheWorktreeFromBeforeTheTurn(t *testing.T) {
 		t.Fatalf("added.txt survived the rollback: %v", err)
 	}
 	// What the restore overwrote is kept under a ref, not left to gc.
-	saved := filesnapshot.BeforeRollbackRef(testSession, second)
+	saved := filesnapshot.BeforeRollbackRef(string(testSession), second)
 	if got := gitOutputIn(t, workspace, "show", saved+":added.txt"); got != "second turn" {
 		t.Fatalf("added.txt under %s = %q, want the overwritten contents", saved, got)
 	}

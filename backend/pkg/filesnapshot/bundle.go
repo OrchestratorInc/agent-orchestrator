@@ -1,0 +1,133 @@
+package filesnapshot
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/pkg/gitbundle"
+)
+
+// ErrChainBroken means a snapshot bundle needs commits the store doesn't
+// hold: an earlier link of its chain is missing, or was fetched out of order.
+var ErrChainBroken = errors.New("snapshot bundle chain is broken")
+
+// BundleChain writes the snapshot under ref, from the git directory gitDir
+// (a repository's, or a plain folder's store), to the bundle file out, so it
+// can be kept away from the folder and fetched back into any store. With an
+// empty parentRef the bundle is a base holding everything ref needs; with
+// parentRef, the previous snapshot of the same chain, it holds only what that
+// one lacks. It returns the commits the receiving store must already hold.
+func BundleChain(ctx context.Context, gitDir, ref, parentRef, out string) ([]string, error) {
+	if !strings.HasPrefix(ref, snapshotsPrefix) {
+		return nil, fmt.Errorf("snapshot ref %q is outside %s", ref, snapshotsPrefix)
+	}
+	// git runs from a folder of its own, so every path is made absolute
+	// against the caller's folder first.
+	gitDir, err := filepath.Abs(gitDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve git directory: %w", err)
+	}
+	if out, err = filepath.Abs(out); err != nil {
+		return nil, fmt.Errorf("resolve bundle path: %w", err)
+	}
+	args := []string{"bundle", "create", "--quiet", out, ref}
+	if parentRef != "" {
+		if !strings.HasPrefix(parentRef, snapshotsPrefix) {
+			return nil, fmt.Errorf("snapshot ref %q is outside %s", parentRef, snapshotsPrefix)
+		}
+		args = append(args, "--not", parentRef)
+	}
+	if _, err := inGitDir(ctx, gitDir, nil, args...); err != nil {
+		return nil, err
+	}
+	return gitbundle.Prerequisites(out)
+}
+
+// FetchChain fetches every snapshot in bundles, oldest first, into the git
+// directory gitDir under the refs they were bundled from. It stops at the
+// first bundle whose required commits the store lacks, with ErrChainBroken,
+// having fetched nothing from that bundle.
+func FetchChain(ctx context.Context, gitDir string, bundles []string) error {
+	gitDir, err := filepath.Abs(gitDir)
+	if err != nil {
+		return fmt.Errorf("resolve git directory: %w", err)
+	}
+	for _, bundle := range bundles {
+		if bundle, err = filepath.Abs(bundle); err != nil {
+			return fmt.Errorf("resolve bundle path: %w", err)
+		}
+		prerequisites, err := gitbundle.Prerequisites(bundle)
+		if err != nil {
+			return fmt.Errorf("read snapshot bundle: %w", err)
+		}
+		missing, err := missingCommits(ctx, gitDir, prerequisites)
+		if err != nil {
+			return failure(ctx, err)
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("%w: %s needs %s", ErrChainBroken, bundle, strings.Join(missing, ", "))
+		}
+		if _, err := inGitDir(ctx, gitDir, nil, "bundle", "verify", "--quiet", bundle); err != nil {
+			return failure(ctx, err)
+		}
+		if _, err := inGitDir(ctx, gitDir, nil, "fetch", "--quiet", "--no-write-fetch-head", "--no-prune", bundle, snapshotsPrefix+"*:"+snapshotsPrefix+"*"); err != nil {
+			return failure(ctx, err)
+		}
+	}
+	return nil
+}
+
+// failure is err, or the context's own error when it was cancelled, which is
+// why git failed.
+func failure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+// missingCommits are the commits gitDir lacks. git cat-file --batch-check
+// names each one missing and fails only when it can't read the store, so a
+// missing commit is never confused with another failure: plain cat-file -e
+// exits the same way for both.
+func missingCommits(ctx context.Context, gitDir string, commits []string) ([]string, error) {
+	if len(commits) == 0 {
+		return nil, nil
+	}
+	var input strings.Builder
+	for _, commit := range commits {
+		input.WriteString(commit + "^{commit}\n")
+	}
+	out, err := inGitDir(ctx, gitDir, strings.NewReader(input.String()), "cat-file", "--batch-check=%(objecttype)")
+	if err != nil {
+		return nil, err
+	}
+	types := strings.Split(out, "\n")
+	if len(types) != len(commits) {
+		return nil, fmt.Errorf("git cat-file --batch-check answered %d lines for %d commits", len(types), len(commits))
+	}
+	var missing []string
+	for i, kind := range types {
+		if kind != "commit" {
+			missing = append(missing, commits[i])
+		}
+	}
+	return missing, nil
+}
+
+// inGitDir runs git against the git directory gitDir from an empty folder.
+// Run from inside a git directory, a ref's name is also the path of its loose
+// ref file there, so git can't tell the revision from the file.
+func inGitDir(ctx context.Context, gitDir string, stdin io.Reader, args ...string) (string, error) {
+	cwd, err := os.MkdirTemp("", "ao-file-snapshot-*")
+	if err != nil {
+		return "", fmt.Errorf("create a folder to run git in: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(cwd) }()
+	return git(ctx, cwd, []string{"GIT_DIR=" + gitDir}, stdin, args...)
+}
