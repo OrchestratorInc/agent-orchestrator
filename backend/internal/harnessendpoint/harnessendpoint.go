@@ -1,7 +1,9 @@
 // Package harnessendpoint stores a user-chosen API endpoint (base URL and API
-// key) per harness and maps it onto the environment variables each harness
-// reads natively. The registry is generic: a harness gains support by adding
-// one Spec naming its own variables. Nothing here special-cases a provider.
+// key) per harness and maps it onto environment variables. Most harnesses read
+// those variables natively; a harness that takes its endpoint from launch
+// flags instead names AO-owned variables, and its adapter turns them into
+// flags. The registry is generic: a harness gains support by adding one Spec.
+// Nothing here special-cases a provider.
 //
 // Configs live under AO's data dir beside its provider keys (never an
 // OS-default app-data location), one owner-only JSON file per harness. The API key is never returned to
@@ -12,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -79,6 +82,17 @@ func (s Spec) AuthStyles() []AuthStyle {
 	return out
 }
 
+// Codex reads a custom endpoint from a model provider in its config, not from
+// environment variables. Its spec carries the endpoint in these AO-owned
+// variables, and the Codex adapter turns them into `-c model_providers...`
+// launch overrides whose env_key names CodexAPIKeyEnv, so the key itself
+// never appears on a command line.
+const (
+	CodexBaseURLEnv = "AO_CODEX_ENDPOINT_BASE_URL"
+	CodexAPIKeyEnv  = "AO_CODEX_ENDPOINT_API_KEY" //nolint:gosec // G101: an environment variable name, not a credential.
+	CodexModelEnv   = "AO_CODEX_ENDPOINT_MODEL"
+)
+
 // specs is the reviewed registry. Variable names come from each harness's own
 // documentation; clients can never supply variable names.
 var specs = map[string]Spec{
@@ -101,6 +115,87 @@ var specs = map[string]Spec{
 		ModelsPath:    "/v1/models",
 		ModelsHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	},
+	"codex": {
+		AgentID:    "codex",
+		BaseURLEnv: CodexBaseURLEnv,
+		// A Codex model provider sends its env_key as a bearer token.
+		KeyEnv: map[AuthStyle]string{
+			AuthBearer: CodexAPIKeyEnv,
+		},
+		// Credentials Codex would otherwise sign in with. A custom provider
+		// ignores them, but blanking keeps a saved account's key out of the
+		// session either way.
+		ClearEnv: []string{ //nolint:gosec // G101: environment variable names, not credentials.
+			"OPENAI_API_KEY",
+			"CODEX_API_KEY",
+			"CODEX_ACCESS_TOKEN",
+		},
+		DefaultAuthStyle: AuthBearer,
+		ModelEnv:         CodexModelEnv,
+		// The base URL carries the API version, as Codex expects, so the
+		// OpenAI-compatible listing sits right under it.
+		ModelsPath: "/models",
+	},
+}
+
+func (s Spec) envNames() []string {
+	names := []string{s.BaseURLEnv}
+	for _, style := range s.AuthStyles() {
+		names = append(names, s.KeyEnv[style])
+	}
+	if s.ModelEnv != "" {
+		names = append(names, s.ModelEnv)
+	}
+	return append(names, s.ClearEnv...)
+}
+
+// WithProjectEnv resolves endpoint settings from the store and project. A
+// saved endpoint arrives already resolved by ProjectEnv, project values
+// included and validated, and is returned as is, so the project is never
+// read twice and the URL checked there is the URL the process runs with.
+// Without one, the project's own endpoint variables apply. An active endpoint
+// always blanks competing credentials and provider switches.
+func (s Spec) WithProjectEnv(stored, project map[string]string, caseInsensitive bool) map[string]string {
+	env := make(map[string]string, len(stored))
+	maps.Copy(env, stored)
+	if stored != nil {
+		for _, name := range s.ClearEnv {
+			env[name] = ""
+		}
+		return env
+	}
+	for _, name := range s.envNames() {
+		if value, ok := project[name]; ok {
+			env[name] = value
+			continue
+		}
+		if caseInsensitive {
+			for key, value := range project {
+				if strings.EqualFold(key, name) {
+					env[name] = value
+					break
+				}
+			}
+		}
+	}
+	if s.activeIn(env) {
+		for _, name := range s.ClearEnv {
+			env[name] = ""
+		}
+	}
+	return env
+}
+
+func (s Spec) activeIn(env map[string]string) bool {
+	if strings.TrimSpace(env[s.BaseURLEnv]) == "" {
+		return false
+	}
+	for _, name := range s.KeyEnv {
+		if strings.TrimSpace(env[name]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Lookup returns the spec for agentID.
@@ -403,8 +498,8 @@ func (s *Store) Configured(agentID string) (bool, error) {
 // configured endpoint, or nil when none is configured. The key variable of
 // every other auth style and each ClearEnv variable map to "" so a credential
 // from the daemon's environment or a bound account is not used instead of, or
-// sent alongside, the configured one. Callers
-// decide precedence: project configuration should still win.
+// sent alongside, the configured one. WithProjectEnv applies project overrides
+// while preserving the ClearEnv blanks.
 func (s *Store) Env(agentID string) (map[string]string, error) {
 	spec, ok := specs[agentID]
 	if !ok {
