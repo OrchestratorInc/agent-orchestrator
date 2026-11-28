@@ -2943,6 +2943,34 @@ describe("startAutoUpdates", () => {
     expect(h.module.getUpdateStatus()).toMatchObject({ state: "not-available", requestId: "retry" });
   });
 
+  it.each([true, false])("reports the updater's own error for a check only when it did not hit the deadline (deadline: %s)", async (deadline) => {
+    vi.useFakeTimers();
+    const h = await importAutoUpdater();
+    const { setMainErrorSink, resetMainErrorCaptureForTests } = await import("./main-error-capture");
+    const sink = vi.fn(); setMainErrorSink(sink);
+    try {
+      const feedError = () => Object.assign(new Error("Cannot parse releases feed"), { code: "ERR_UPDATER_INVALID_RELEASE_FEED" });
+      h.autoUpdater.httpExecutor.request.mockImplementation(async (_options, token) => token!.createPromise<string>(() => {}));
+      h.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+        h.updaterEvents.get("checking-for-update")?.();
+        try {
+          if (!deadline) throw feedError();
+          await h.autoUpdater.httpExecutor.request({});
+        } catch {
+          // electron-updater emits its wrapped error, then rejects the check.
+          h.updaterEvents.get("error")?.(feedError());
+          throw feedError();
+        }
+      });
+      const checking = h.module.startAutoUpdates(stateDir);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await checking;
+      const reported = sink.mock.calls.filter(([capture]) => capture.category === "update");
+      if (deadline) expect(reported).toHaveLength(0);
+      else expect(reported.length).toBeGreaterThan(0);
+    } finally { resetMainErrorCaptureForTests(); }
+  });
+
   it("clears the check deadline before an automatic download continues", async () => {
     vi.useFakeTimers();
     const h = await importAutoUpdater();
@@ -5591,8 +5619,7 @@ it("keeps expected update outages out of handled captures and reports genuine fa
     expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "update", reason: "stage", detail: "kind:invalid-signature" }));
     module.reportUpdateFailure(new Error("unexpected staging failure"), "install");
     expect(sink).toHaveBeenCalledTimes(2);
-    // A timed-out check reports as neither its cancelled request nor the rethrown deadline error.
-    module.reportUpdateFailure(new Error("cancelled"), "check");
+    // The deadline error rethrown after a timed-out check is a timeout.
     module.reportUpdateFailure(new Error("Update check timed out. The update service did not respond in time. Try again."), "check");
     expect(sink).toHaveBeenCalledTimes(2);
   } finally { resetMainErrorCaptureForTests(); }

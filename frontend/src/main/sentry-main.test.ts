@@ -105,7 +105,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(event)).not.toContain("/private/session");
 	});
 
-	it("names frameless window errors by their redacted text", async () => {
+	it("tells frameless window errors apart by hash without sending their text", async () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		const windowError = (value: string) => beforeSend({
@@ -113,11 +113,12 @@ describe("Electron main Sentry configuration", () => {
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "renderer_exception", "ao.code": "WINDOW_ERROR" },
 			exception: { values: [{ type: "Error", value }] },
 		});
-		const event = windowError("Uncaught Error: config at /Users/alice/repo failed for bob@example.test");
-		expect(event?.message).toBe("config at <path> failed for <email>");
-		expect(event?.tags?.message_hash).toBe(hashParts("config at <path> failed for <email>")[1]);
-		expect(event?.fingerprint).toEqual(["electron", "exception", "WINDOW_ERROR", "Error", "unknown", "renderer", ...hashParts("config at <path> failed for <email>")]);
-		expect(JSON.stringify(event)).not.toMatch(/alice|bob@/);
+		const prose = "Request failed: my private prompt contains the launch plan";
+		const event = windowError(prose);
+		expect(event?.message).toBe("Renderer Error in unknown (WINDOW_ERROR)");
+		expect(event?.tags?.message_hash).toBe(hashParts(prose.toLowerCase())[1]);
+		expect(JSON.stringify(event)).not.toMatch(/private prompt|launch plan/);
+		expect(windowError("a different failure")?.tags?.message_hash).not.toBe(event?.tags?.message_hash);
 	});
 
 	it("keeps a coded renderer error in one issue across builds", async () => {

@@ -1388,6 +1388,11 @@ type UpdateMetadataExecutor = {
   request(options: RequestOptions, token?: CancellationToken, data?: Record<string, unknown> | null): Promise<string | null>;
 };
 
+// True from the moment the running check hits its deadline until it settles.
+// electron-updater emits its own wrapped error for the cancelled request (for
+// example an unreadable-feed error) before the check rejects.
+let checkDeadlineHit = false;
+
 async function checkForUpdatesWithDeadline(): Promise<UpdateCheckOutcome> {
   const executor = (autoUpdater as typeof autoUpdater & { httpExecutor: UpdateMetadataExecutor }).httpExecutor;
   const request = executor.request;
@@ -1406,6 +1411,7 @@ async function checkForUpdatesWithDeadline(): Promise<UpdateCheckOutcome> {
   };
   const timer = setTimeout(() => {
     timedOut = true;
+    checkDeadlineHit = true;
     // Automatic checks suppress their own transient failures in the UI (see the
     // "error the user never asked for" note in the error handler). Surfacing the
     // timeout here would defeat that and strand a red error on the Settings panel
@@ -1427,6 +1433,7 @@ async function checkForUpdatesWithDeadline(): Promise<UpdateCheckOutcome> {
     throw timedOut ? new Error(UPDATE_CHECK_TIMEOUT_MESSAGE) : err;
   } finally {
     clearTimeout(timer);
+    checkDeadlineHit = false;
     executor.request = request;
   }
 }
@@ -1758,11 +1765,11 @@ function clearUnrecoverableRememberedBuild(): void {
 // failures, unrecognized errors) is reported under a fixed phase and kind.
 const UNREPORTED_UPDATE_KINDS = new Set(["timeout", "unreachable", "rate-limited", "not-found", "unavailable"]);
 
-// A check that hit AO's deadline: the cancelled metadata request (only the
-// deadline cancels those) and the rethrown deadline error. Both are a timeout.
+// A check that hit AO's deadline is a timeout: whatever electron-updater emits
+// for the cancelled request while it settles, and the deadline error rethrown after.
 function isUpdateCheckDeadline(err: unknown, phase: UpdateErrorPhase): boolean {
-  if (!(err instanceof Error)) return false;
-  return err.message === UPDATE_CHECK_TIMEOUT_MESSAGE || ((phase === "check" || phase === "return") && err.message === "cancelled");
+  if (checkDeadlineHit && phase !== "download") return true;
+  return err instanceof Error && err.message === UPDATE_CHECK_TIMEOUT_MESSAGE;
 }
 
 export function reportUpdateFailure(err: unknown, phase: UpdateErrorPhase, reason?: MainErrorReason): void {

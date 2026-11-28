@@ -185,6 +185,8 @@ function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 	return values.some((value) => typeof value === "string" && EXPECTED_NOISE.test(value));
 }
 
+// Plain Error text can carry free-form prose, so it never reaches Sentry; the
+// hash of its normalized text tells same-titled issues apart instead.
 function messageHash(identity: ReturnType<typeof sentryMessageIdentity>): string | undefined {
 	return identity.code || identity.hashInput === undefined ? undefined
 		: createHash("sha256").update(identity.hashInput).digest("hex").slice(0, 10);
@@ -250,7 +252,6 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		kind === "process_exit" ? undefined : event.exception?.values?.[0]?.value ?? event.message,
 		event.tags?.["ao.error_code"] ?? sentryErrorCode(originalException) ?? (renderer && !sourceLabel ? safeCode : undefined),
 		exceptionType,
-		renderer && sourceLabel,
 	);
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))

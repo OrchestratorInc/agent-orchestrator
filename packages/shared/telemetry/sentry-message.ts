@@ -44,15 +44,12 @@ function canDisplayEngineMessage(value: string): boolean {
 	return !UNQUOTED_ENGINE_VALUE.test(message);
 }
 
-// allowPlainError: a global window/rejection handler event whose type is the
-// generic Error. Its redacted text is the only thing telling failures apart.
-export function sentryMessageIdentity(value: unknown, errorCode?: unknown, exceptionType?: string, allowPlainError = false) {
+export function sentryMessageIdentity(value: unknown, errorCode?: unknown, exceptionType?: string) {
 	const { text, unsafe, channel, innerType } = normalizeSentryMessage(value);
 	const stableCode = safeSentryCode(errorCode);
 	const engineType = channel ? innerType : exceptionType;
-	const displayableType = ENGINE_TYPES.has(engineType ?? "") || (allowPlainError && !channel && engineType === "Error");
 	const canDisplay = !stableCode && !unsafe && !!text && typeof value === "string"
-		&& displayableType && canDisplayEngineMessage(value);
+		&& ENGINE_TYPES.has(engineType ?? "") && canDisplayEngineMessage(value);
 	return {
 		code: stableCode,
 		channel,
