@@ -1,6 +1,6 @@
 ---
 name: bug-triage
-description: Help clarify human bug reports, search for duplicates, and gather diagnostic evidence separately from a concise issue draft.
+description: Help clarify human bug reports, search for duplicates, and gather diagnostic evidence, including harness install, login, auth, and model diagnostics, separately from a concise issue draft.
 ---
 
 # Bug triage
