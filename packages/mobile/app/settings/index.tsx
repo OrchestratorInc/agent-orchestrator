@@ -26,6 +26,7 @@ import { activeHost, loadHosts, type Host as PairedHost } from "../../lib/hosts"
 import { checkStore, openOrStartUpdate } from "../../lib/inAppUpdates";
 import { MachineRow, machineStatusTone } from "../../lib/MachineRow";
 import { canRepairWithQr } from "../../lib/machineRecovery";
+import { machineRouteId } from "../../lib/machineRoute";
 import { openGitHub } from "../../lib/openGitHub";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../../lib/pushStatus";
@@ -214,7 +215,7 @@ export default function SettingsScreen() {
 							host={host}
 							status={connectionStatus(host.id)}
 							isDefault={machineCount > 1 && host.id === selectedHostId}
-							onPress={() => router.push({ pathname: "/settings/machine/[id]", params: { id: host.id } })}
+							onPress={() => router.push({ pathname: "/settings/machine/[id]", params: { id: machineRouteId(host.id) } })}
 						/>
 					))}
 					{/* Nothing behind them to open: a fake has no page. */}

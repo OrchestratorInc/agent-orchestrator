@@ -36,7 +36,7 @@ describe("Settings environment navigation", () => {
 		const settingsLayout = read("../app/settings/_layout.tsx");
 
 		expect(settings).toContain("<MachineRow");
-		expect(settings).toContain('router.push({ pathname: "/settings/machine/[id]", params: { id: host.id } })');
+		expect(settings).toContain('router.push({ pathname: "/settings/machine/[id]", params: { id: machineRouteId(host.id) } })');
 		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/index" options={{ title: "Machine" }} />');
 		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />');
 	});

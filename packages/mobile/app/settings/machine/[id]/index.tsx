@@ -8,6 +8,7 @@ import { environmentStatus, FORGET_MACHINE_MESSAGE } from "../../../../lib/envir
 import { haptics } from "../../../../lib/haptics";
 import { activeHost, loadHosts, type Host } from "../../../../lib/hosts";
 import { MachineDetail } from "../../../../lib/MachineDetail";
+import { hostIdFromMachineRoute, machineRouteId } from "../../../../lib/machineRoute";
 import { Spinner } from "../../../../lib/Spinner";
 import { useApp } from "../../../../lib/store";
 import { useTheme } from "../../../../lib/ThemeProvider";
@@ -23,7 +24,9 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../../lib/RouteErrorB
  * Settings only lists the machines; each row opens this page.
  */
 export default function MachineDetailScreen() {
-	const { id } = useLocalSearchParams<{ id: string }>();
+	const { id: segment } = useLocalSearchParams<{ id: string }>();
+	// A machine with no id yet is addressed by a stand-in (lib/machineRoute).
+	const id = hostIdFromMachineRoute(segment);
 	const router = useRouter();
 	const navigation = useNavigation();
 	const t = useTheme();
@@ -57,7 +60,7 @@ export default function MachineDetailScreen() {
 	}, [forgetting, navigation]);
 
 	const edit = useCallback(() => {
-		router.push({ pathname: "/settings/machine/[id]/edit", params: { id } });
+		if (id !== null) router.push({ pathname: "/settings/machine/[id]/edit", params: { id: machineRouteId(id) } });
 	}, [id, router]);
 
 	// Titled for the machine. Memoized on the name, so a fleet poll that

@@ -12,6 +12,9 @@ const fixtures = vi.hoisted(() => ({
 	reloadHostMetadata: vi.fn(async () => {}),
 	alert: vi.fn(),
 	back: vi.fn(),
+	replace: vi.fn(),
+	canGoBack: true,
+	routeId: "a",
 	setSheetOptions: vi.fn(),
 	setPageOptions: vi.fn(),
 	dispatch: vi.fn(),
@@ -32,11 +35,11 @@ vi.mock("./headerPill", async () => {
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	const router = { back: fixtures.back, canGoBack: () => true, replace: vi.fn() };
+	const router = { back: fixtures.back, canGoBack: () => fixtures.canGoBack, replace: fixtures.replace };
 	const navigation = { setOptions: fixtures.setPageOptions, getParent: () => ({ setOptions: fixtures.setSheetOptions }), dispatch: fixtures.dispatch };
 	return {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
-		useLocalSearchParams: () => ({ id: "a" }),
+		useLocalSearchParams: () => ({ id: fixtures.routeId }),
 		useNavigation: () => navigation,
 		useRouter: () => router,
 	};
@@ -101,8 +104,10 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.platform.OS = "ios";
-	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
+	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.replace, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
 	fixtures.findHost.mockResolvedValue(a);
+	fixtures.canGoBack = true;
+	fixtures.routeId = "a";
 	fixtures.activeHost.mockResolvedValue(a);
 	// Counted per test: a save that fails in one must not count in the next.
 	for (const fn of Object.values(fixtures.haptics)) fn.mockClear();
@@ -181,6 +186,21 @@ describe("editing a machine", () => {
 		act(() => fixtures.preventRemove.callback?.({ data: { action } }));
 		expect(fixtures.dispatch).toHaveBeenCalledWith(action);
 		expect(fixtures.alert).not.toHaveBeenCalled();
+	});
+
+	// Settings opens a machine with no id yet (carried over from the
+	// single-server config) at a stand-in address. Opened from a link, with no
+	// page under it, a save lands back on that machine's page.
+	it("edits a machine that has no id yet, and lands back on its page", async () => {
+		fixtures.routeId = "unidentified";
+		fixtures.canGoBack = false;
+		fixtures.findHost.mockResolvedValue({ ...a, id: "" });
+		await open();
+		expect(fixtures.findHost).toHaveBeenCalledWith("");
+		await type("environment-name-", "Travel Mac");
+		await act(async () => save().props.onPress());
+		expect(fixtures.save).toHaveBeenCalledWith({ ...a, id: "" }, expect.objectContaining({ machineName: "Travel Mac" }), "ios");
+		expect(fixtures.replace).toHaveBeenCalledWith("/settings/machine/unidentified");
 	});
 
 	it("reconnects the default machine over a changed route", async () => {

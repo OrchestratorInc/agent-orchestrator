@@ -14,6 +14,7 @@ const fixtures = vi.hoisted(() => ({
 	configForHost: vi.fn((_id: string): unknown => null),
 	ping: vi.fn(async (_config: unknown) => {}),
 	phoneOffline: false,
+	routeId: "a",
 	forget: vi.fn(),
 	alert: vi.fn(),
 	push: vi.fn(),
@@ -47,7 +48,7 @@ vi.mock("expo-router", async () => {
 			Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }),
 		},
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
-		useLocalSearchParams: () => ({ id: "a" }),
+		useLocalSearchParams: () => ({ id: fixtures.routeId }),
 		useNavigation: () => navigation,
 		useRouter: () => router,
 	};
@@ -122,6 +123,7 @@ beforeEach(() => {
 	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.refresh, fixtures.refreshHost, fixtures.configForHost, fixtures.ping, fixtures.forget, fixtures.alert, fixtures.push, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.copy, ...Object.values(fixtures.haptics)]) mock.mockReset();
 	fixtures.focused.current = true;
 	fixtures.phoneOffline = false;
+	fixtures.routeId = "a";
 	fixtures.platform.Version = 34;
 	fixtures.loadHosts.mockResolvedValue([a, b]);
 	fixtures.activeHost.mockResolvedValue(b);
@@ -295,6 +297,17 @@ describe("a machine's page on iOS", () => {
 		expect(fixtures.alert).toHaveBeenLastCalledWith("Couldn't forget machine", "This machine's saved connection couldn't be removed. Try again.");
 		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(takeEnvironmentNotice()).toBeUndefined();
+	});
+
+	// Settings opens a machine with no id yet (carried over from the
+	// single-server config) at a stand-in address; its editor opens there too.
+	it("opens a machine that has no id yet, and edits it at the same address", async () => {
+		fixtures.routeId = "unidentified";
+		fixtures.loadHosts.mockResolvedValue([{ ...a, id: "" }, b]);
+		await open();
+		expect(renderer!.root.findByType("StackScreen" as never).props.options).toEqual({ title: "Studio Mac" });
+		act(() => renderer!.root.findByType("StackToolbarButton" as never).props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]/edit", params: { id: "unidentified" } });
 	});
 
 	it("says so when the machine is no longer paired", async () => {
