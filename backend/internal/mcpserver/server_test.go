@@ -1,14 +1,17 @@
 package mcpserver
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type mcpReply struct {
@@ -33,21 +36,62 @@ type mcpReply struct {
 	Error *mcpError `json:"error"`
 }
 
-// runMCP feeds lines to the server and returns its replies.
+type mcpError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+const mcpInitialize = `{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test"}}}`
+
+// runMCP initializes a session the way a harness does, then sends each line
+// and waits for its reply before sending the next. Notifications from the
+// server (no id) are skipped.
 func runMCP(t *testing.T, lines ...string) []mcpReply {
 	t.Helper()
-	var stdout bytes.Buffer
-	in := strings.NewReader(strings.Join(lines, "\n") + "\n")
-	if err := Serve(context.Background(), in, &stdout, NewDaemonClient(), "test"); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
+	return serveMCPLines(t, append([]string{mcpInitialize, `{"jsonrpc":"2.0","method":"notifications/initialized"}`}, lines...))[1:]
+}
+
+// serveMCPLines runs Serve over pipes and returns one reply per line that
+// carries an id, in order.
+func serveMCPLines(t *testing.T, lines []string) []mcpReply {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(context.Background(), inR, outW, NewDaemonClient(), "test")
+		_ = outW.Close()
+	}()
+	scanner := bufio.NewScanner(outR)
+	scanner.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	var replies []mcpReply
-	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-		var reply mcpReply
-		if err := json.Unmarshal([]byte(line), &reply); err != nil {
-			t.Fatalf("reply %q: %v", line, err)
+	for _, line := range lines {
+		if _, err := io.WriteString(inW, line+"\n"); err != nil {
+			t.Fatalf("write %q: %v", line, err)
 		}
-		replies = append(replies, reply)
+		var probe map[string]json.RawMessage
+		if json.Unmarshal([]byte(line), &probe) == nil && probe["id"] == nil && probe["method"] != nil {
+			continue // a notification gets no reply
+		}
+		for {
+			if !scanner.Scan() {
+				t.Fatalf("no reply to %q: %v", line, scanner.Err())
+			}
+			var reply mcpReply
+			if err := json.Unmarshal(scanner.Bytes(), &reply); err != nil {
+				t.Fatalf("reply %q: %v", scanner.Text(), err)
+			}
+			if reply.ID == nil {
+				continue // a server notification, such as tools/list_changed
+			}
+			replies = append(replies, reply)
+			break
+		}
+	}
+	_ = inW.Close()
+	go func() { _, _ = io.Copy(io.Discard, outR) }()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
 	}
 	return replies
 }
@@ -58,23 +102,33 @@ func mcpCall(tool string, args map[string]any) string {
 }
 
 func TestMCPInitializeNegotiatesTheProtocolVersion(t *testing.T) {
+	// An unknown version gets one the SDK supports; "" accepts any of them.
 	for client, want := range map[string]string{
+		"2025-11-25": "2025-11-25",
 		"2025-06-18": "2025-06-18",
 		"2025-03-26": "2025-03-26",
 		"2024-11-05": "2024-11-05",
-		"2099-01-01": "2025-06-18",
+		"2099-01-01": "",
 	} {
-		replies := runMCP(t,
-			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+client+`","capabilities":{},"clientInfo":{"name":"codex"}}}`,
+		replies := serveMCPLines(t, []string{
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + client + `","capabilities":{},"clientInfo":{"name":"codex"}}}`,
 			`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-			`{"jsonrpc":"2.0","id":2,"method":"ping"}`)
+			`{"jsonrpc":"2.0","id":2,"method":"ping"}`,
+		})
 		// The notification gets no reply.
 		if len(replies) != 2 || string(replies[0].ID) != "1" || string(replies[1].ID) != "2" || replies[1].Error != nil {
 			t.Fatalf("client %s: replies = %+v", client, replies)
 		}
 		got := replies[0].Result
+		if want == "" && slices.Contains(mcp.SupportedProtocolVersions(), got.ProtocolVersion) {
+			want = got.ProtocolVersion
+		}
 		if got.ProtocolVersion != want || got.ServerInfo.Name != "ao" || got.Capabilities["tools"] == nil {
 			t.Fatalf("client %s: initialize = %+v", client, got)
+		}
+		// Only tools: no logging, prompts, or resources.
+		if len(got.Capabilities) != 1 {
+			t.Fatalf("client %s: capabilities = %v, want only tools", client, got.Capabilities)
 		}
 	}
 }
@@ -250,20 +304,25 @@ func TestMCPToolFailuresAreToolResults(t *testing.T) {
 
 func TestMCPProtocolErrors(t *testing.T) {
 	replies := runMCP(t,
-		`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`,
-		`{"jsonrpc":"2.0","id":2,"method":`,
-		mcpCall("rm_rf", nil),
-		`[1]`,
-		`{"jsonrpc":"2.0","id":3,"method":5}`)
-	if len(replies) != 5 {
-		t.Fatalf("replies = %+v", replies)
-	}
+		`{"jsonrpc":"2.0","id":1,"method":"rm/rf"}`,
+		mcpCall("rm_rf", nil))
 	for i, want := range []struct {
 		id   string
 		code int
-	}{{"1", -32601}, {"null", -32700}, {"7", -32602}, {"null", -32600}, {"3", -32600}} {
+	}{{"1", -32601}, {"7", -32602}} {
 		if got := replies[i]; string(got.ID) != want.id || got.Error == nil || got.Error.Code != want.code {
 			t.Errorf("reply %d = id %s error %+v, want id %s code %d", i, got.ID, got.Error, want.id, want.code)
+		}
+	}
+}
+
+// A frame that is not a JSON-RPC message ends the session with an error, as
+// the MCP SDK does for every stdio server; the harness restarts it.
+func TestMCPMalformedFrameEndsTheSession(t *testing.T) {
+	for _, frame := range []string{`{"jsonrpc":"2.0","id":2,"method":`, `[1]`, `{"jsonrpc":"2.0","id":3,"method":5}`} {
+		in := strings.NewReader(mcpInitialize + "\n" + frame + "\n")
+		if err := Serve(context.Background(), in, io.Discard, NewDaemonClient(), "test"); err == nil {
+			t.Errorf("Serve(%s) = nil, want an error", frame)
 		}
 	}
 }

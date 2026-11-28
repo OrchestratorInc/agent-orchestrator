@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -52,11 +54,13 @@ func TestMCPOffersComputerUseToolsWhenTheSessionHasIt(t *testing.T) {
 	for _, tool := range listed {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, " ") != "html_preview html_render get_window_state click" {
+	// The SDK lists tools sorted by name.
+	if strings.Join(names, " ") != "click get_window_state html_preview html_render" {
 		t.Fatalf("tools = %v", names)
 	}
-	if listed[2].InputSchema.Required[0] != "pid" || listed[2].Annotations["readOnlyHint"] != true || listed[3].Annotations["destructiveHint"] != true {
-		t.Fatalf("get_window_state = %+v, click = %+v", listed[2], listed[3])
+	click, window := listed[0], listed[1]
+	if window.InputSchema.Required[0] != "pid" || window.Annotations["readOnlyHint"] != true || click.Annotations["destructiveHint"] != true {
+		t.Fatalf("get_window_state = %+v, click = %+v", window, click)
 	}
 }
 
@@ -136,5 +140,56 @@ func TestMCPComputerUseFailureIsAToolResult(t *testing.T) {
 	}
 	if bad := runMCP(t, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"click","arguments":[1]}}`)[0]; !bad.Result.IsError {
 		t.Fatalf("non-object arguments = %+v", bad.Result)
+	}
+}
+
+func TestCuaInputSchemaAlwaysHasAnObjectRoot(t *testing.T) {
+	properties := map[string]any{"pid": map[string]any{"type": "integer"}}
+	for name, tc := range map[string]struct {
+		in, want map[string]any
+	}{
+		"missing":      {nil, map[string]any{"type": "object"}},
+		"object":       {map[string]any{"type": "object", "properties": properties}, map[string]any{"type": "object", "properties": properties}},
+		"no root type": {map[string]any{"properties": properties, "required": []any{"pid"}}, map[string]any{"type": "object", "properties": properties, "required": []any{"pid"}}},
+		"non-object":   {map[string]any{"type": "array"}, map[string]any{"type": "object"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := cuaInputSchema(tc.in); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("cuaInputSchema(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// An HTML tool call never waits on computer-use discovery, which can stall
+// while the render routes are healthy.
+func TestMCPHTMLCallsSkipComputerUseDiscovery(t *testing.T) {
+	t.Setenv(config.EnvComputerUse, "1")
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	var discoveries atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/computer-use/agent-tools":
+			discoveries.Add(1)
+			_, _ = io.WriteString(w, cuaToolsBody)
+		case "/api/v1/sessions/aa-47/renders":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"renderId":"r1"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	reply := runMCP(t, mcpCall("html_render", map[string]any{"html": "<p>x</p>", "title": "Turns"}))[0]
+	if reply.Result.IsError || discoveries.Load() != 0 {
+		t.Fatalf("result = %+v, discoveries = %d; want a render without discovery", reply.Result, discoveries.Load())
+	}
+	runMCP(t, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if discoveries.Load() != 1 {
+		t.Fatalf("discoveries after tools/list = %d, want 1", discoveries.Load())
 	}
 }
