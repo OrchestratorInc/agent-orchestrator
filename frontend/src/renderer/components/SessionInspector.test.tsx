@@ -6157,11 +6157,11 @@ describe("SessionInspector Cloud reviews", () => {
     if (shared) {
       await waitFor(() => expect(screen.queryByText("Loading reviews...")).not.toBeInTheDocument());
       expect(screen.queryByRole("switch", { name: "Auto-review" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("combobox", { name: "Select reviewer agent" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Select reviewer agent/ })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Review now" })).not.toBeInTheDocument();
     } else {
       expect(await screen.findByRole("switch", { name: "Auto-review" })).toBeInTheDocument();
-      expect(screen.getByRole("combobox", { name: "Select reviewer agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Select reviewer agent/ })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Review now" })).toBeInTheDocument();
     }
     expect(cloudCpMock.triggerSessionReviews).not.toHaveBeenCalled();
@@ -6234,6 +6234,30 @@ describe("SessionInspector Cloud reviews", () => {
     ).not.toBeInTheDocument();
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
+  it("shows the worker's own cloud reviewer as ready when no credentials are listed", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({
+      sessionId: "sess-1",
+      pullRequests: [{ url: "https://github.com/acme/repo/pull/7", number: 7, state: "open", updatedAt: "2026-06-15T00:00:00Z" }],
+    });
+    cloudCpMock.getSessionReviewState.mockResolvedValue({
+      sessionId: "sess-1",
+      reviewerHarness: "claude-code",
+      availableReviewerHarnesses: [],
+      reviews: [{ pullRequestUrl: "https://github.com/acme/repo/pull/7", pullRequestNumber: 7, title: "PR 7", targetSha: "head-7", status: "needs_review" }],
+      runs: [],
+    });
+
+    renderWithQuery(<SessionInspector session={session([], { cloud: { orgId: "org-1" } })} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    // The picker agrees with the review gate: the worker's agent runs, so it needs no setup.
+    const picker = await screen.findByRole("button", { name: /Select reviewer agent/ });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review now" })).toBeEnabled());
+    expect(picker).not.toHaveTextContent("Needs setup");
+    await userEvent.click(picker);
+    expect(await screen.findByRole("menuitemradio", { name: /^Claude Code/ })).not.toHaveTextContent("Needs setup");
+    expect(screen.getByRole("menuitemradio", { name: /^Codex/ })).toHaveTextContent("Needs setup");
+  });
   it("installs a missing cloud reviewer harness before selecting it", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({
       sessionId: "sess-1",
@@ -6275,14 +6299,21 @@ describe("SessionInspector Cloud reviews", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
     await userEvent.click(
-      await screen.findByRole("combobox", { name: /Select reviewer agent/ }),
+      await screen.findByRole("button", { name: /Select reviewer agent/ }),
     );
+    // Each agent says what it still needs: a credential, or its binary on the runtime.
+    expect(await screen.findByRole("menuitemradio", { name: /^Codex/ })).toHaveTextContent("Needs setup");
+    expect(screen.getByRole("menuitemradio", { name: /^Cursor/ })).toHaveTextContent("Not installed");
     await userEvent.click(
-      await screen.findByRole("option", {
-        name: /^Cursor$/i,
+      await screen.findByRole("menuitemradio", {
+        name: /^Cursor/,
       }),
     );
 
+    // The pill's accessible name carries the agent and its status, not only the label.
+    expect(screen.getByRole("button", { name: /Select reviewer agent/ })).toHaveAccessibleName(
+      "Select reviewer agent: Cursor, Not installed",
+    );
     const install = await screen.findByRole("button", { name: "Install" });
     expect(cloudCpMock.updateSessionPreferences).not.toHaveBeenCalled();
     await userEvent.click(install);

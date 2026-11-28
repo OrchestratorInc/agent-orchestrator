@@ -109,11 +109,10 @@ import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
-import { ReviewerPicker, type ReviewerModelConfig } from "./ReviewerPicker";
+import { CloudReviewerPicker, ReviewerPicker, type ReviewerModelConfig } from "./ReviewerPicker";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { Switch } from "./ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { appI18n } from "../i18n";
@@ -2763,31 +2762,19 @@ function ReviewPanel({
 				{readOnly ? null : (
 					<>
 						{cloud ? (
+							// The same pill as a local session's; Cloud picks only the agent.
 							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-								<span className="min-w-0 text-sm text-settings-label">{t("inspector.agent")}</span>
+								<span className="shrink-0 text-sm text-settings-label">{t("inspector.agent")}</span>
 								<div className="flex min-w-0 items-center justify-end gap-1.5">
-									<Select
-										disabled={reviewRunning || isTriggering || isCancelling || isInstallingCloudHarness}
-										onValueChange={(harness) => onCloudReviewerHarnessChange?.(harness)}
+									<CloudReviewerPicker
+										ariaLabel={t("inspector.selectReviewerAgent")}
+										credentialHarnesses={cloudReviewerHarnesses}
+										workerHarness={session.provider}
+										disabled={reviewerControlsLocked || isInstallingCloudHarness}
+										harnessStatuses={cloudHarnessStatuses}
+										onAgentChange={(harness) => onCloudReviewerHarnessChange?.(harness)}
 										value={cloudReviewerHarness}
-									>
-										<SelectTrigger
-											aria-label={t("inspector.selectReviewerAgent")}
-											data-field="compact"
-											className="h-control-md max-w-[11rem] text-xs"
-											size="sm"
-										>
-											<SelectValue placeholder={t("inspector.selectReviewerAgent")} />
-										</SelectTrigger>
-										<SelectContent align="end">
-											{["claude-code", "codex", "cursor"].map((harness) => (
-												<SelectItem key={harness} value={harness}>
-													{agentLabel(harness)}
-													{cloudReviewerHarnesses.includes(harness) ? "" : " · Connect credential"}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
+									/>
 									{cloudHarnessStatuses.some(
 										(entry) => entry.harness === cloudReviewerHarness && entry.status !== "ready",
 									) ? (
@@ -2798,7 +2785,7 @@ function ReviewPanel({
 											type="button"
 											variant="secondary"
 										>
-											{isInstallingCloudHarness ? "Installing…" : "Install"}
+											{isInstallingCloudHarness ? t("settings.harness.installing") : t("settings.harness.install")}
 										</Button>
 									) : null}
 								</div>

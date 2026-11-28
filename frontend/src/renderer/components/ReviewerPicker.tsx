@@ -280,6 +280,91 @@ export function ReviewerPicker({
 	);
 }
 
+/** The reviewer agents AO Cloud can run. */
+const CLOUD_REVIEWER_HARNESSES = ["claude-code", "codex", "cursor"];
+
+/**
+ * A Cloud session's reviewer in the same pill and menu as ReviewerPicker. The
+ * control plane only takes the reviewer agent, so the menu lists the agents
+ * (with what each still needs) and has no Model or Effort rows.
+ */
+export function CloudReviewerPicker({
+	value,
+	credentialHarnesses,
+	workerHarness = "",
+	harnessStatuses,
+	disabled = false,
+	ariaLabel,
+	onAgentChange,
+}: {
+	value: string;
+	/** Agents with a credential connected for the session owner. */
+	credentialHarnesses: string[];
+	/**
+	 * The worker's own agent. With no credentials listed the review gate still
+	 * runs it, so it does not show as needing setup either.
+	 */
+	workerHarness?: string;
+	/** The session runtime's report of each agent binary; empty until it answers. */
+	harnessStatuses: Array<{ harness: string; status: string }>;
+	disabled?: boolean;
+	ariaLabel: string;
+	onAgentChange: (harness: string) => void;
+}) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	useEffect(() => {
+		if (disabled) setOpen(false);
+	}, [disabled]);
+	const statusFor = (harness: string) => {
+		const credentialed = credentialHarnesses.includes(harness) ||
+			(credentialHarnesses.length === 0 && harness === workerHarness);
+		if (!credentialed) return t("agentSelector.needsSetup");
+		const installed = harnessStatuses.find((entry) => entry.harness === harness);
+		return installed && installed.status !== "ready" ? t("agentSwitch.notInstalled") : "";
+	};
+	const status = value ? statusFor(value) : "";
+	// aria-label replaces the pill's text, so it carries the agent and status too.
+	const accessibleName = value ? [`${ariaLabel}: ${agentLabel(value)}`, status].filter(Boolean).join(", ") : ariaLabel;
+
+	return (
+		<OptionMenu open={open} onOpenChange={(next) => setOpen(next && !disabled)} modal={false}>
+			<OptionMenuTrigger
+				variant="ghost"
+				disabled={disabled}
+				aria-label={accessibleName}
+				title={accessibleName}
+				className={cn(CHAT_PICKER_TRIGGER_CLASS, "ml-auto min-w-0 max-w-full")}
+				showCaret={false}
+			>
+				{value ? <ProviderMark provider={value} className="size-3.5" /> : null}
+				<span className="min-w-0 max-w-[28ch] truncate">{value ? agentLabel(value) : ariaLabel}</span>
+				{status ? <span className="shrink-0 text-muted-foreground">{status}</span> : null}
+			</OptionMenuTrigger>
+			<OptionMenuContent align="end" steady className="chat-settings-menu w-64 text-[12px]!">
+				{CLOUD_REVIEWER_HARNESSES.map((harness) => {
+					const itemStatus = statusFor(harness);
+					return (
+						<OptionMenuItem
+							key={harness}
+							active={harness === value}
+							radio
+							onSelect={() => {
+								if (!disabled && harness !== value) onAgentChange(harness);
+							}}
+							className="text-xs text-foreground"
+						>
+							<ProviderMark provider={harness} className="mr-2 size-3.5" />
+							<span className="min-w-0 truncate">{agentLabel(harness)}</span>
+							{itemStatus ? <span className="ml-auto shrink-0 pl-3 text-muted-foreground">{itemStatus}</span> : null}
+						</OptionMenuItem>
+					);
+				})}
+			</OptionMenuContent>
+		</OptionMenu>
+	);
+}
+
 function defaultModelID(catalog: AgentModelCatalog | undefined): string {
 	return catalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id ?? "";
 }
