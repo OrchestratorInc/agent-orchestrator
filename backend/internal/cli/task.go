@@ -165,7 +165,9 @@ func newTaskStartCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if opts.wait && (res.Status == taskStatusStarting || res.Status == taskStatusQueued || res.Status == taskStatusRunning) {
+			// A result already settled as "submitted, not confirmed" (exit 4)
+			// carries its own instructions; a wait would replace them.
+			if opts.wait && !res.waitTimedOut && (res.Status == taskStatusStarting || res.Status == taskStatusQueued || res.Status == taskStatusRunning) {
 				res = ctx.waitTask(runCtx, res, opts.timeout)
 			}
 			return writeTaskResult(cmd, res, opts.json)
@@ -488,6 +490,13 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 			return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: sessions, waitTimedOut: true,
 				Reason: fmt.Sprintf("the brief was typed into orchestrator %s's terminal, but the agent did not submit it (%s); it was delivered, so do not start the task again", orchestratorID, err.Error()),
 				Fix:    fix}
+		}
+		if err != nil && !errors.As(err, &apiErr) {
+			// The daemon may have taken the brief before the reply was lost, and
+			// this send has no client id to retry it with safely.
+			return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: sessions, waitTimedOut: true,
+				Reason: fmt.Sprintf("could not confirm that orchestrator %s received the task: %s; it may have, so do not start it again", orchestratorID, err.Error()),
+				Fix:    fmt.Sprintf("check `ao session history %s` (or follow it with `ao task wait %s`) before starting the task again", orchestratorID, id)}
 		}
 		if err != nil {
 			return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", err)

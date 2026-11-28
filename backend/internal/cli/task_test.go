@@ -877,6 +877,47 @@ func TestTaskStartTerminalDeliveryUnconfirmedPointsAtTheTerminal(t *testing.T) {
 		!strings.Contains(res["fix"].(string), "submit the brief waiting in its terminal") || !strings.Contains(res["fix"].(string), "run `claude auth login` first") {
 		t.Fatalf("result = %v", res)
 	}
+
+	// With --wait the same instructions come back at once: a wait would only
+	// replace them, and waiting does not submit the brief.
+	out, _, err = executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--wait", "--json")
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("--wait: exit = %d (%v), want 4", got, err)
+	}
+	if res := decodeTaskResult(t, out); !strings.Contains(res["fix"].(string), "submit the brief waiting in its terminal") {
+		t.Fatalf("--wait: result = %v", res)
+	}
+}
+
+// A lost reply on the terminal /send keeps the timestamped task id and says
+// not to resend: the brief may have been delivered.
+func TestTaskStartTerminalSendLostReplyKeepsTheTaskID(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-1","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"idle"}}}`)
+	d.set("POST /api/v1/sessions/repo-1/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
+	var sendMu sync.Mutex
+	sends := 0
+	d.setFunc("POST /api/v1/sessions/repo-1/send", func() (int, string) {
+		sendMu.Lock()
+		sends++
+		sendMu.Unlock()
+		return -1, "" // reply lost
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--wait", "--json")
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if !strings.HasPrefix(res["taskId"].(string), "repo-1:tui-") || !strings.Contains(res["reason"].(string), "do not start it again") || !strings.Contains(res["fix"].(string), "ao session history repo-1") {
+		t.Fatalf("result = %v", res)
+	}
+	sendMu.Lock()
+	defer sendMu.Unlock()
+	if sends != 1 {
+		t.Fatalf("terminal send attempted %d times; it has no client id, so it must not be retried", sends)
+	}
 }
 
 // A terminal orchestrator that was just started gets its boot time before the
