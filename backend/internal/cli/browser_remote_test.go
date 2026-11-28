@@ -204,6 +204,197 @@ func TestBrowserRemoteAcceptsBase64PayloadsPast64MiB(t *testing.T) {
 	}
 }
 
+// TestBrowserRemoteRejectsNonLoopbackURL keeps the bearer token on this
+// machine: the CLI applies the daemon's loopback-only rule to the URL.
+func TestBrowserRemoteRejectsNonLoopbackURL(t *testing.T) {
+	t.Setenv(envAgentBrowserToken, "remote-token")
+	for _, raw := range []string{"https://browser.example.com", "http://10.0.0.5:9222", "http://user:pw@127.0.0.1:9"} {
+		t.Setenv(envAgentBrowserURL, raw)
+		cfg, _, err := remoteBrowserForward(os.Getenv, []string{"browser", "get", "url"})
+		if err == nil || cfg != nil {
+			t.Fatalf("%s: cfg=%v err=%v, want loopback rejection", raw, cfg, err)
+		}
+	}
+}
+
+// TestBrowserRemoteUploadsOnlyForUploadCommand: a path typed into a page is
+// text, never a file to send, even when it is absolute and exists.
+func TestBrowserRemoteUploadsOnlyForUploadCommand(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(secret, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capture := &remoteBrowserCapture{}
+	srv := remoteBrowserServer(t, capture, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":"ok"}`))
+	})
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+
+	if _, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "fill", "@e1", secret); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.body.Files) != 0 {
+		t.Fatalf("fill uploaded files: %v", capture.body.Files)
+	}
+
+	if _, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "upload", "@e2", secret); err != nil {
+		t.Fatal(err)
+	}
+	if got := capture.body.Files[secret]; got != base64.StdEncoding.EncodeToString([]byte("private")) {
+		t.Fatalf("upload files = %v", capture.body.Files)
+	}
+}
+
+// TestBrowserRemoteConfinesUnnamedReturnedFiles: the service chooses the
+// paths it returns, so a path the command did not name lands under the AO
+// state dir by base name instead of anywhere on disk.
+func TestBrowserRemoteConfinesUnnamedReturnedFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	target := filepath.Join(t.TempDir(), ".bashrc")
+	srv := remoteBrowserServer(t, &remoteBrowserCapture{}, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(remoteBrowserResponse{Files: map[string]string{target: "aGVsbG8="}})
+	})
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+
+	_, errOut, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "screenshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("unnamed path was written: %v", statErr)
+	}
+	confined := filepath.Join(dataDir, "browser-files", ".bashrc")
+	if data, readErr := os.ReadFile(confined); readErr != nil || string(data) != "hello" {
+		t.Fatalf("confined file = %q err=%v", data, readErr)
+	}
+	if !strings.Contains(errOut, confined) {
+		t.Fatalf("stderr should say where the file went: %q", errOut)
+	}
+}
+
+func TestBrowserRemoteFindsUploadAfterGlobalFlags(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "in.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		upload bool
+	}{
+		{"no flags", []string{"upload", "@e1", file}, true},
+		{"value flag", []string{"--session", "work", "upload", "@e1", file}, true},
+		{"value flag with equals", []string{"--session=work", "upload", "@e1", file}, true},
+		{"bool flag", []string{"--json", "upload", "@e1", file}, true},
+		{"other command", []string{"fill", "@e1", file}, false},
+		{"other command after value flag", []string{"--session", "work", "fill", "@e1", file}, false},
+		{"upload as text", []string{"fill", "upload", file}, false},
+		{"upload as session value", []string{"--session", "upload", "fill", "@e1", file}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := remoteBrowserUploadArgs(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := files[file] != ""; got != tc.upload {
+				t.Fatalf("uploaded=%v, want %v (files=%v)", got, tc.upload, files)
+			}
+		})
+	}
+}
+
+func TestBrowserRemoteKeepsReturnedFilesWithSameBaseName(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	var errOut bytes.Buffer
+	files := map[string]string{
+		"/job-a/page.png": base64.StdEncoding.EncodeToString([]byte("a")),
+		"/job-b/page.png": base64.StdEncoding.EncodeToString([]byte("b")),
+	}
+	if err := writeRemoteBrowserFiles(&errOut, []string{"screenshot"}, files); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(dataDir, "browser-files")
+	for name, want := range map[string]string{"page.png": "a", "page-2.png": "b"} {
+		if data, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(data) != want {
+			t.Fatalf("%s = %q err=%v, want %q", name, data, err, want)
+		}
+	}
+}
+
+func TestBrowserRemoteKeepsNamedFileWhenRelocatedNameCollides(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	dir := filepath.Join(dataDir, "browser-files")
+	named := filepath.Join(dir, "page.png")
+	var errOut bytes.Buffer
+	files := map[string]string{
+		// Sorts before the named path, so it is relocated first.
+		"/job-a/page.png": base64.StdEncoding.EncodeToString([]byte("relocated")),
+		named:             base64.StdEncoding.EncodeToString([]byte("named")),
+	}
+	if err := writeRemoteBrowserFiles(&errOut, []string{"screenshot", named}, files); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{named: "named", filepath.Join(dir, "page-2.png"): "relocated"} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("%s = %q err=%v, want %q", path, data, err, want)
+		}
+	}
+}
+
+func TestBrowserRemoteDoesNotTreatCommandOrFlagValueAsNamedPath(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	t.Chdir(t.TempDir())
+	var errOut bytes.Buffer
+	files := map[string]string{
+		"screenshot": base64.StdEncoding.EncodeToString([]byte("cmd")),
+		"work":       base64.StdEncoding.EncodeToString([]byte("flag")),
+	}
+	if err := writeRemoteBrowserFiles(&errOut, []string{"--session", "work", "screenshot"}, files); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"screenshot", "work"} {
+		if _, err := os.Stat(name); !os.IsNotExist(err) {
+			t.Fatalf("%s written to the working directory (err=%v)", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(dataDir, "browser-files", name)); err != nil {
+			t.Fatalf("%s not confined: %v", name, err)
+		}
+	}
+}
+
+func TestBrowserRemoteRefusesRedirectOffMachine(t *testing.T) {
+	var offMachineHit bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offMachineHit = true
+	}))
+	t.Cleanup(elsewhere.Close)
+	// httptest binds loopback, so rewrite the host to a non-loopback name
+	// that resolves nowhere: the policy must refuse before dialing it.
+	target := strings.Replace(elsewhere.URL, "127.0.0.1", "browser.example.invalid", 1)
+	srv := remoteBrowserServer(t, &remoteBrowserCapture{}, func(w http.ResponseWriter) {
+		w.Header().Set("Location", target+"/agent")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	})
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+
+	_, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "get", "url")
+	if err == nil || !strings.Contains(err.Error(), "redirected off this machine") {
+		t.Fatalf("err = %v, want redirect refusal", err)
+	}
+	if offMachineHit {
+		t.Fatal("request reached the redirect target")
+	}
+}
+
 // TestBrowserRemoteGoesThroughTheDaemonGate covers the session environment a
 // self-hosted host now gives agents: the service URL without its token. Every
 // command goes to the agent's own daemon, which runs the approval gate.

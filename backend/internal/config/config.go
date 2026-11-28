@@ -555,7 +555,7 @@ func Load() (Config, error) {
 	sessionProcess := strings.TrimSpace(os.Getenv("AO_BROWSER_CAPABILITY")) != "" &&
 		strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_TOKEN")) == ""
 	if raw := strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_URL")); raw != "" && !sessionProcess {
-		u, err := parseAgentBrowserURL(raw)
+		u, err := ParseAgentBrowserURL(raw)
 		if err != nil {
 			return Config{}, err
 		}
@@ -691,9 +691,9 @@ func parseCloudControlPlaneURL(raw string) (string, error) {
 	return trimmed, nil
 }
 
-// parseAgentBrowserURL accepts only a loopback http URL: the daemon proxies
+// ParseAgentBrowserURL accepts only a loopback http URL: the daemon proxies
 // to it with clients' requests, so it must never reach another machine.
-func parseAgentBrowserURL(raw string) (string, error) {
+func ParseAgentBrowserURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: %w", raw, err)
