@@ -24,6 +24,7 @@ import type { components } from "../../api/schema";
 import { isFileViewCapture } from "../../shared/chat-file-reference";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
+import { MoveBanner } from "./MoveBanner";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
 import { agentLabel } from "../lib/agent-options";
@@ -2935,7 +2936,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// row. Keep the session surface (and its switch control) mounted while the
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
-	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
+	// A session that just moved here is missing from the list read before it arrived; wait for the first read after that.
+	const remoteListSettled = !remoteSessionQuery.isFetching || remoteSessionQuery.isFetchedAfterMount;
+	if (!session && (hostId ? !remoteSessionQuery.isLoading && remoteListSettled : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: hostUnreachable
@@ -2964,7 +2967,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const view = (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
 			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
-			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+			{/* An unfinished move is explained, with its actions, in the terminal strip. */}
+			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError &&
+				apiErrorCode(autoResume.error) !== "TRANSFER_PENDING" ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
 				</p>
@@ -2996,6 +3001,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
+						{session ? <MoveBanner session={session} /> : null}
 						{!session?.cloud && !chatShowsApprovals ? <SessionApprovalDock sessionId={sessionId} hostId={hostId} /> : null}
 						<div
 							className="relative min-h-0 flex-1"

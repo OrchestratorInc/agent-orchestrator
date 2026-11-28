@@ -435,6 +435,34 @@ type Workspace interface {
 	AddExclude(ctx context.Context, info WorkspaceInfo, patterns ...string) error
 }
 
+// WorkspaceTransfer moves a session's git state between machines in a git bundle.
+type WorkspaceTransfer interface {
+	// CheckTransfer refuses a worktree whose work BundleTransfer cannot carry.
+	CheckTransfer(ctx context.Context, info WorkspaceInfo) error
+	// BundleTransfer writes to bundlePath what origin may not have of the
+	// worktree's work: unpushed commits and, at remotePreservedRef, the
+	// uncommitted work with what is staged beside it. It returns the branch
+	// head, and whether there was uncommitted work and a bundle.
+	BundleTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef, bundlePath string) (head string, uncommitted, bundled bool, err error)
+	// FetchTransfer brings a moved head, and at remotePreservedRef its
+	// uncommitted work, into the repository from bundlePath, fetching origin
+	// for commits the bundle builds on or the head when there is no bundle.
+	FetchTransfer(ctx context.Context, repoPath, branch, head, bundlePath, remotePreservedRef string) error
+	// AlignTransferBranch points the local branch at head when it is missing,
+	// behind, or still where ReleaseTransferBranch left it, and returns
+	// ErrTransferBranchDiverged when it holds other commits head lacks.
+	AlignTransferBranch(ctx context.Context, repoPath, branch, head string) error
+	// RevParse resolves a ref in the repository.
+	RevParse(ctx context.Context, repoPath, ref string) (string, error)
+	// ReleaseTransferBranch records the commit a moved session's branch is at
+	// and detaches HEAD in its worktree, if still there, so the branch can be
+	// checked out again. Files and index are kept.
+	ReleaseTransferBranch(ctx context.Context, info WorkspaceInfo) error
+	// RestoreTransferIndex puts the index back as it was on the source after
+	// ApplyPreserved, which leaves everything staged.
+	RestoreTransferIndex(ctx context.Context, info WorkspaceInfo, remotePreservedRef string) error
+}
+
 // WorkspaceDefaultBranchRefresher is an optional capability for Git-backed
 // workspaces. Resolution names the canonical ref even when the subsequent
 // best-effort network refresh fails. An automatic default asks the remote for
@@ -583,6 +611,25 @@ var (
 	// conflict markers for manual resolution. Adapters wrap this sentinel via
 	// fmt.Errorf so callers can match it with errors.Is.
 	ErrPreservedConflict = errors.New("workspace: preserved apply produced conflicts")
+	// ErrTransferBranchDiverged is returned when this machine already has the
+	// moved session's branch and it does not lead to the moved head.
+	ErrTransferBranchDiverged = errors.New("workspace: local branch has commits the moved session does not")
+	// ErrTransferGitBusy is returned when a moved session's worktree is in the
+	// middle of a merge, rebase or similar, or has unresolved conflicts.
+	ErrTransferGitBusy = errors.New("workspace: a git operation is unfinished")
+	// ErrTransferNestedRepo is returned when the worktree holds an untracked
+	// repository of its own, which a move cannot carry.
+	ErrTransferNestedRepo = errors.New("workspace: folder is its own git repository")
+	// ErrTransferSubmodule is returned when a submodule holds work its own
+	// remote does not have.
+	ErrTransferSubmodule = errors.New("workspace: submodule has work that is not pushed")
+	// ErrTransferLFS is returned when the work to move includes Git LFS files
+	// that are not pushed, which a bundle cannot carry.
+	ErrTransferLFS = errors.New("workspace: Git LFS files are not pushed")
+	// ErrTransferFetch is returned when the moved work cannot be read from origin.
+	ErrTransferFetch = errors.New("workspace: could not bring in the moved work")
+	// ErrDetachedHead is returned when a moved session's worktree is not on its branch.
+	ErrDetachedHead = errors.New("workspace: worktree is not on its branch")
 	// ErrRuntimePrerequisite reports a missing host prerequisite for the selected
 	// runtime before a session can be created.
 	ErrRuntimePrerequisite = errors.New("runtime: prerequisite missing")

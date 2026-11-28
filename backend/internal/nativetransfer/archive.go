@@ -62,7 +62,7 @@ func (m Manifest) validate() error {
 	if m.Version != formatVersion {
 		return fmt.Errorf("nativetransfer: unsupported archive version %d", m.Version)
 	}
-	if !filepath.IsAbs(m.SourceCwd) || !filepath.IsAbs(m.SourceProjectDir) {
+	if !isAbsPath(m.SourceCwd) || !isAbsPath(m.SourceProjectDir) {
 		return errors.New("nativetransfer: manifest source paths must be absolute")
 	}
 	var total int64

@@ -1,0 +1,308 @@
+import { describe, expect, it, vi } from "vitest";
+import { aoBridge } from "./bridge";
+import { MoveError, moveSession } from "./host-move";
+import { hostsWithRepo } from "./repo-hosts";
+import type { WorkspaceSummary } from "../types/workspace";
+
+type Handler = (options: { params?: { path?: Record<string, unknown> }; body?: unknown }) => unknown;
+
+function fakeClient(handlers: Record<string, Handler>) {
+	const calls: string[] = [];
+	const bodies: Record<string, unknown> = {};
+	const call = (method: string) => async (path: string, options: Parameters<Handler>[0] = {}) => {
+		calls.push(`${method} ${path}`);
+		bodies[`${method} ${path}`] = options.body;
+		const handler = handlers[`${method} ${path}`];
+		return handler ? handler(options) : { data: {} };
+	};
+	return { calls, bodies, client: { GET: call("GET"), POST: call("POST"), PUT: call("PUT") } as never };
+}
+
+const transfer = { transferId: "tr1", branch: "feat/x", headSha: "abc", archive: { size: 3, sha256: "s" }, bundle: true, native: { nativeId: "n", sourceCwd: "/a" } };
+
+const received = { data: { session: { id: "web-9" }, warnings: [], resumed: true } };
+
+function hosts(archive = new Blob(["abc"]), receive: Handler = () => received, identity?: { hostId: string; apiVersion: number }) {
+	const source = fakeClient({
+		"POST /api/v1/sessions/{sessionId}/transfer/prepare": () => ({ data: { transfer } }),
+		"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/archive": () => ({ data: archive }),
+		"POST /api/v1/sessions/{sessionId}/resume-agent": () => ({ error: { code: "AGENT_NOT_EXITED", message: "agent is running" } }),
+	});
+	// An empty body is the preflight, which a current daemon refuses as incomplete.
+	const target = fakeClient({
+		"GET /api/v1/identity": () => ({ data: identity }),
+		"POST /api/v1/sessions/transfer/receive": (options) =>
+			(options.body as { transfer?: unknown }).transfer ? receive(options) : { error: { code: "TRANSFER_INCOMPLETE", message: "incomplete" } },
+	});
+	const input = {
+		source: { client: source.client, hostId: "host-a", sessionId: "web-3", label: "MacBook A" },
+		target: { client: target.client, hostId: "host-b", label: "MacBook B", projectId: "web" },
+		transferId: "tr1",
+	};
+	return { source, target, input };
+}
+
+describe("moveSession", () => {
+	it("prepares, copies the archive in one request, receives, then marks the source moved", async () => {
+		const { source, target, input } = hosts();
+		const steps: string[] = [];
+		const result = await moveSession({ ...input, onStep: (step) => steps.push(step) });
+
+		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destination: { hostId: "host-b", label: "MacBook B", projectId: "web" }, resumed: true });
+		expect(steps).toEqual(["prepare", "copy", "receive", "commit"]);
+		expect(source.calls).toEqual([
+			"POST /api/v1/sessions/{sessionId}/transfer/prepare",
+			"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/archive",
+			"POST /api/v1/sessions/{sessionId}/transfer/commit",
+		]);
+		expect(target.calls).toEqual([
+			"POST /api/v1/sessions/transfer/receive",
+			"PUT /api/v1/sessions/transfer/{transferId}/archive",
+			"POST /api/v1/sessions/transfer/receive",
+		]);
+	});
+
+	it("names this computer by hostname on the other daemon, not as This computer", async () => {
+		const { source, input } = hosts();
+		await moveSession({ ...input, source: { ...input.source, hostId: "local", label: "This computer" } });
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ sourceLabel: "" });
+	});
+
+	it("records a move to this computer by its machine ID and name", async () => {
+		vi.spyOn(aoBridge.remotes, "computerName").mockResolvedValue("Studio");
+		const { source, target, input } = hosts(undefined, undefined, { hostId: "h_studio", apiVersion: 1 });
+		const result = await moveSession({ ...input, target: { ...input.target, hostId: "local", label: "This computer" } });
+		const destination = { hostId: "h_studio", label: "Studio", projectId: "web" };
+		expect(result.destination).toEqual(destination);
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ destination });
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ destination: { ...destination, sessionId: "web-9" } });
+		expect(target.calls).toContain("GET /api/v1/identity");
+	});
+
+	it("leaves the source alone when this computer's machine ID cannot be read", async () => {
+		const { source, input } = hosts();
+		const error = (await moveSession({ ...input, target: { ...input.target, hostId: "local", label: "This computer" } }).catch((e: unknown) => e)) as MoveError;
+		expect([error.step, error.resumedSource, error.message]).toEqual(["prepare", true, "This computer is not reachable"]);
+		expect(source.calls).toEqual([]);
+	});
+
+	it("cancels the move and resumes the source agent when the destination refuses", async () => {
+		const { source, input } = hosts(undefined, () => ({ error: { code: "TRANSFER_REPO_MISMATCH", message: "the project here is a different repository" } }));
+		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) => (path.endsWith("/resume-agent") ? (await post(path, options), { data: { ok: true } }) : post(path, options));
+		const error = await moveSession(input).catch((e: unknown) => e);
+
+		expect(error).toBeInstanceOf(MoveError);
+		expect((error as MoveError).step).toBe("receive");
+		expect((error as MoveError).code).toBe("TRANSFER_REPO_MISMATCH");
+		expect((error as MoveError).resumedSource).toBe(true);
+		expect(source.calls.slice(-2)).toEqual(["POST /api/v1/sessions/{sessionId}/transfer/cancel", "POST /api/v1/sessions/{sessionId}/resume-agent"]);
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/cancel"]).toEqual({ transferId: "tr1" });
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/commit");
+	});
+
+	it("stops before touching the source when the destination cannot receive", async () => {
+		const { source, target, input } = hosts();
+		const targetClient = target.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		targetClient.POST = async () => ({ error: { code: "NOT_FOUND", message: "Not Found" } });
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error).toBeInstanceOf(MoveError);
+		expect(error.message).toContain("cannot receive sessions");
+		expect(error.resumedSource).toBe(true);
+		expect(source.calls).toEqual([]);
+	});
+
+	it("finishes an unfinished earlier move under its own transfer id", async () => {
+		const { source, input } = hosts();
+		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) =>
+			path.endsWith("/transfer/prepare") ? (await post(path, options), { data: { transfer: { ...transfer, transferId: "tr-earlier" } } }) : post(path, options);
+		const result = await moveSession(input);
+
+		expect(result.transferId).toBe("tr-earlier");
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ transferId: "tr-earlier" });
+	});
+
+	const earlierMove = (receive: Handler) => {
+		const move = hosts(undefined, receive);
+		const sourceClient = move.source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) =>
+			path.endsWith("/transfer/prepare") ? (await post(path, options), { data: { transfer: { ...transfer, transferId: "tr-earlier" } } }) : post(path, options);
+		return { ...move, copies: () => move.target.calls.filter((call) => call.startsWith("PUT")).length };
+	};
+	const cancelled = "POST /api/v1/sessions/{sessionId}/transfer/cancel";
+
+	it("takes the session an earlier try already started instead of copying again", async () => {
+		const { source, input, copies } = earlierMove(() => received);
+		const result = await moveSession(input);
+		expect([result.sessionId, result.transferId, copies()]).toEqual(["web-9", "tr-earlier", 0]);
+		expect(source.calls).not.toContain(cancelled);
+	});
+
+	it("copies the work again when an earlier try left no session", async () => {
+		let attempts = 0;
+		const { input, copies } = earlierMove(() => (attempts++ ? received : { error: { code: "TRANSFER_ARCHIVE_INVALID", message: "not uploaded" } }));
+		expect((await moveSession(input)).sessionId).toBe("web-9");
+		expect([attempts, copies()]).toEqual([2, 1]);
+	});
+
+	it.each([
+		["does not answer", { error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } }],
+		["answers with a tunnel's error page", { error: "<html>524: A timeout occurred</html>" }],
+		["cannot tell whether it runs there", { error: { code: "TRANSFER_UNCONFIRMED", message: "the session may have started on that computer" } }],
+	])("keeps an earlier try pending when the destination %s", async (_, answer) => {
+		const { source, input, copies } = earlierMove(() => answer);
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+		expect([error.code, error.transferId, error.resumedSource, copies()]).toEqual(["RECEIVE_UNCONFIRMED", "tr-earlier", false, 0]);
+		expect(source.calls).not.toContain(cancelled);
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("asks the source to stop a running turn", async () => {
+		const { source, input } = hosts();
+		await moveSession({ ...input, stopTurn: true });
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ stopTurn: true });
+	});
+
+	it("reports a move that started from a summary", async () => {
+		const { input } = hosts(undefined, () => ({ data: { ...received.data, resumed: false } }));
+		expect((await moveSession(input)).resumed).toBe(false);
+	});
+
+	it("leaves a busy agent alone when the source refuses to prepare", async () => {
+		const { source, input } = hosts();
+		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) => {
+			if (path.endsWith("/transfer/prepare")) return { error: { code: "TRANSFER_AGENT_BUSY", message: "the agent is in the middle of a turn" } };
+			return post(path, options);
+		};
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error).toBeInstanceOf(MoveError);
+		expect(error.resumedSource).toBe(true);
+		expect(error.message).toContain("middle of a turn");
+	});
+
+	it("retries a dropped receive once instead of resuming the source", async () => {
+		let attempts = 0;
+		const { source, input } = hosts(undefined, () => {
+			attempts++;
+			if (attempts === 1) throw new TypeError("Failed to fetch");
+			return { data: { ...received.data, warnings: ["Could not claim a PR"] } };
+		});
+		const result = await moveSession(input);
+
+		expect(attempts).toBe(2);
+		expect(result.warnings).toEqual(["Could not claim a PR"]);
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("leaves the move pending when the destination stops answering during receive", async () => {
+		const { source, input } = hosts(undefined, () => {
+			throw new TypeError("Failed to fetch");
+		});
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error.message).toBe("MacBook B is not reachable");
+		expect(error.code).toBe("RECEIVE_UNCONFIRMED");
+		expect(error.transferId).toBe(transfer.transferId);
+		expect(error.resumedSource).toBe(false);
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	// A remote host behind the app's proxy answers 502 instead of failing the fetch.
+	const offline = { error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } };
+
+	it("retries a receive the proxy could not deliver once, and leaves it pending after that", async () => {
+		let attempts = 0;
+		const first = hosts(undefined, () => (attempts++ ? received : offline));
+		expect((await moveSession(first.input)).sessionId).toBe("web-9");
+		expect(attempts).toBe(2);
+
+		const lost = hosts(undefined, () => offline);
+		const error = (await moveSession(lost.input).catch((e: unknown) => e)) as MoveError;
+		expect(error.code).toBe("RECEIVE_UNCONFIRMED");
+		expect(error.message).toBe("MacBook B is not reachable");
+		expect(lost.source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+		expect(lost.source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("names the computer when the proxy answers for it during the preflight or the copy", async () => {
+		const before = hosts();
+		(before.target.client as unknown as { POST: () => Promise<unknown> }).POST = async () => offline;
+		const refused = (await moveSession(before.input).catch((e: unknown) => e)) as MoveError;
+		expect(refused.message).toBe("MacBook B is not reachable");
+		expect(before.source.calls).toEqual([]);
+
+		const during = hosts();
+		(during.target.client as unknown as { PUT: () => Promise<unknown> }).PUT = async () => offline;
+		const cut = (await moveSession(during.input).catch((e: unknown) => e)) as MoveError;
+		expect([cut.step, cut.message]).toEqual(["copy", "MacBook B is not reachable"]);
+		expect(during.source.calls).toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("names the computer a copy cannot reach and resumes the source", async () => {
+		const { source, target, input } = hosts();
+		const targetClient = target.client as unknown as { PUT: () => Promise<unknown> };
+		targetClient.PUT = () => Promise.reject(new TypeError("Failed to fetch"));
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error.message).toBe("MacBook B is not reachable");
+		expect(error.step).toBe("copy");
+		expect(source.calls).toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("takes the session another app delivered while this copy failed, and cancels when there is none", async () => {
+		const failedCopy = { error: { code: "TRANSFER_FAILED", message: "The move failed: rename" } };
+		const delivered = hosts();
+		(delivered.target.client as unknown as { PUT: () => Promise<unknown> }).PUT = async () => failedCopy;
+		const result = await moveSession(delivered.input);
+		expect([result.sessionId, result.committed]).toEqual(["web-9", true]);
+		expect(delivered.source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+
+		const missing = hosts(undefined, () => ({ error: { code: "TRANSFER_ARCHIVE_INVALID", message: "not uploaded" } }));
+		(missing.target.client as unknown as { PUT: () => Promise<unknown> }).PUT = async () => failedCopy;
+		const error = (await moveSession(missing.input).catch((e: unknown) => e)) as MoveError;
+		expect(error.step).toBe("copy");
+		expect(missing.source.calls).toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+	});
+
+	it("keeps the move when only marking the source fails", async () => {
+		const { source, input } = hosts();
+		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) => {
+			if (path.endsWith("/transfer/commit")) return { error: { message: "host offline" } };
+			return post(path, options);
+		};
+		const result = await moveSession(input);
+
+		expect(result.committed).toBe(false);
+		expect(result.commitError).toContain("host offline");
+		expect(result.sessionId).toBe("web-9");
+	});
+});
+
+describe("hostsWithRepo", () => {
+	const project = (id: string, repoKey?: string, hostId?: string): WorkspaceSummary => ({ id, name: id, path: "", repoKey, hostId, sessions: [] });
+
+	it("lists this computer first, then each remote host once", () => {
+		const local = [project("web", "github.com/acme/web"), project("api", "github.com/acme/api")];
+		const remote = [project("web", "github.com/acme/web", "a"), project("web-2", "github.com/acme/web", "a"), project("site", "github.com/acme/web", "b")];
+		expect(hostsWithRepo(local, remote, "github.com/acme/web")).toEqual([
+			{ hostId: "local", projectId: "web", projectName: "web" },
+			{ hostId: "a", projectId: "web", projectName: "web" },
+			{ hostId: "b", projectId: "site", projectName: "site" },
+		]);
+	});
+
+	it("matches nothing without a key", () => {
+		expect(hostsWithRepo([project("web")], [], undefined)).toEqual([]);
+	});
+});

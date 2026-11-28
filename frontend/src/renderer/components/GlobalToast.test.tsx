@@ -1,9 +1,27 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GlobalToast } from "./GlobalToast";
+import { showMove, useMoveStore } from "../lib/move-runner";
 import { useUiStore } from "../stores/ui-store";
 
 describe("GlobalToast", () => {
+	it("shows a move's step only while no session view shows it", () => {
+		useMoveStore.setState({
+			moves: { "local:web-3": { phase: "moving", targetHostId: "host-b", targetProjectId: "web", targetLabel: "MacBook B", title: "Osprey notes", step: "copy" } },
+			shown: {},
+		});
+		render(<GlobalToast />);
+		expect(screen.getByText("Osprey notes")).toBeInTheDocument();
+		expect(screen.getByText("Moving to MacBook B · Copying the work")).toBeInTheDocument();
+		let hide = () => {};
+		act(() => {
+			hide = showMove("local:web-3");
+		});
+		expect(screen.queryByText("Osprey notes")).not.toBeInTheDocument();
+		act(() => hide());
+		useMoveStore.setState({ moves: {}, shown: {} });
+	});
+
 	it("keeps a persistent actionable notice until the user acts", () => {
 		vi.useFakeTimers();
 		const acknowledge = vi.fn();

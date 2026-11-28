@@ -459,6 +459,8 @@ type Manager struct {
 	forkRetry ForkRetrier
 	// forkWorkspaces holds new forks' worktree paths until their setup runs.
 	forkWorkspaces sync.Map
+	// transferLocks serializes work on one session's move; see lockTransfer.
+	transferLocks sync.Map
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness      ports.AgentReadinessProvider
 	backgroundTaskUsage BackgroundTaskUsage
@@ -1142,7 +1144,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	defer func() {
 		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
 	}()
-	if cfg.Transfer != nil {
+	if cfg.Transfer != nil && cfg.Transfer.NativeArchive != "" {
 		// A moved conversation resumes in its CLI's terminal.
 		cfg.RequestedMode = domain.SessionModeTUI
 	}
@@ -1649,6 +1651,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if ws.Path == "" {
 		fetched := BeginSpawnStep(ctx, SpawnStepBranchFetch)
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
+		m.fetchRequestedBranchBestEffort(ctx, project, cfg.Branch)
 		fetched(nil)
 		created := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
@@ -1663,6 +1666,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			m.cleanupArtifactDir(id)
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
+	}
+	if cfg.Transfer != nil {
+		// A moved session's work goes into this worktree next. Recording it keeps
+		// the row through a daemon restart, so a retried receive ends this attempt
+		// instead of reusing its id and worktree.
+		if err := m.recordSpawnWorkspace(ctx, id, ws); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnTransfer, err)
+		}
 	}
 	// Per-project workspace provisioning: symlink shared files, copy the files
 	// .worktreeinclude names, then run any post-create commands (e.g.
@@ -1691,6 +1703,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAttachments, err)
 		}
 		prompt = appendAttachmentReferences(prompt, refs)
+	}
+
+	if cfg.Transfer != nil && cfg.Transfer.PreservedRef != "" {
+		if err := m.workspace.ApplyPreserved(ctx, ws, cfg.Transfer.PreservedRef); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnTransfer, err)
+		}
+		if git, ok := m.workspace.(ports.WorkspaceTransfer); ok {
+			if err := git.RestoreTransferIndex(ctx, ws, cfg.Transfer.PreservedRef); err != nil {
+				m.logger.Warn("spawn: staged state of moved work not restored", "sessionID", id, "error", err)
+			}
+		}
 	}
 
 	// Everything above is shared: project, harness, prompts, seed row, worktree,
@@ -2455,6 +2479,26 @@ type defaultBranchRefreshTarget struct {
 	resolved         ports.WorkspaceDefaultBranch
 }
 
+// fetchRequestedBranchBestEffort updates origin/<branch> for a branch the
+// caller named. Without it, a branch pushed from another machine but not yet
+// fetched here is treated as new and seeded from the default branch.
+func (m *Manager) fetchRequestedBranchBestEffort(ctx context.Context, project domain.ProjectRecord, branch string) {
+	if strings.TrimSpace(branch) == "" || project.Kind.WithDefault() != domain.ProjectKindSingleRepo || strings.TrimSpace(project.Path) == "" {
+		return
+	}
+	refresher, ok := m.workspace.(ports.WorkspaceDefaultBranchRefresher)
+	if !ok {
+		return
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
+	defer cancel()
+	target := ports.WorkspaceDefaultBranch{Remote: "origin", Branch: branch, BaseRef: "refs/remotes/origin/" + branch}
+	if err := refresher.FetchDefaultBranch(fetchCtx, project.Path, target); err != nil {
+		m.logger.Debug("spawn: requested branch fetch failed; continuing with local refs",
+			"projectID", project.ID, "branch", branch, "error", err)
+	}
+}
+
 func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project domain.ProjectRecord) map[string]string {
 	if project.Kind.WithDefault() == domain.ProjectKindScratch {
 		return nil
@@ -2943,6 +2987,16 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 		return
 	}
 	m.markSpawnFailedTerminatedAfterFailure(ctx, rec.ID, false)
+}
+
+func (m *Manager) recordSpawnWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo) error {
+	rec, err := m.getRecord(ctx, id)
+	if err != nil {
+		return err
+	}
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = ws.Branch, ws.Path, ws.RepoPath
+	rec.UpdatedAt = m.clock()
+	return m.store.UpdateSession(ctx, rec)
 }
 
 func (m *Manager) preserveFailedSpawnWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo, runtimeDestroyed bool) {
@@ -3743,6 +3797,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
 	}
+	if err := m.refuseMoved(ctx, id); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	if err := m.endMoveHere(ctx, rec); err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
@@ -4109,6 +4166,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
 	}
+	if err := m.refuseMoved(ctx, id); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
+	}
 	if err := m.endMoveHere(ctx, rec); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -4344,6 +4404,9 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
+	if err := m.refuseMoved(ctx, rec.ID); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.

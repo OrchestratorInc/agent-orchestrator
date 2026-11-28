@@ -153,6 +153,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		workspaceSubscriptionMock(options);
 		return { data: ctx.workspaces };
 	},
+	useRemoteWorkspaces: () => ({ data: [], loadedProjectHostIds: [], failedHostIds: [] }),
 	workspaceQueryKey: ["workspaces"],
 }));
 
@@ -385,10 +386,11 @@ describe("CommandPalette gating", () => {
 
 	it("subscribes to workspace updates only while open", () => {
 		renderPalette();
-		expect(workspaceSubscriptionMock).toHaveBeenLastCalledWith({ subscribed: false });
+		expect(workspaceSubscriptionMock).toHaveBeenCalledWith({ subscribed: false });
+		expect(workspaceSubscriptionMock.mock.calls.some(([options]) => options?.subscribed)).toBe(false);
 
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		expect(workspaceSubscriptionMock).toHaveBeenLastCalledWith({ subscribed: true });
+		expect(workspaceSubscriptionMock).toHaveBeenCalledWith({ subscribed: true });
 	});
 
 	it("renders nothing and binds no shortcut on a disabled (stable) build", () => {

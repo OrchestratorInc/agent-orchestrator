@@ -2891,6 +2891,7 @@ describe("Sidebar", () => {
 			["Rename", "R"],
 			["Pin session", "P"],
 			["Fork session", "F"],
+			["Move to", null],
 			["Move to Orchestrator Cloud…", null],
 			["Archive session", "A"],
 		]);

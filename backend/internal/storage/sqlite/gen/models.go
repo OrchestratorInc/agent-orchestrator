@@ -1006,6 +1006,16 @@ type SessionTerminalTurn struct {
 	RespondedAt     sql.NullTime
 }
 
+type SessionTransfer struct {
+	SessionID     string
+	TransferID    string
+	DestHostID    string
+	DestLabel     string
+	DestProjectID string
+	DestSessionID string
+	CreatedAt     time.Time
+}
+
 type SessionVersionMove struct {
 	SessionID string
 	Intent    string

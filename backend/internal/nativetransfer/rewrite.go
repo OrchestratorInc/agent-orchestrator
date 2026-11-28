@@ -6,9 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+var windowsPath = regexp.MustCompile(`^(?:[A-Za-z]:|\\\\[^\\/]+)[\\/]`)
+
+// isAbsPath accepts an absolute path of any platform: the machine that
+// recorded it may run another one.
+func isAbsPath(p string) bool {
+	return strings.HasPrefix(p, "/") || windowsPath.MatchString(p)
+}
 
 // pathMap rewrites absolute path prefixes from the source machine to this one
 // inside JSON Lines records.
@@ -22,13 +31,18 @@ type prefixPair struct {
 func newPathMap(pairs map[string]string) (pathMap, error) {
 	var m pathMap
 	for old, new := range pairs {
-		if !strings.HasPrefix(old, "/") || strings.Trim(old, "/") == "" {
+		if !isAbsPath(old) || strings.Trim(windowsPath.ReplaceAllString(old, ""), `/\`) == "" {
 			return nil, fmt.Errorf("nativetransfer: refusing to rewrite path prefix %q", old)
 		}
 		if old == new {
 			continue
 		}
 		m = append(m, prefixPair{old: old, new: new, oldJSON: jsonText(old)})
+		// Tools on Windows also write paths with forward slashes.
+		if separator(old) == '\\' {
+			slashed := strings.ReplaceAll(old, `\`, "/")
+			m = append(m, prefixPair{old: slashed, new: strings.ReplaceAll(new, `\`, "/"), oldJSON: jsonText(slashed)})
+		}
 	}
 	// Longest first, so a prefix nested inside another is replaced by the more specific pair.
 	sort.Slice(m, func(i, j int) bool { return len(m[i].old) > len(m[j].old) })
@@ -169,10 +183,21 @@ func (m pathMap) rewriteString(s string) (string, bool) {
 		if best < 0 {
 			break
 		}
+		p := m[best]
 		b.WriteString(s[i:at])
-		b.WriteString(m[best].new)
-		i = at + len(m[best].old)
+		b.WriteString(p.new)
+		i = at + len(p.old)
 		changed = true
+		// The rest of a Windows path takes the separators of a POSIX new, and the reverse.
+		if fromSep, toSep := separator(p.old), separator(p.new); fromSep != toSep {
+			for ; i < len(s) && (s[i] == fromSep || isPathNameByte(s[i])); i++ {
+				if s[i] == fromSep {
+					b.WriteByte(toSep)
+				} else {
+					b.WriteByte(s[i])
+				}
+			}
+		}
 	}
 	if !changed {
 		return s, false
@@ -206,4 +231,12 @@ func indexWholePath(s string, i int, from string) int {
 
 func isPathNameByte(c byte) bool {
 	return c == '-' || c == '_' || c == '.' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// separator is the path separator p uses.
+func separator(p string) byte {
+	if windowsPath.MatchString(p) && strings.Contains(p, `\`) {
+		return '\\'
+	}
+	return '/'
 }

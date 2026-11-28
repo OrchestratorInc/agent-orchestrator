@@ -1,7 +1,7 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, ArrowRightLeft, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { useIsCloudSessionCreator } from "../hooks/useCloudAgentSwitch";
@@ -9,13 +9,15 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
+import { useMoveSession, useMoveTargets } from "../hooks/useMoveSession";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { moveKey, useMoveStore } from "../lib/move-runner";
 import { CLOUD_BRANCH_FEATURE } from "../lib/move-session";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, sessionIsActive, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, primaryPR, sessionIsActive, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { MenuEntries, type MenuEntry } from "./menu-model";
 import { OpenTargetIcon } from "./OpenTargetIcon";
 import { useForkSessionFromMenu, useSessionForkOptions } from "./SessionForkControls";
@@ -57,6 +59,11 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	const copyToClipboard = useCopyToClipboard();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
+	// The projects are looked up only once the Move submenu opens.
+	const [moveOpen, setMoveOpen] = useState(false);
+	const { targets: moveTargets, settled: moveTargetsSettled } = useMoveTargets(session, moveOpen);
+	const move = useMoveSession(session);
+	const movePhase = useMoveStore((state) => (session ? state.moves[moveKey(session.hostId, session.id)]?.phase : undefined));
 	// A local worker whose agent exited and that is not switching interfaces;
 	// orchestrators and remote sessions resume elsewhere, so they skip the check.
 	const canResume = useCanResumeAgent(!session || session.hostId || isOrchestratorSession(session) ? undefined : session);
@@ -85,6 +92,9 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
+	// Workers in a project can move to another computer; the daemon refuses the rest with a reason.
+	const canMoveToHost = !isOrchestratorSession(session) && !session.isTerminated && !session.cloud &&
+		Boolean(session.workspaceId) && session.workspaceId !== STANDALONE_WORKSPACE_ID;
 	// A live worker on this computer can move to AO Cloud when Cloud is on.
 	const canMove = cloudEnabled && !session.cloud && !isOrchestratorSession(session) && sessionIsActive(session);
 	// A live worker this person started in AO Cloud can move to this computer.
@@ -153,6 +163,34 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			title: refused?.refusal?.message,
 			onSelect: () => forkSession(session),
 			accelerator: "f",
+		});
+	}
+	if (canMoveToHost && move) {
+		const running = movePhase === "waiting" || movePhase === "moving";
+		const note = (id: string, text: ReactNode): MenuEntry => ({
+			kind: "custom",
+			id,
+			label: id,
+			render: () => <p className="max-w-64 px-2 py-1.5 text-xs leading-snug text-muted-foreground">{text}</p>,
+		});
+		entries.push({
+			kind: "submenu",
+			id: "session-move",
+			icon: <ArrowRightLeft aria-hidden="true" />,
+			label: t("moveSession.menu"),
+			onOpenChange: (open) => {
+				if (open) setMoveOpen(true);
+			},
+			items: moveTargets.length === 0
+				? [moveTargetsSettled && moveOpen ? note("session-move-none", t("moveSession.none")) : { kind: "item", id: "session-move-loading", label: t("common.loading"), disabled: true }]
+				: moveTargets.map((target): MenuEntry => ({
+					kind: "item",
+					id: `session-move-${target.hostId}-${target.projectId}`,
+					label: target.label,
+					description: target.projectName,
+					disabled: running,
+					onSelect: () => move.choose(target),
+				})),
 		});
 	}
 	if (canMove) {
