@@ -9,10 +9,12 @@
 //
 // AO-managed sessions prefer native session identity from Cline hooks (the
 // workspace-local `.clinerules/hooks/` executable scripts AO installs). Interactive
-// hooks carry root session IDs, but shared hubs can reuse the starting session's
-// AO environment for other sessions, misattributing identity and activity (#7478).
-// Restore therefore retains history recovery scoped to the session's unique
-// worktree; hooks alone do not reliably bind interactive TUI sessions.
+// hooks carry root session IDs. Wrappers bind worker callbacks to the installed
+// worker's launch while preserving inherited routing for its reviewer. A shared
+// hub can still supply indistinguishable worker/reviewer environments within
+// one worktree; workspace wrappers cannot resolve that attribution (#7478).
+// Restore retains worktree-scoped history recovery for missing hook identities
+// and identities misattributed by older wrappers.
 package cline
 
 import (
