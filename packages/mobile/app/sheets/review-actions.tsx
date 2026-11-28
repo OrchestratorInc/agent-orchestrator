@@ -4,19 +4,14 @@ import { Alert, StyleSheet, View } from "react-native";
 import {
 	type AgentModelCatalog,
 	type ReviewerAgentConfig,
-	type PRReviewCommentLink,
-	type PRReviewEntry,
 	type SessionPRSummary,
 	type SessionReviews,
 } from "../../lib/api";
-import { userFacingError } from "../../lib/connectionError";
+import { RECONNECTING_ACTION_COPY, userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
-import { openGitHub } from "../../lib/openGitHub";
-import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
-import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { ReviewActionsSheet } from "../../lib/review-actions-sheet";
-import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, ReviewPolicyRow } from "../../lib/review-actions-sheet.types";
+import type { ReviewPolicyKey, ReviewPolicyRow } from "../../lib/review-actions-sheet.types";
 import { useReviewBackend, type ReviewSettings } from "../../lib/reviewBackend";
 import { reviewerEffortPick, reviewerModelPick, reviewerModelView, type ReviewerModelState } from "../../lib/reviewer-picker.types";
 import { reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
@@ -29,7 +24,7 @@ import { SHEET_SCROLL_CONTENT, SheetHeader } from "../../lib/ui";
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 type ReviewPolicies = Record<ReviewPolicyKey, boolean>;
-type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: string } | { kind: "policy"; id: ReviewPolicyKey };
+type BusyAction = { kind: "reviewer" | "rerequest"; id: string } | { kind: "policy"; id: ReviewPolicyKey };
 
 // The desktop inspector's wording, and what each switch reads before the session loads.
 const POLICIES: readonly { key: ReviewPolicyKey; title: string; description: string; fallback: boolean }[] = [
@@ -48,12 +43,14 @@ function ReviewActionsContent() {
 	const { currentHostId } = useApp();
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud worker;
 	// what Cloud cannot do (pick the reviewer's model, ask a GitHub reviewer
-	// again, resolve a comment) the backend leaves out, and so does the sheet.
+	// again) the backend leaves out, and so does the sheet. The PR's comments
+	// are on its page.
 	const { backend } = useReviewBackend();
 	const { sessionId = "", prUrl = "", hostId: routeHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const [agents, setAgents] = useState<ReviewSettings["reviewers"]>([]);
-	const [models, setModels] = useState<AgentModelCatalog>();
+	// With the reviewer it lists, so a reconnect keeps it on screen and only a new reviewer drops it.
+	const [models, setModels] = useState<{ harness: string; catalog: AgentModelCatalog }>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
 	const [inheritedConfig, setInheritedConfig] = useState<ReviewSettings["inheritedConfig"]>({});
 	const [pr, setPR] = useState<SessionPRSummary>();
@@ -68,7 +65,24 @@ function ReviewActionsContent() {
 	const [policies, setPolicies] = useState<ReviewPolicies>();
 	const [busy, setBusy] = useState<BusyAction>();
 	const [error, setError] = useState("");
-	const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
+	// The machine's live connection is null while the app re-races its endpoints
+	// (after an app switch). The sheet stays as it was: what this machine can do
+	// comes from its last connection, requests only ever go over the live one,
+	// and one asked for meanwhile says it is still reconnecting.
+	const knownBackend = useRef(backend);
+	if (backend) knownBackend.current = backend;
+	const can = backend ?? knownBackend.current;
+	// As of now, not as of the render that made a handler: a confirmation can stay open across a reconnect.
+	const liveBackend = useRef(backend);
+	liveBackend.current = backend;
+	const connection = () => {
+		if (!liveBackend.current) setError(RECONNECTING_ACTION_COPY);
+		return liveBackend.current;
+	};
+	const connected = Boolean(backend);
+	useEffect(() => {
+		if (connected) setError((current) => current === RECONNECTING_ACTION_COPY ? "" : current);
+	}, [connected]);
 
 	const load = useCallback(async () => {
 		if (!hostMatches || !backend || !sessionId) return;
@@ -93,16 +107,14 @@ function ReviewActionsContent() {
 	useEffect(() => { void load(); }, [load]);
 	useEffect(() => {
 		const request = ++modelRequest.current;
-		setModels(undefined);
 		const reviewerModels = backend?.reviewerModels;
 		if (!hostMatches || !reviewerModels || !effectiveReviewer) return;
 		const polling = new AbortController();
 		void reviewerModels(effectiveReviewer, polling.signal)
-			.then((result) => { if (request === modelRequest.current) setModels(result); })
+			.then((result) => { if (request === modelRequest.current) setModels({ harness: effectiveReviewer, catalog: result }); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
 		return () => polling.abort();
 	}, [backend, effectiveReviewer, hostMatches]);
-	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	// Asked from here: left out at once, so a second tap cannot ask again before the provider's next read shows them waited on.
 	const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
 	const externalReviewers = useMemo(() => rerequestableReviewers(pr, reviews, asked), [asked, pr, reviews]);
@@ -113,21 +125,19 @@ function ReviewActionsContent() {
 		.map((agent) => ({ id: agent.id, label: agent.label || agent.id })), [agents, reviewerOverride]);
 	// What the next review runs with: the session's own model and effort, else
 	// the project's for this reviewer, else the catalog's defaults.
-	const modelState: ReviewerModelState = { catalog: effectiveReviewer ? models : undefined, saved: reviewerConfig, inherited: inheritedConfig[effectiveReviewer] ?? {} };
+	const modelState: ReviewerModelState = { catalog: effectiveReviewer && models?.harness === effectiveReviewer ? models.catalog : undefined, saved: reviewerConfig, inherited: inheritedConfig[effectiveReviewer] ?? {} };
 	const modelView = reviewerModelView(modelState);
-	const comments = useMemo(() => reviewComments(pr, false), [pr]);
-	const resolvedComments = useMemo(() => reviewComments(pr, true), [pr]);
-	const externalReviews = useMemo(() => (pr?.review.reviews ?? []).filter((item) => item.reviewerId !== pr?.author && ![...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`))), [aoReviewIds, pr]);
 
 	// The switch, the picker and the request each show their own progress, so
 	// none of them adds a haptic of its own; success is the moment worth feeling.
 	async function saveReviewer(id: string, agentConfig: ReviewerAgentConfig) {
-		if (!backend) return;
+		const live = connection();
+		if (!live) { setBusy(undefined); return; }
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
 			const selection = reviewerSwitchSelection(id, agentConfig);
-			await backend.setReviewer(sessionId, id, agentConfig);
+			await live.setReviewer(sessionId, id, agentConfig);
 			setReviewerOverride(id);
 			setReviewerConfig(selection.agentConfig ?? {});
 			haptics.success();
@@ -139,12 +149,14 @@ function ReviewActionsContent() {
 	}
 
 	async function confirmReviewerChange(id: string, agentConfig: ReviewerAgentConfig) {
-		if (!backend || busy) return;
+		if (busy) return;
 		if (!reviewerSelectionChanged(reviewerOverride, reviewerConfig, id, agentConfig)) return;
+		const live = connection();
+		if (!live) return;
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
-			const latest = await backend.reviews(sessionId);
+			const latest = await live.reviews(sessionId);
 			setReviews(latest);
 			const warning = reviewerSwitchWarning(latest.reviews.some((item) => item.status === "running"));
 			if (!warning) { await saveReviewer(id, agentConfig); return; }
@@ -172,13 +184,15 @@ function ReviewActionsContent() {
 	}
 
 	async function updatePolicy(key: ReviewPolicyKey, value: boolean) {
-		if (!backend || !policies || busy) return;
+		if (!policies || busy) return;
+		const live = connection();
+		if (!live) return;
 		const previous = policies;
 		setPolicies({ ...policies, [key]: value });
 		setBusy({ kind: "policy", id: key });
 		setError("");
 		try {
-			await backend.setPolicy(sessionId, key, value);
+			await live.setPolicy(sessionId, key, value);
 			haptics.success();
 		} catch (cause) {
 			setPolicies(previous);
@@ -189,8 +203,9 @@ function ReviewActionsContent() {
 	}
 
 	async function rerequest(reviewerId: string) {
-		const ask = backend?.rerequest;
-		if (!ask || !pr || busy) return;
+		if (!can?.rerequest || !pr || busy) return;
+		const ask = connection()?.rerequest;
+		if (!ask) return;
 		setBusy({ kind: "rerequest", id: reviewerId });
 		setError("");
 		try {
@@ -199,47 +214,6 @@ function ReviewActionsContent() {
 			haptics.success();
 		} catch (cause) {
 			setError(userFacingError(cause, "Could not request another review."));
-		} finally {
-			setBusy(undefined);
-		}
-	}
-
-	function confirmResolve(comment: PRReviewCommentLink) {
-		if (!backend?.resolveComment || !pr || busy) return;
-		Alert.alert("Resolve feedback?", comment.body?.trim() || "Mark this addressed comment as resolved on GitHub.", [
-			{ text: "Cancel", style: "cancel" },
-			{ text: "Resolve", onPress: () => void resolve(comment) },
-		]);
-	}
-
-	async function resolve(comment: PRReviewCommentLink) {
-		const resolveComment = backend?.resolveComment;
-		if (!resolveComment || !pr) return;
-		const commentUrl = comment.url;
-		if (!commentUrl) return;
-		setBusy({ kind: "resolve", id: commentUrl });
-		setError("");
-		try {
-			await resolveComment(sessionId, pr.url, commentUrl);
-			haptics.success();
-			await load();
-		} catch (cause) {
-			setError(userFacingError(cause, "Could not resolve this comment."));
-		} finally {
-			setBusy(undefined);
-		}
-	}
-
-	async function send(id: string, message: string) {
-		if (!backend || busy) return;
-		setBusy({ kind: "send", id });
-		setError("");
-		try {
-			await backend.sendToWorker(sessionId, message);
-			setSent((current) => new Set(current).add(id));
-			haptics.success();
-		} catch (cause) {
-			setError(userFacingError(cause, "Could not send this feedback to the worker."));
 		} finally {
 			setBusy(undefined);
 		}
@@ -254,62 +228,16 @@ function ReviewActionsContent() {
 		value: policies?.[key] ?? fallback,
 		busy: !policies || busy?.kind === "policy" && busy.id === key,
 	}));
-	const reviewItem = (item: PRReviewEntry): ReviewFeedbackItem => {
-		const id = item.reviewUrl || item.reviewerId;
-		const actions: ItemAction[] = [
-			...(item.reviewUrl ? [{ id: "open", label: "Open review", icon: "openExternal" as const, onPress: () => void openGitHub(item.reviewUrl!, { fromSheet: true }) }] : []),
-			...(item.body && pr && !sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatExternalReviewMessage(item, pr.url)) }] : []),
-		];
-		return {
-			key: item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`,
-			author: item.reviewerId,
-			meta: sentenceCase(item.verdict.replaceAll("_", " ")),
-			body: item.body || "No written summary.",
-			bodyMissing: !item.body,
-			notInjected: item.autoInjectReview === false,
-			sent: sent.has(id),
-			menuLabel: `Actions for ${item.reviewerId}'s review`,
-			actions,
-			working: busy?.kind === "send" && busy.id === id,
-		};
-	};
-	// Desktop keeps these in a per-comment "⋯" menu rather than as buttons under every comment.
-	const commentItem = (item: ReviewCommentItem, resolved: boolean): ReviewFeedbackItem => {
-		const { reviewerId, comment } = item;
-		const id = commentKey(item);
-		const aoOwned = Boolean(comment.reviewId && aoReviewIds.has(comment.reviewId));
-		const actions: ItemAction[] = [
-			...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", icon: "openExternal" as const, onPress: () => void openGitHub(comment.url!, { fromSheet: true }) }] : []),
-			...(!sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatInlineReviewCommentMessage(comment, reviewerId)) }] : []),
-			...(!resolved && comment.url && backend?.resolveComment ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: () => confirmResolve(comment) }] : []),
-		];
-		return {
-			key: id,
-			author: reviewerId,
-			meta: `${aoOwned ? "Orchestrator review" : "GitHub"} · ${resolved ? "resolved" : "open"}`,
-			location: comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "Inline comment",
-			body: comment.body || "No comment text.",
-			bodyMissing: !comment.body,
-			notInjected: comment.autoInjectReview === false,
-			sent: sent.has(id),
-			menuLabel: `Actions for ${reviewerId}'s comment`,
-			actions,
-			working: (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url),
-		};
-	};
-	const feedback: ReviewFeedbackSection[] = [
-		{ id: "reviews" as const, title: "GitHub reviews", footer: "Complete review summaries submitted on GitHub.", items: pr ? externalReviews.map(reviewItem) : [] },
-		{ id: "unresolved" as const, title: "Unresolved comments", footer: "Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.", items: comments.map((item) => commentItem(item, false)) },
-		{ id: "resolved" as const, title: "Resolved comments", footer: "Previously addressed Orchestrator and GitHub feedback.", items: resolvedComments.map((item) => commentItem(item, true)) },
-	].filter((section) => section.items.length > 0);
-
 	return <ReviewActionsSheet
-		subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"}
+		subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and automation"}
 		alerts={[
 			...(error ? [error] : []),
+			// Opened before the machine answers: say so, rather than spin without a word.
+			...(!backend && !policies && error !== RECONNECTING_ACTION_COPY ? [RECONNECTING_ACTION_COPY] : []),
 			...(prMissing ? ["Pull request not found. Its URL may have changed; reopen review details from the current pull request."] : []),
 		]}
 		policies={policyRows}
+		reviewersLoading={!policies}
 		locked={!policies || Boolean(busy)}
 		onPolicyChange={(key, value) => void updatePolicy(key, value)}
 		reviewer={availableReviewers.length || reviewerOverride ? {
@@ -322,9 +250,9 @@ function ReviewActionsContent() {
 			effort: modelView.effort,
 			onSelectEffort: chooseEffort,
 			busy: Boolean(busy),
-			modelChoice: Boolean(backend?.reviewerModels),
+			modelChoice: Boolean(can?.reviewerModels),
 		} : undefined}
-		externalReviewers={(backend?.rerequest ? externalReviewers : []).map((item) => ({
+		externalReviewers={(can?.rerequest ? externalReviewers : []).map((item) => ({
 			id: item.reviewerId,
 			detail: `${item.count} ${item.count === 1 ? "comment" : "comments"}`,
 			busy: busy?.kind === "rerequest" && busy.id === item.reviewerId,
@@ -332,27 +260,7 @@ function ReviewActionsContent() {
 		onRerequest={(id) => {
 			if (externalReviewers.some((reviewer) => reviewer.reviewerId === id)) void rerequest(id);
 		}}
-		feedback={feedback}
-		emptyFeedback={!pr && !error && !prMissing ? "No GitHub feedback is available for this pull request yet." : undefined}
 	/>;
-}
-
-type ReviewCommentItem = { reviewerId: string; comment: PRReviewCommentLink };
-
-function reviewComments(pr: SessionPRSummary | undefined, resolved: boolean): ReviewCommentItem[] {
-	const result: ReviewCommentItem[] = [];
-	for (const reviewer of resolved ? pr?.review.resolvedBy ?? [] : pr?.review.unresolvedBy ?? []) {
-		for (const comment of reviewer.links ?? []) result.push({ reviewerId: reviewer.reviewerId, comment });
-	}
-	return result;
-}
-
-function commentKey({ reviewerId, comment }: ReviewCommentItem): string {
-	return comment.url || `${reviewerId}:${comment.file}`;
-}
-
-function sentenceCase(value: string): string {
-	return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({

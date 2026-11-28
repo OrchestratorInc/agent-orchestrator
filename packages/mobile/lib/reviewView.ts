@@ -80,16 +80,6 @@ function pullRequestIdentity(value: string): { repo: string; number: number } | 
 	}
 }
 
-export function reviewStatusLabel(status: PRReviewState["status"]): string {
-	switch (status) {
-		case "running": return "Review in progress";
-		case "up_to_date": return "Reviewed";
-		case "changes_requested": return "Changes requested";
-		case "ineligible": return "Review unavailable";
-		default: return "Needs review";
-	}
-}
-
 export function reviewStatusVisual(status: PRReviewState["status"]): {
 	icon: "alert-circle" | "check-circle" | "clock" | "loader";
 	tone: "amber" | "blue" | "green" | "muted";
@@ -101,45 +91,6 @@ export function reviewStatusVisual(status: PRReviewState["status"]): {
 		case "ineligible": return { icon: "alert-circle", tone: "muted" };
 		default: return { icon: "clock", tone: "muted" };
 	}
-}
-
-export function reviewVerdictLabel(run: ReviewRun): string {
-	if (run.status === "running") return "Reviewing";
-	if (run.status === "failed") return "Review failed";
-	if (run.status === "cancelled") return "Review cancelled";
-	if (run.verdict === "approved") return "Approved";
-	if (run.verdict === "changes_requested") return "Changes requested";
-	return "No verdict";
-}
-
-/** Only a finished run with findings is worth giving to the worker. */
-export function reviewRunSendable(run: ReviewRun): boolean {
-	return run.status === "completed" && Boolean(run.body?.trim());
-}
-
-/** "harness · trigger · status · delivered", the last once the worker has it. */
-export function reviewRunMeta(run: ReviewRun): string {
-	const parts = [run.harness, run.triggerSource, run.status];
-	if (run.deliveredAt) parts.push("delivered");
-	return parts.filter(Boolean).join(" · ");
-}
-
-export function shortCommit(sha: string): string {
-	return sha.slice(0, 8);
-}
-
-export type ReviewPrimaryAction = "start" | "cancel" | "review_again" | "none";
-
-export function reviewPrimaryAction(review: PRReviewState): ReviewPrimaryAction {
-	if (review.status === "running") return "cancel";
-	if (review.status === "ineligible") return "none";
-	if (review.status === "needs_review") return "start";
-	return "review_again";
-}
-
-export function reviewBatchAction(review: PRReviewState, reviews: PRReviewState[]): ReviewPrimaryAction {
-	if (reviews.some((candidate) => candidate.status === "running")) return "cancel";
-	return reviewPrimaryAction(review);
 }
 
 /** The newest actionable automatic-review failure across every PR in a session. */
@@ -186,15 +137,6 @@ export function reviewerControls(data: SessionReviews, review: PRReviewState, se
 	}
 	const hasReviewer = Boolean(data.reviewerSurface || data.reviewerHandleId || data.runs?.length);
 	return { restore: hasReviewer, stop: false };
-}
-
-export function reviewPrimaryActionLabel(action: ReviewPrimaryAction, multiple = false): string {
-	switch (action) {
-		case "start": return multiple ? "Start all reviews" : "Start review";
-		case "cancel": return multiple ? "Cancel running reviews" : "Cancel review";
-		case "review_again": return multiple ? "Review all again" : "Review again";
-		default: return "";
-	}
 }
 
 /** A login as GitHub's two APIs write it: REST adds "[bot]" to an app's login, GraphQL does not. */

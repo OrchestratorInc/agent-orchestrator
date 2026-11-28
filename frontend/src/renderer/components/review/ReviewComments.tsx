@@ -1,4 +1,4 @@
-import { InspectorSection, commentTextLines, inspectorEmptyClass } from "@aoagents/product-ui";
+import { InspectorSection, commentTextLines, inspectorEmptyClass, summaryPreview } from "@aoagents/product-ui";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import { useQueryClient } from "@tanstack/react-query";
 import { Reply } from "lucide-react";
@@ -10,6 +10,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { sessionUiKey } from "../../lib/hosts";
 import { formatTimeCompact } from "../../lib/format-time";
 import { reviewCommentIsOpen, reviewerRowKey, type ReviewComment, type ReviewPRBlock, type ReviewReviewer, type ReviewReviewerStatus } from "../../lib/review-comments";
+import { replyQuote } from "../../../../../packages/shared/review/review-messages";
 import { cn } from "../../lib/utils";
 import { useReviewSentKeys, useReviewSentStore } from "../../stores/review-sent-store";
 import { AgentAvatar } from "../AgentAvatar";
@@ -57,23 +58,7 @@ function onGitLab(block: ReviewPRBlock): boolean {
 	return block.provider ? block.provider.provider === "gitlab" : /\/-\/merge_requests\/\d+/.test(block.webUrl);
 }
 
-/**
- * A review summary's one-line preview. The verdict already shows beside it, so a
- * body that opens by restating it ("## Changes requested", "Approved. The fix…")
- * previews from what comes after.
- */
-export function summaryPreview(lines: string[], verdictLabels: string[]): string {
-	const [first = "", ...rest] = lines;
-	const labels = [...new Set(verdictLabels.map((label) => label.trim()).filter(Boolean))];
-	for (const label of labels) {
-		const lead = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[:.!—–-]\\s*|\\s*$)`, "i");
-		if (!lead.test(first)) continue;
-		const remainder = first.replace(lead, "").trim();
-		if (remainder) return remainder.charAt(0).toUpperCase() + remainder.slice(1);
-		return rest[0] ?? first;
-	}
-	return first;
-}
+export { summaryPreview };
 
 /**
  * The Reviews tab's Comments: one list per open PR holding the Orchestrator
@@ -761,19 +746,4 @@ function FootAction({
 			{iconAfter}
 		</Button>
 	);
-}
-
-/**
- * What a reply to a review or top-level comment opens with: its first
- * paragraph quoted (cut at a word past 240 characters) and an @mention, as the
- * PR tab's Reply writes it, so the reply nests under it on the provider.
- */
-function replyQuote(author: string, body: string): string {
-	let excerpt = body.trim().split(/\n\s*\n/)[0] ?? "";
-	if (excerpt.length > 240) {
-		const space = excerpt.lastIndexOf(" ", 240);
-		excerpt = excerpt.slice(0, space > 0 ? space : 240);
-	}
-	const quoted = excerpt.split("\n").map((line) => `> ${line}`.trimEnd()).join("\n");
-	return `${quoted}\n\n@${author} `;
 }
