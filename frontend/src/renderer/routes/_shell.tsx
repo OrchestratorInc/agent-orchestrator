@@ -1401,6 +1401,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					pendingColor = undefined;
 				}).catch(() => {
 					if (disposed || version !== request) return;
+					// Forget the appearance too, so the next theme write retries
+					// instead of returning early on an unchanged appearance.
+					lastAppearance = undefined;
 					lastColor = undefined;
 					pendingColor = undefined;
 				});

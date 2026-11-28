@@ -309,6 +309,10 @@ test.describe(`${platform} ${themeStyle}`, () => {
 		: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
 for (const theme of ["dark", "light"] as const) {
 	for (const transparency of [false, true]) {
+		// CI coverage is these 12 @P0 cases only (renderer-smoke runs `@T0|@P0`).
+		// The other named Windows themes run nowhere in CI: run the full sweep
+		// by hand with `npm run test:e2e:window-transparency` when changing
+		// theme palettes or the native-transparency CSS.
 		const smoke = platform === "MacIntel" || themeStyle === "orchestrate" || themeStyle === "github";
 		test(`${smoke ? "@P0 " : ""}sticky project occludes sessions and the archive opens: ${platform} ${themeStyle} ${theme}, transparency ${transparency}`, async ({ page, browser }) => {
 			await preparePage(page, platform, themeStyle, theme, transparency);
