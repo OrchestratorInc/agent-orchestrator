@@ -1688,11 +1688,10 @@ export function useConversationCommands(
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			const variables = { targetSessionId: sessionId, clientMessageId, input: normalizedInput };
 			if (!terminated && !whenReady) return send.mutateAsync(variables);
-			// An archived chat is restored by sending to it, and a send made during the
-			// startup check waits for whenReady. The message shows at once, as any
-			// send's does, and goes out only after the restore or the wait, so it lands
-			// after it. A failed restore sent nothing: the composer gets the draft back
-			// with the reason, and the session stays archived.
+			// An archived chat is restored by sending to it. The message shows at once,
+			// as any send's does, and goes out only after the restore succeeded, so it
+			// lands after it. A failed restore sent nothing: the composer gets the draft
+			// back with the reason, and the session stays archived.
 			const echo = {
 				...sendLocalEcho(clientMessageId, normalizedInput),
 				providerSwitch: switchEcho(normalizedInput.switchDisplay, normalizedInput.providerSwitch?.targetHarness, newestCachedSequence(queryClient, sessionId, hostId)),
