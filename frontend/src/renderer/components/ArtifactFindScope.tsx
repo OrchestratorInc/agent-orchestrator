@@ -17,24 +17,16 @@ function visible(element: Element): boolean {
 	return !element.closest("[hidden], [aria-hidden='true'], [data-state='closed']") && getComputedStyle(element).display !== "none";
 }
 
-export type ArtifactFindState = { open: boolean; query: string };
-
 /** One reader's search state outlives its file and rendered/source switches. */
-export function ArtifactFindScope({ children, identity, enabled = true, findState, onFindStateChange, className = "relative flex h-full min-h-0 min-w-0 flex-col" }: {
+export function ArtifactFindScope({ children, identity, enabled = true, className = "relative flex h-full min-h-0 min-w-0 flex-col" }: {
 	children: ReactNode;
 	identity: string;
 	enabled?: boolean;
-	findState?: ArtifactFindState;
-	onFindStateChange?: (state: ArtifactFindState) => void;
 	className?: string;
 }) {
 	const { t } = useTranslation();
 	const root = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null);
-	const [internalState, setInternalState] = useState<ArtifactFindState>({ open: false, query: "" });
-	const { open, query } = findState ?? internalState;
-	const stateRef = useRef(findState ?? internalState); stateRef.current = findState ?? internalState;
-	const setOpen = useCallback((value: boolean) => { const next = { ...stateRef.current, open: value }; stateRef.current = next; (onFindStateChange ?? setInternalState)(next); }, [onFindStateChange]);
-	const setQuery = useCallback((value: string) => { const next = { ...stateRef.current, query: value }; stateRef.current = next; (onFindStateChange ?? setInternalState)(next); }, [onFindStateChange]);
+	const [open, setOpen] = useState(false), [query, setQuery] = useState("");
 	const [revision, setRevision] = useState(0), [active, setActive] = useState(0);
 	const [state, setState] = useState<{ phase: "idle" | "searching" | "ready" | "error"; total: number; warning?: "partial" | "unavailable" | "noText" | "failed" }>({ phase: "idle", total: 0 });
 	const result = useRef<ArtifactFindResult | undefined>(undefined);
@@ -208,7 +200,6 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 		}
 	}, [enabled, cancel]);
 	const warning = state.warning ? t(`artifacts.find.${state.warning}`) : undefined;
-	// Keep the document's parent stable when folding or handing Find to a dialog.
 	return <AdapterContext.Provider value={enabled ? register : undefined}>
 		<div ref={root} className={className} data-artifact-find-scope={enabled ? "" : undefined}
 			onKeyDownCapture={(event) => {
