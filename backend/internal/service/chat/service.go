@@ -2755,11 +2755,12 @@ func (s *Service) SetConfigOption(
 		}
 	}
 	options = permissionConfigOptions(record.Harness, options)
-	selectedMode := ""
+	settings, _ := settingsFromConfigOptions(previous, options)
 	if configID == "mode" {
-		selectedMode = value.Select
+		if mode, ok := explicitModeApproval(options, value.Select); ok {
+			settings.ApprovalMode = mode
+		}
 	}
-	settings, _ := settingsFromConfigOptions(previous, options, selectedMode)
 	if record.Harness == domain.HarnessClaudeCode {
 		// Provider-owned defaults stay implicit so future Claude defaults still apply.
 		if settings.Model == "default" {
@@ -2811,10 +2812,26 @@ func restoreOpenCodeMode(ctx context.Context, conv ports.ChatConversation, mode 
 	return fmt.Errorf("restore OpenCode mode %q: provider did not confirm selected mode", mode)
 }
 
+// explicitModeApproval applies a mode the user picked through the config-option
+// route, overriding the passive catalog reconciliation that keeps agy's shared
+// accept-edits mode from downgrading auto and bypass.
+func explicitModeApproval(options []ports.ChatConfigOption, selected string) (domain.PermissionMode, bool) {
+	for _, option := range options {
+		if option.ID != "mode" {
+			continue
+		}
+		for _, choice := range option.Choices {
+			if choice.Value == selected && choice.PermissionMode != "" {
+				return choice.PermissionMode, true
+			}
+		}
+	}
+	return "", false
+}
+
 func settingsFromConfigOptions(
 	settings domain.ConversationSettings,
 	options []ports.ChatConfigOption,
-	selectedMode string,
 ) (domain.ConversationSettings, bool) {
 	next := settings
 	hasEffort := false
@@ -2823,8 +2840,8 @@ func settingsFromConfigOptions(
 			if choice.Value == option.Current.Select && choice.PermissionMode != "" {
 				// agy acp reports accept-edits for AO's auto and bypass tiers too,
 				// so a passive echo must not downgrade them. An explicit mode
-				// selection still applies the stricter tier.
-				if choice.Value == "accept-edits" && choice.Value != selectedMode &&
+				// selection is applied by explicitModeApproval.
+				if choice.Value == "accept-edits" &&
 					(settings.ApprovalMode == domain.PermissionModeAuto || settings.ApprovalMode == domain.PermissionModeBypassPermissions) {
 					continue
 				}
