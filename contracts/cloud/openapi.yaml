@@ -7369,6 +7369,10 @@ components:
           $ref: "#/components/schemas/ProjectCoAuthorCommits"
         orchestratorSandboxProvider:
           $ref: "#/components/schemas/ProjectOrchestratorSandboxProvider"
+        sandboxDocker:
+          $ref: "#/components/schemas/ProjectSandboxDocker"
+        agentsCanUseSudo:
+          $ref: "#/components/schemas/ProjectAgentsCanUseSudo"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
@@ -7814,6 +7818,10 @@ components:
           $ref: "#/components/schemas/ProjectCoAuthorCommits"
         orchestratorSandboxProvider:
           $ref: "#/components/schemas/ProjectOrchestratorSandboxProvider"
+        sandboxDocker:
+          $ref: "#/components/schemas/ProjectSandboxDocker"
+        agentsCanUseSudo:
+          $ref: "#/components/schemas/ProjectAgentsCanUseSudo"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
     ProjectOrchestratorSandboxProvider:
@@ -7845,6 +7853,25 @@ components:
         Commits a session's agent makes carry a Co-authored-by trailer naming
         the AO GitHub App's bot account, so GitHub shows the App as a
         co-author beside the person the commit is authored as. Defaults to on.
+    ProjectSandboxDocker:
+      type: boolean
+      description: >-
+        Docker inside the project's Coder sandboxes. New projects are created
+        with false; absent, as on a project from before the setting, means on.
+        Read when a sandbox is created, so it applies to new sandboxes. Only
+        the project's creator or an organization owner or admin may change it
+        (Project.canEditSandbox); anyone else gets 403
+        sandbox_settings_forbidden.
+    ProjectAgentsCanUseSudo:
+      type: boolean
+      description: >-
+        The project's agents may run commands as root with sudo. Defaults to
+        off. Saved logins are turned off in a sandbox where agents can use
+        sudo. Read when a session's worker launches, so a change applies to
+        sessions started after it; a running session keeps what it started
+        with. Only the project's creator or an organization owner or admin may
+        change it (Project.canEditSandbox); anyone else gets 403
+        sandbox_settings_forbidden.
     ProjectTrackerIntake:
       type: object
       additionalProperties: false
@@ -8477,6 +8504,16 @@ components:
           description: >-
             True for a standalone agent's project: its owner's one worker
             session, with no orchestrator. Only its owner lists it.
+        canEditSandbox:
+          type: boolean
+          description: >-
+            Whether the caller may change what this project's agents may do
+            in the sandbox (config.sandboxDocker, config.agentsCanUseSudo):
+            the project's creator or an organization owner or admin. Set on
+            the project GET and the settings PATCH responses; absent from
+            older servers and other responses. A settings PATCH that changes
+            either from anyone else is refused whole with 403 and error code
+            sandbox_settings_forbidden.
         config:
           $ref: "#/components/schemas/ProjectConfig"
         createdAt:

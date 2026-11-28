@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
 import { TriangleAlert } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
@@ -26,6 +26,7 @@ import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettin
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./settings/SettingsRow";
+import { Switch } from "./ui/switch";
 import { useUiStore } from "../stores/ui-store";
 
 export const cloudProjectSettingsQueryKey = (baseUrl: string, orgId: string, projectId: string) => ["cloud-project-settings", baseUrl, orgId, projectId] as const;
@@ -73,6 +74,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	// poller); a project without a repository has no issues.
 	const intakeVisible = !standalone;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	if (section === "sandbox") return <CloudProjectSandboxSettings project={project} showDocker={usesCoder} />;
 	const save = async (values: ProjectSettingsDraft) => {
 		const patch = cloudProjectSettingsPatch(saved.current, toCloudDraft(values));
 		let updated: CloudCpProject | undefined;
@@ -131,8 +133,114 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
  * setting, is a failure to save and is reported as one.
  */
 function coAuthorCommitsUnsupported(error: unknown): boolean {
+	return configKeyUnsupported(error, "coAuthorCommits");
+}
+
+/** A control plane's answer to a config key it does not know yet. */
+function configKeyUnsupported(error: unknown, key: string): boolean {
 	return error instanceof CloudCpError && error.status === 422 && error.code === "validation_error" &&
-		error.message === "unsupported or null config.coAuthorCommits";
+		error.message === `unsupported or null config.${key}`;
+}
+
+type SandboxConfigKey = "sandboxDocker" | "agentsCanUseSudo";
+
+/**
+ * Project settings > Sandbox: what an agent may do inside the project's
+ * sandboxes. Docker is on unless the project says false (projects from before
+ * the setting keep it); sudo is off unless the project says true. Docker is a
+ * Coder sandbox feature, so it shows only on a project that runs on Coder.
+ */
+export function CloudProjectSandboxSettings({ project, showDocker }: { project: CloudCpProject; showDocker: boolean }) {
+	const { t } = useTranslation();
+	// false means this user may not change them; absent (an older server) means
+	// unknown, so the switches stay editable and the server's 403 answers. Read
+	// from the current project: a save or refetch puts the server's answer there.
+	// A save refused with sandbox_settings_forbidden (a role lowered after the
+	// page loaded) makes both switches read-only and reads the project again.
+	// Once that read says whether the user may edit (canEditSandbox), it alone
+	// decides, so a role restored later makes them editable again.
+	const { baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
+	const [forbidden, setForbidden] = useState(false);
+	const onForbidden = () => {
+		setForbidden(true);
+		const queryKey = cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id);
+		void queryClient.refetchQueries({ queryKey }).then(() => {
+			if (typeof queryClient.getQueryData<CloudCpProject>(queryKey)?.canEditSandbox === "boolean") setForbidden(false);
+		}, () => undefined);
+	};
+	const rowProps = { project, readOnly: forbidden || project.canEditSandbox === false, onForbidden };
+	return <SettingsGroup title={t("settings.project.sandbox.title")} titleHidden grouped>
+		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
+			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
+			checkedOf={(config) => config?.sandboxDocker !== false} /> : null}
+		<SandboxSwitchRow {...rowProps} configKey="agentsCanUseSudo" id="project-sandbox-sudo"
+			label={t("settings.project.sandbox.sudo")} description={t("settings.project.sandbox.sudoDescription")}
+			checkedOf={(config) => config?.agentsCanUseSudo === true} />
+	</SettingsGroup>;
+}
+
+/**
+ * One sandbox switch, saved on change with only its own key. A control plane
+ * from before the setting rejects the key; the switch then says so and stays
+ * disabled instead of flipping back on every try.
+ */
+function SandboxSwitchRow({ project, readOnly, onForbidden, configKey, id, label, description, checkedOf }: {
+	project: CloudCpProject;
+	readOnly: boolean;
+	onForbidden: () => void;
+	configKey: SandboxConfigKey;
+	id: string;
+	label: string;
+	description: string;
+	checkedOf: (config: CloudCpProject["config"]) => boolean;
+}) {
+	const { t } = useTranslation();
+	const { client, baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
+	// The confirmed value is the current project's: a save or refetch puts the
+	// server's answer there.
+	const saved = checkedOf(project.config);
+	const [unsupported, setUnsupported] = useState(false);
+	// One sandbox save at a time across both rows: each response carries the
+	// whole project and is written to the cache, so overlapping saves could
+	// land out of order and show the other switch's old value.
+	const mutationKey = ["cloud-project-sandbox-settings", baseUrl, project.orgId, project.id];
+	const anySaving = useIsMutating({ mutationKey }) > 0;
+	const save = useMutation({
+		mutationKey,
+		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
+		onSuccess: async (response) => {
+			// A read that started before the save would otherwise land after it
+			// and put the old value back.
+			const settingsKey = cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id);
+			await queryClient.cancelQueries({ queryKey: settingsKey });
+			queryClient.setQueryData(settingsKey, response.project);
+			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+		},
+		onError: (error) => {
+			if (configKeyUnsupported(error, configKey)) setUnsupported(true);
+			else if (error instanceof CloudCpError && error.status === 403 && error.code === "sandbox_settings_forbidden") onForbidden();
+		},
+	});
+	// The value being saved shows until the save settles; a failed one goes back.
+	const shown = save.isPending && save.variables !== undefined ? save.variables : saved;
+	// The description stays; why the switch cannot change, or that a save
+	// failed, goes under it. The server's own words (English) are the tooltip.
+	const status = unsupported ? t("settings.project.sandbox.unsupported") : readOnly ? t("settings.project.sandbox.readOnly") : undefined;
+	const shownDescription = status ? <>
+		{description}
+		<span className="block">{status}</span>
+	</> : save.isError ? <>
+		{description}
+		<span className="block text-error" role="alert" title={save.error instanceof Error ? save.error.message : undefined}>
+			{t("settings.project.saveFailed")}
+		</span>
+	</> : description;
+	return <SettingsRow label={label} description={shownDescription}>
+		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || readOnly || anySaving}
+			onCheckedChange={(checked) => save.mutate(checked)} />
+	</SettingsRow>;
 }
 
 /** The coder config the control plane stores on a project (config.coder). */

@@ -27,7 +27,7 @@ vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.localGet }, apiErr
 
 let project: CloudCpProject;
 
-function mount(section: "general" | "agents" = "agents", onSaveState = vi.fn()) {
+function mount(section: "general" | "agents" | "sandbox" = "agents", onSaveState = vi.fn()) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(<QueryClientProvider client={client}><TooltipProvider><ProjectSettingsForm projectId="project" cloudOrgId="org" section={section} onSaveState={onSaveState} /></TooltipProvider></QueryClientProvider>);
 }
@@ -723,5 +723,156 @@ describe("Cloud project Coder template options", () => {
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
 		expect(mocks.templateParameters).not.toHaveBeenCalled();
 		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
+	});
+});
+
+describe("Cloud project sandbox settings", () => {
+	it("shows Docker on when the project has no sandboxDocker key, and sudo off", async () => {
+		mount("sandbox");
+		expect(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeChecked();
+		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).not.toBeChecked();
+		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
+		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
+		expect(screen.getByText(/Applies to sessions started after you change it/)).toBeInTheDocument();
+	});
+
+	it("shows Docker off when the project says false", async () => {
+		project.config.sandboxDocker = false;
+		mount("sandbox");
+		expect(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked();
+	});
+
+	it("saves each switch with only its own key", async () => {
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { sandboxDocker: false } }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked());
+		await userEvent.click(screen.getByRole("switch", { name: "Agents can use sudo" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { agentsCanUseSudo: true } }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeChecked());
+		expect(mocks.patch).toHaveBeenCalledTimes(2);
+	});
+
+	it("says so when the control plane does not know the key yet", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.agentsCanUseSudo", { status: 422, code: "validation_error" }));
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		await userEvent.click(sudo);
+		expect(await screen.findByText("Not supported by this Cloud server yet.")).toBeInTheDocument();
+		expect(sudo).not.toBeChecked();
+		expect(sudo).toBeDisabled();
+		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeEnabled();
+	});
+
+	it("shows the server's error inline and puts the switch back", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Only org admins can change sandbox settings", { status: 403, code: "forbidden" }));
+		mount("sandbox");
+		const docker = await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" });
+		await userEvent.click(docker);
+		const alert = await screen.findByRole("alert");
+		// The description stays; a translated line goes under it, the server's words in its tooltip.
+		expect(alert).toHaveTextContent("Save failed");
+		expect(alert).toHaveAttribute("title", "Only org admins can change sandbox settings");
+		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
+		expect(docker).toBeChecked();
+		expect(docker).toBeEnabled();
+	});
+
+	it("hides Docker but keeps sudo for a project that does not run on Coder", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle"], defaultProvider: "freestyle", billingMode: "self_serve", kind: "b2c", features: [] } });
+		mount("sandbox");
+		expect(await screen.findByRole("switch", { name: "Agents can use sudo" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeInTheDocument();
+	});
+
+	it("shows both switches read-only when the server says this user cannot edit them", async () => {
+		project = { ...project, canEditSandbox: false };
+		mount("sandbox");
+		const docker = await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" });
+		const sudo = screen.getByRole("switch", { name: "Agents can use sudo" });
+		expect(docker).toBeDisabled();
+		expect(sudo).toBeDisabled();
+		expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2);
+		// The read-only line adds to each description instead of replacing it.
+		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
+		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
+	});
+
+	it("keeps the switches editable when the server does not say, and shows another 403 inline", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Forbidden by policy", { status: 403, code: "forbidden" }));
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		expect(sudo).toBeEnabled();
+		await userEvent.click(sudo);
+		const alert = await screen.findByRole("alert");
+		// The description stays; a translated line goes under it, the server's words in its tooltip.
+		expect(alert).toHaveTextContent("Save failed");
+		expect(alert).toHaveAttribute("title", "Forbidden by policy");
+		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
+		expect(sudo).not.toBeChecked();
+		expect(sudo).toBeEnabled();
+	});
+
+	it("goes read-only when a save is refused with sandbox_settings_forbidden", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		await userEvent.click(sudo);
+		await waitFor(() => expect(sudo).toBeDisabled());
+		expect(sudo).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeDisabled();
+		expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2);
+		expect(screen.queryByText(/only the project's creator or an organization owner/)).not.toBeInTheDocument();
+	});
+
+	it("goes read-only when a save answers that this user can no longer edit", async () => {
+		mocks.patch.mockImplementationOnce(async (_org: string, _id: string, patch: CloudCpProjectSettingsRequest) => {
+			project = { ...project, config: { ...project.config, ...patch.config } as CloudCpProject["config"], canEditSandbox: false };
+			return { project };
+		});
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Agents can use sudo" }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeDisabled());
+		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeChecked();
+	});
+
+	it("keeps both switches disabled while either one saves, so saves cannot overlap", async () => {
+		let finish: (() => void) | undefined;
+		mocks.patch.mockImplementationOnce((_org: string, _id: string, patch: CloudCpProjectSettingsRequest) => new Promise((resolve) => {
+			finish = () => { project = { ...project, config: { ...project.config, ...patch.config } as CloudCpProject["config"] }; resolve({ project }); };
+		}));
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeDisabled());
+		act(() => finish?.());
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeEnabled());
+		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked();
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+	});
+
+	it("turns editable again when a fresh read says the user can edit after a refused save", async () => {
+		project = { ...project, canEditSandbox: true };
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		// The read after the refusal answers that the role was restored.
+		let reads = 0;
+		mocks.get.mockImplementation(async () => { reads += 1; return { project: { ...project } }; });
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		await userEvent.click(sudo);
+		await waitFor(() => expect(reads).toBeGreaterThan(1));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeEnabled());
+		expect(screen.queryByText("Only the project's creator or an org owner or admin can change this.")).not.toBeInTheDocument();
+	});
+
+	it("stays read-only when the fresh read after a refused save says the user still cannot edit", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		let reads = 0;
+		mocks.get.mockImplementation(async () => { reads += 1; return { project: reads > 1 ? { ...project, canEditSandbox: false } : project }; });
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Agents can use sudo" }));
+		await waitFor(() => expect(reads).toBeGreaterThan(1));
+		await waitFor(() => expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2));
+		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeDisabled();
 	});
 });
