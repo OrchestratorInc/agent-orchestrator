@@ -1,0 +1,4 @@
+interface:
+  display_name: "AO Mobile Dev"
+  short_description: "Run this checkout's mobile app on an iPhone in seconds"
+  default_prompt: "Use $ao-mobile-dev to put this checkout's mobile app on my iPhone."

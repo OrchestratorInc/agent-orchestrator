@@ -279,6 +279,40 @@ Rebuild with `npx expo run:ios|run:android` only when **native** config changes:
 plugins or permissions, native dependencies, `expo-build-properties`. After dependency
 surgery, regenerate the native projects from scratch with `npx expo prebuild --clean`.
 
+### One command per branch (iOS)
+
+`npm run device` does the whole loop for the current checkout: it installs `node_modules`
+(cloned from a cache when the lockfile matches), builds a Debug app only when the iOS
+[fingerprint](#over-the-air-updates) changed, installs it if needed, starts Metro on `:8081`
+and opens the app. A branch that only changes JavaScript reuses the app another branch built,
+so it is on the phone in seconds; a new fingerprint costs one native build.
+
+```bash
+npm run device              # build if needed, install if needed, Metro, launch
+npm run device -- --rebuild # force a native build
+npm run device -- stop      # stop Metro
+npm run device -- status    # what is installed, whether Metro is running
+```
+
+- The app installs as **AO Dev** under its own bundle id (`aoagents.ao.dev.<team>`), next to a
+  store build, and pairs with the desktop on its own: use its in-app scanner. It registers
+  `aomobile-dev://` and `ao-app-dev://` instead of the store app's schemes, so the desktop's
+  pairing QR scanned with the Camera, and other `aomobile://` links, keep opening the store app.
+  To test a flow that starts from an outside `aomobile://` link, use a store or `npx expo run:ios`
+  build. Push is left out unless `AO_MOBILE_KEEP_PUSH=1`, since personal teams cannot sign it.
+- One run at a time: a run from another checkout waits for the current one. Metro on `:8081`
+  serves one checkout, so a run says whose Metro it replaces, and `status` shows which checkout
+  and branch Metro is serving.
+- It picks the one reachable iPhone and the team of your Apple Development certificate. Set
+  `AO_MOBILE_UDID`, `AO_MOBILE_TEAM` or `AO_MOBILE_BUNDLE_ID` to choose.
+- The phone loads JavaScript from `http://<Mac LAN IP>:8081`, so keep it on the same Wi-Fi. If the
+  Mac's address changes, the script re-signs the cached app with the new one.
+- A free developer profile allows three of its apps on a phone; delete one if the install says so.
+- Free-team provisioning profiles last seven days and only cover registered devices. A cached app
+  whose profile has expired, or doesn't list the selected iPhone, is rebuilt for that iPhone
+  (registering it) and reinstalled.
+- Builds and the `node_modules` store live in `~/.ao/dev/mobile-device`; it needs tmux.
+
 ## Over-the-air updates
 
 Preview and production builds pull JS-only changes from
