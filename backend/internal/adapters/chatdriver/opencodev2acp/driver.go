@@ -53,7 +53,8 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 }
 
 // DiscoverConfigOptions uses Chat's inline config and isolated data home so
-// discovery sees the providers the launched ACP session will accept.
+// discovery sees the providers the launched ACP session will accept. The probe
+// session is deleted afterwards so it never shows in OpenCode's history.
 func DiscoverConfigOptions(ctx context.Context, request ports.AgentModelDiscoveryRequest, log *slog.Logger) ([]ports.ChatConfigOption, error) {
 	args, overrides, err := configure(ctx, acpdriver.LaunchConfig{Env: request.Env})
 	if err != nil {
@@ -66,9 +67,13 @@ func DiscoverConfigOptions(ctx context.Context, request ports.AgentModelDiscover
 	for key, value := range overrides {
 		env[key] = value
 	}
-	return acpdriver.DiscoverConfigOptions(ctx, acpdriver.Launch{
-		Command: request.Binary, Args: args, Env: env,
-	}, request.WorkingDir, log)
+	launch := acpdriver.Launch{Command: request.Binary, Args: args, Env: env}
+	return acpdriver.DiscoverConfigOptionsWithoutHistory(ctx, launch, request.WorkingDir,
+		acpdriver.CommandProbeCleanup(launch, request.WorkingDir, deleteSessionArgs), log)
+}
+
+func deleteSessionArgs(sessionID string) []string {
+	return []string{"session", "delete", sessionID, "--standalone"}
 }
 
 // OpenCode 2's ACP bridge advertises the built-in modes before custom agents

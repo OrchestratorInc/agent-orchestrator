@@ -5331,7 +5331,7 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}, slog.New(slog.DiscardHandler))
 	driver.useTestProcess(fakeSpawn(agent))
 
-	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5340,6 +5340,79 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}
 	if agent.promptParams.Prompt != nil {
 		t.Fatalf("discovery sent a prompt: %#v", agent.promptParams)
+	}
+}
+
+// OpenCode keeps every session/new in the user's history, so a discovery probe
+// must not leave one behind (review comment on PR #9193).
+func TestDiscoverConfigOptionsDeletesProbeSessionOverACP(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{SessionCapabilities: acpsdk.SessionCapabilities{
+			Delete: &acpsdk.SessionDeleteCapabilities{},
+		}},
+		newConfig: []acpsdk.SessionConfigOption{
+			selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "opus"),
+		},
+	}
+	driver := New(Config{
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "opencode"}, nil },
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	var fallback []string
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir(), &probeCleanup{
+		fallback: func(_ context.Context, sessionID string) error {
+			fallback = append(fallback, sessionID)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Current.Select != "sonnet" {
+		t.Fatalf("options = %#v", got)
+	}
+	agent.mu.Lock()
+	deleted := append([]string(nil), agent.deletedForks...)
+	agent.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "claude-session-1" {
+		t.Fatalf("deleted sessions = %v, want the probe session", deleted)
+	}
+	if len(fallback) != 0 {
+		t.Fatalf("fallback ran for %v after an ACP delete", fallback)
+	}
+}
+
+func TestDiscoverConfigOptionsFallsBackWithoutACPDelete(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "opus"),
+	}}
+	driver := New(Config{
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "opencode"}, nil },
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	var fallback []string
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir(), &probeCleanup{
+		fallback: func(_ context.Context, sessionID string) error {
+			fallback = append(fallback, sessionID)
+			return errors.New("cleanup failed")
+		},
+	})
+	if err != nil {
+		t.Fatalf("a failed cleanup must not fail discovery: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("options = %#v", got)
+	}
+	agent.mu.Lock()
+	deleted := append([]string(nil), agent.deletedForks...)
+	agent.mu.Unlock()
+	if len(deleted) != 0 {
+		t.Fatalf("deleted %v over ACP without the delete capability", deleted)
+	}
+	if len(fallback) != 1 || fallback[0] != "claude-session-1" {
+		t.Fatalf("fallback sessions = %v, want the probe session", fallback)
 	}
 }
 
@@ -5363,7 +5436,7 @@ func TestDiscoverConfigOptionsReadsLegacyModels(t *testing.T) {
 	}, slog.New(slog.DiscardHandler))
 	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
 
-	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6770,7 +6843,7 @@ func TestLegacyModelDiscoveryStaysHermesOnly(t *testing.T) {
 				},
 			}, slog.New(slog.DiscardHandler))
 			driver.useTestProcess(fakeLegacyKimiSpawn(agent))
-			options, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+			options, err := driver.discoverConfigOptions(context.Background(), t.TempDir(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,11 +1,13 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +52,27 @@ func (r *gatedReader) Read(dst []byte) (int, error) {
 func (r *gatedReader) Open() { r.once.Do(func() { close(r.ready) }) }
 
 type spawnFunc func(Launch, string) (*process, error)
+
+// probeCommandTimeout bounds a provider CLI that removes a discovery probe.
+const probeCommandTimeout = 15 * time.Second
+
+// CommandProbeCleanup removes a discovery probe session with the provider's
+// own CLI, run like the discovery launch: same binary and environment, in
+// workdir. args returns the CLI arguments that delete sessionID.
+func CommandProbeCleanup(launch Launch, workdir string, args func(sessionID string) []string) ProbeSessionCleanup {
+	return func(ctx context.Context, sessionID string) error {
+		ctx, cancel := context.WithTimeout(ctx, probeCommandTimeout)
+		defer cancel()
+		argv := args(sessionID)
+		cmd := aoprocess.CommandContext(ctx, launch.Command, argv...)
+		cmd.Dir = workdir
+		cmd.Env = processenv.Merge(launch.Env)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%s %s: %w: %s", launch.Command, strings.Join(argv, " "), err, bytes.TrimSpace(out))
+		}
+		return nil
+	}
+}
 
 func spawnAgent(launch Launch, workdir string) (*process, error) {
 	cmd := aoprocess.Command(launch.Command, launch.Args...)
