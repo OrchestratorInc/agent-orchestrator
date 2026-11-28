@@ -49,6 +49,8 @@ export const SURFACES = [
 	"settings_theme",
 	"settings_machine",
 	"settings_cloud",
+	// A link to a route the app does not have, or expo-router's sitemap.
+	"not_found",
 	"other",
 ] as const;
 
@@ -101,6 +103,8 @@ const ROUTES: Record<string, Surface> = {
 	"settings/machine/[id]/edit": "settings_machine",
 	"settings/cloud": "settings_cloud",
 	"settings/cloud/agent/[agent]": "settings_cloud",
+	"+not-found": "not_found",
+	_sitemap: "not_found",
 };
 
 /** The route key for expo-router's segments: groups like `(tabs)` and `index` dropped. */

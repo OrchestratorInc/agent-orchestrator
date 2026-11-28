@@ -59,6 +59,8 @@ export const ERROR_KINDS = [
 	"phone_offline",
 	"cloud_unavailable",
 	"action_failed",
+	// A link to a route the app does not have (see NotFoundScreen).
+	"route_not_found",
 ] as const;
 export type ErrorKind = (typeof ERROR_KINDS)[number];
 

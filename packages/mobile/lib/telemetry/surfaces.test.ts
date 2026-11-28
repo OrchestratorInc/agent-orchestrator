@@ -11,6 +11,8 @@ describe("surfaceForSegments", () => {
 		expect(surfaceForSegments(["files", "[sessionId]", "file"])).toBe("file_viewer");
 		expect(surfaceForSegments(["settings", "machine", "[id]", "edit"])).toBe("settings_machine");
 		expect(surfaceForSegments(["sheets", "model"])).toBe("model_picker");
+		expect(surfaceForSegments(["+not-found"])).toBe("not_found");
+		expect(surfaceForSegments(["_sitemap"])).toBe("not_found");
 	});
 
 	it("names an unknown route other", () => {
