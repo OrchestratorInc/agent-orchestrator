@@ -223,8 +223,8 @@ func labeledFileURL(baseURL, label string, id domain.SessionID, entry string) (s
 }
 
 // InlineArtifactFileURL builds the origin that frames a session's HTML
-// artifact inline in the chat thread, on a host distinct from both preview
-// origins.
+// artifact inline in the Artifacts tab and its previews, on a host distinct
+// from both preview origins.
 func InlineArtifactFileURL(baseURL string, id domain.SessionID, entry string) (string, error) {
 	return labeledFileURL(baseURL, inlineArtifactHostLabel, id, entry)
 }

@@ -7,7 +7,7 @@ import { setApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
-import type { SessionArtifact } from "../../types/workspace";
+import type { SessionArtifact, WorkspaceSession } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ActivityRow } from "./ChatTimelineItems";
@@ -519,55 +519,147 @@ describe("artifact activity", () => {
 	const previewUrl = "http://ao-preview-artifact.x.localhost:3001/q3/Q3%20(final).html";
 	const inlineUrl = "http://ao-inline-artifact.x.localhost:3001/q3/Q3%20(final).html";
 	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, inlineUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
-	// What a local session lists for the card's page.
+	// What a local session lists for the row's file.
 	const listed = [sessionArtifact("q3/Q3 (final).html")];
+	const openButton = () => screen.getByRole("button", { name: "Artifact Q3 (final).html" });
 
-	function renderArtifact(artifacts: SessionArtifact[] | undefined = listed, activity = artifactActivity) {
+	function renderArtifact(artifacts: SessionArtifact[] | undefined = listed, hostId?: string) {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		return render(
 			<QueryClientProvider client={client}>
-				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
-					<ActivityRow activity={activity} />
+				<ChatImageSourceProvider sessionId="proj-1" hostId={hostId} remoteHost={Boolean(hostId)} artifacts={artifacts}>
+					<ActivityRow activity={artifactActivity} />
 				</ChatImageSourceProvider>
 			</QueryClientProvider>,
 		);
 	}
 
-	async function expandArtifact(artifacts: SessionArtifact[] = listed) {
-		const user = userEvent.setup();
-		renderArtifact(artifacts);
-		await user.click(screen.getByRole("button", { name: "Expand page" }));
-		return { user, dialog: await screen.findByRole("dialog") };
-	}
-
-	const artifactFrame = () => screen.getByTitle("Q3 (final).html") as HTMLIFrameElement;
-
-	it("frames the artifact from its own inline origin, same-origin there, when the session lists one", () => {
-		renderArtifact();
-		expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
-		expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-same-origin");
+	beforeEach(() => setApiBaseUrl("http://127.0.0.1:3001"));
+	afterEach(() => {
+		setApiBaseUrl(null);
+		useUiStore.setState({ inspectorSessions: {} });
 	});
 
-	it("never frames an inline URL off the inline-artifact origin", () => {
-		// allow-same-origin on the app's own origin would let the page script the app.
-		for (const offOrigin of ["http://localhost:5173/q3/x.html", "app://renderer/x.html", "http://ao-inline-artifact.x.example/x.html"]) {
-			const { unmount } = renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl: offOrigin }]);
-			expect(document.querySelector("iframe")).toBeNull();
-			unmount();
+	it("names the artifact in one row and never frames its page in the thread", () => {
+		renderArtifact();
+		expect(document.querySelector("iframe")).toBeNull();
+		const row = screen.getByTestId("reported-artifact-row");
+		expect(row).toHaveTextContent("Artifact");
+		expect(row).toHaveTextContent("Q3 (final).html");
+	});
+
+	it("opens the artifact in the Artifacts tab from the row", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+		try {
+			const user = userEvent.setup();
+			renderArtifact();
+			await user.click(openButton());
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
+			expect(fetch).not.toHaveBeenCalled();
+		} finally {
+			fetch.mockRestore();
 		}
 	});
 
-	it("points to the Artifacts tab for a listed file with no inline page", () => {
-		// A page renamed to another kind of file is still listed, but has no inline URL.
-		const renamed: SessionArtifact = { ...sessionArtifact("q3/notes.md"), kind: "markdown", inlineUrl: undefined, previousPaths: ["q3/Q3 (final).html"] };
-		renderArtifact([renamed]);
+	it("opens the artifact on its remote host's session, so that session's view takes the request", async () => {
+		const user = userEvent.setup();
+		renderArtifact(listed, "https://lab.example:3001");
 		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText("This file can't be shown here. Open it in the Artifacts tab.")).toBeInTheDocument();
-		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Artifacts tab" })).toBeInTheDocument();
+		await user.click(openButton());
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
+			sessionId: "proj-1",
+			hostId: "https://lab.example:3001",
+			path: "q3/Q3 (final).html",
+			source: "artifact",
+		});
 	});
 
-	it("rereads the session's artifacts while a card's page is missing, and frames it once listed", () => {
-		// The card arrives on the chat stream; the list can lag behind a page just reported.
+	it("opens an old row's file where it was renamed to", async () => {
+		const user = userEvent.setup();
+		const renamed: SessionArtifact = { ...sessionArtifact("q3/final/report.html"), previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([sessionArtifact("other.html"), renamed]);
+		await user.click(openButton());
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/final/report.html", source: "artifact" });
+	});
+
+	it("prefers the file listed at the row's path over one renamed away from it", async () => {
+		const user = userEvent.setup();
+		const elsewhere: SessionArtifact = { ...sessionArtifact("old/report.html"), previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([elsewhere, sessionArtifact("q3/Q3 (final).html")]);
+		await user.click(openButton());
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ path: "q3/Q3 (final).html" });
+	});
+
+	it("mutes a row whose file the session does not list, and says why instead of offering a dead click", () => {
+		renderArtifact([sessionArtifact("other.html")]);
+		const row = screen.getByTestId("reported-artifact-row");
+		expect(row).toHaveTextContent("Q3 (final).html");
+		expect(row).toHaveTextContent("This page is no longer in the session's artifacts.");
+		expect(row).toHaveAttribute("title", "This page is no longer in the session's artifacts.");
+		expect(screen.queryByRole("button")).toBeNull();
+		expect(document.querySelector("iframe")).toBeNull();
+	});
+
+	it("does not call a file gone while the session's list is still loading", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatImageSourceProvider sessionId="proj-1" remoteHost>
+					<ActivityRow activity={artifactActivity} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		const row = screen.getByTestId("reported-artifact-row");
+		expect(row).toHaveTextContent("Q3 (final).html");
+		expect(row).not.toHaveTextContent("This page is no longer in the session's artifacts.");
+		expect(row).not.toHaveAttribute("title");
+		expect(screen.queryByRole("button")).toBeNull();
+	});
+
+	describe("in a cloud chat", () => {
+		const cloud = { orgId: "org-1" } as WorkspaceSession["cloud"];
+
+		function renderCloud(artifacts: SessionArtifact[], session: WorkspaceSession["cloud"] = cloud) {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			const invalidated = vi.spyOn(client, "invalidateQueries").mockResolvedValue();
+			render(
+				<QueryClientProvider client={client}>
+					<ChatImageSourceProvider sessionId="cloud-1" artifacts={artifacts} cloud={session}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</QueryClientProvider>,
+			);
+			return invalidated;
+		}
+
+		it("opens a file the list has not caught up with yet, rereading the list once on the click rather than polling", async () => {
+			const user = userEvent.setup();
+			const invalidated = renderCloud([]);
+			expect(screen.queryByText("This page is no longer in the session's artifacts.")).toBeNull();
+			expect(invalidated).not.toHaveBeenCalled();
+			await user.click(openButton());
+			expect(invalidated).toHaveBeenCalledExactlyOnceWith({ queryKey: ["cloud-sessions"] });
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "cloud-1", path: "q3/Q3 (final).html", source: "artifact" });
+		});
+
+		it("rereads the shared workspaces list for a session shared with the reader", async () => {
+			const user = userEvent.setup();
+			const invalidated = renderCloud([], { ...cloud, shared: true } as WorkspaceSession["cloud"]);
+			await user.click(openButton());
+			expect(invalidated).toHaveBeenCalledExactlyOnceWith({ queryKey: ["cloud-shared-workspaces"] });
+		});
+
+		it("opens a listed file without rereading the list", async () => {
+			const user = userEvent.setup();
+			const invalidated = renderCloud(listed);
+			await user.click(openButton());
+			expect(invalidated).not.toHaveBeenCalled();
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "cloud-1", path: "q3/Q3 (final).html", source: "artifact" });
+		});
+	});
+
+	it("rereads the session's artifacts while a row's file is missing, and offers to open it once listed", () => {
+		// The row arrives on the chat stream; the list can lag behind a file just reported.
 		const opened: string[] = [];
 		const closed: string[] = [];
 		class EventSourceStub {
@@ -593,262 +685,30 @@ describe("artifact activity", () => {
 			);
 			const { rerender } = rtlRender(view([]));
 			expect(opened).toEqual(["http://127.0.0.1:3001/api/v1/sessions/proj-1/artifact-events"]);
+			expect(screen.queryByRole("button")).toBeNull();
 			rerender(view(listed));
-			expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
-			// Listed, the card stops following the directory.
+			expect(openButton()).toBeInTheDocument();
+			// Listed, the row stops following the directory.
 			expect(closed).toEqual(opened);
 		} finally {
 			vi.unstubAllGlobals();
 		}
 	});
 
-	beforeEach(() => setApiBaseUrl("http://127.0.0.1:3001"));
-	afterEach(() => {
-		setApiBaseUrl(null);
-		useUiStore.setState({ inspectorSessions: {} });
-	});
-
-	it("frames the artifact at 400 until the page reports its height", () => {
-		renderArtifact();
-		expect(artifactFrame().style.height).toBe("400px");
-		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 520 } }, artifactFrame().contentWindow);
-		expect(artifactFrame().style.height).toBe("520px");
-	});
-
-	it("offers wrapping for HTML artifacts too", async () => {
-		const user = userEvent.setup();
-		renderArtifact();
-		const inline = artifactFrame();
-		const sent = vi.spyOn(inline.contentWindow!, "postMessage");
-		await user.click(screen.getByRole("button", { name: "Wrap content" }));
-		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: true, scrollable: true }) }), "*");
-	});
-
-	it("caps the inline artifact at 640 and lets the page scroll inside it, so a page sized to its viewport cannot ratchet the frame", () => {
-		renderArtifact();
-		const fragment = JSON.parse(decodeURIComponent(artifactFrame().getAttribute("src")!.split("#ao-theme=")[1]!));
-		expect(fragment).toMatchObject({ displayMode: "inline", scrollable: true });
-		// A min-height:100vh page reports the frame height plus its padding, again and again.
-		for (const height of [448, 496, 688, 1_200, 2_000]) {
-			post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, artifactFrame().contentWindow);
-		}
-		expect(artifactFrame().style.height).toBe("640px");
-	});
-
-	it("fits the expanded artifact past 640, leaving the window to cap it", async () => {
-		const { dialog } = await expandArtifact();
-		const expanded = within(dialog).getByTitle("Q3 (final).html") as HTMLIFrameElement;
-		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 900 } }, expanded.contentWindow);
-		expect(expanded.style.height).toBe("900px");
-		expect(expanded.className).toContain("max-h-[calc(100svh-8rem)]");
-	});
-
-	it("shows the remote-host note instead of a frame", () => {
-		render(
-			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
-				<ActivityRow activity={artifactActivity} />
-			</ChatImageSourceProvider>,
-		);
-		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText(/Q3 \(final\)\.html/)).toHaveTextContent("Q3 (final).html · Open this session on its host to see the page.");
-	});
-
-	it("heads the dialog with the artifact's name and has no Save as artifact", async () => {
-		const { dialog } = await expandArtifact();
-		expect(within(dialog).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
-		for (const name of ["View source", "Save page", "Close"]) {
-			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
-		}
-		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
-	});
-
-	it("shows an old card's page under the name it was renamed to", async () => {
-		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("<p>report</p>"));
-		try {
-			const renamedInline = "http://ao-inline-artifact.x.localhost:3001/q3/final/report.html";
-			const renamed: SessionArtifact = { ...sessionArtifact("q3/final/report.html"), inlineUrl: renamedInline, previousPaths: ["q3/Q3 (final).html"] };
-			const { user, dialog } = await expandArtifact([sessionArtifact("other.html"), renamed]);
-			expect((within(dialog).getByTitle("Q3 (final).html") as HTMLIFrameElement).getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/final\/report\.html#ao-theme=/);
-			await user.click(within(dialog).getByRole("button", { name: "View source" }));
-			// Read from where the file is now, not the route the card recorded.
-			await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/artifact-files/q3/final/report.html?source=1", expect.anything()));
-			await user.click(within(dialog).getByRole("button", { name: "Open in Artifacts tab" }));
-			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/final/report.html", source: "artifact" });
-		} finally {
-			fetch.mockRestore();
-		}
-	});
-
-	it("prefers the page listed at the card's path over one renamed away from it", () => {
-		const elsewhere: SessionArtifact = { ...sessionArtifact("old/report.html"), inlineUrl: "http://ao-inline-artifact.x.localhost:3001/old/report.html", previousPaths: ["q3/Q3 (final).html"] };
-		renderArtifact([elsewhere, sessionArtifact("q3/Q3 (final).html")]);
-		expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
-	});
-
-	it("closes the open dialog when its page is deleted, rather than framing the daemon's refusal", async () => {
-		const user = userEvent.setup();
-		const client = new QueryClient();
-		const view = (artifacts: SessionArtifact[]) => (
-			<TooltipProvider>
-				<QueryClientProvider client={client}>
-					<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
-						<ActivityRow activity={artifactActivity} />
-					</ChatImageSourceProvider>
-				</QueryClientProvider>
-			</TooltipProvider>
-		);
-		const { rerender } = rtlRender(view(listed));
-		await user.click(screen.getByRole("button", { name: "Expand page" }));
-		expect(await screen.findByRole("dialog")).toBeInTheDocument();
-		rerender(view([]));
-		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText("This page is no longer in the session's artifacts.")).toBeInTheDocument();
-	});
-
-	it("says a page the session no longer lists is gone, rather than framing the daemon's refusal", () => {
-		// The card's artifact-files route refuses frames (ORIGIN_FORBIDDEN), so an old
-		// card whose page was deleted must not frame it and show that error's JSON.
-		const unlisted = () => render(
-			<QueryClientProvider client={new QueryClient()}>
-				<ChatImageSourceProvider sessionId="proj-1">
-					<ActivityRow activity={artifactActivity} />
-				</ChatImageSourceProvider>
-			</QueryClientProvider>,
-		);
-		for (const show of [() => renderArtifact([]), () => renderArtifact([sessionArtifact("other.html")]), unlisted]) {
-			const { unmount } = show();
-			expect(document.querySelector("iframe")).toBeNull();
-			expect(screen.getByText("This page is no longer in the session's artifacts.")).toBeInTheDocument();
-			const header = screen.getByTestId("artifact-card-header");
-			expect(header).toHaveTextContent("Q3 (final).html");
-			for (const name of ["Expand page", "Wrap content", "Open in Artifacts tab", "Open in Orchestrator Browser"]) {
-				expect(screen.queryByRole("button", { name })).toBeNull();
+	it("does not follow a remote host's artifact directory from this computer", () => {
+		const opened: string[] = [];
+		vi.stubGlobal("EventSource", class {
+			constructor(url: string) {
+				opened.push(url);
 			}
-			unmount();
-		}
-	});
-
-	it("opens the artifact in the external browser from its preview origin, not the app-only artifact route", async () => {
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-		try {
-			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
-			// No #ao-theme: that fragment is the chat frame's own hand-off.
-			expect(open).toHaveBeenCalledExactlyOnceWith(previewUrl, "_blank", "noopener,noreferrer");
-		} finally {
-			open.mockRestore();
-		}
-	});
-
-	it("opens the artifact in the session's Browser panel from its preview origin", async () => {
-		const user = userEvent.setup();
-		const onLinkOpen = vi.fn();
-		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-		render(
-			<QueryClientProvider client={client}>
-				<ChatLinkProvider onLinkOpen={onLinkOpen}>
-					<ChatImageSourceProvider sessionId="proj-1" artifacts={[sessionArtifact("q3/Q3 (final).html")]}>
-						<ActivityRow activity={artifactActivity} />
-					</ChatImageSourceProvider>
-				</ChatLinkProvider>
-			</QueryClientProvider>,
-		);
-		await user.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
-		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(previewUrl);
-	});
-
-	it("opens the artifact in the Artifacts tab and closes the dialog", async () => {
-		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
-		try {
-			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(dialog).getByRole("button", { name: "Open in Artifacts tab" }));
-			expect(screen.queryByRole("dialog")).toBeNull();
-			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
-			expect(fetch).not.toHaveBeenCalled();
-		} finally {
-			fetch.mockRestore();
-		}
-	});
-
-	it("labels the inline card as an artifact with its name", () => {
-		renderArtifact([]);
-		const header = screen.getByTestId("artifact-card-header");
-		expect(header).toHaveTextContent("Artifact");
-		expect(header).toHaveTextContent("Q3 (final).html");
-		// The session lists no preview for this artifact, so there is nothing to open.
-		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
-	});
-
-	it("folds the page from its header and keeps it folded when the card remounts", async () => {
-		const user = userEvent.setup();
-		// Its own card: the fold is remembered per card for the rest of the run.
-		const activity = { ...artifactActivity, id: "act-fold" };
-		const fold = () => within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" });
-		const { unmount } = renderArtifact(listed, activity);
-		expect(fold()).toHaveAttribute("aria-expanded", "true");
-		const frame = artifactFrame();
-		await user.click(fold());
-		expect(fold()).toHaveAttribute("aria-expanded", "false");
-		// Folded, the page leaves the tab order and its hover actions go with it.
-		expect(frame.closest("[inert]")).not.toBeNull();
-		expect(screen.queryByRole("button", { name: "Expand page" })).toBeNull();
-		// A long chat remounts a card that scrolls away; it comes back folded, without loading the page.
-		unmount();
-		renderArtifact(listed, activity);
-		expect(fold()).toHaveAttribute("aria-expanded", "false");
-		expect(screen.queryByTitle("Q3 (final).html")).toBeNull();
-		await user.click(fold());
-		expect(fold()).toHaveAttribute("aria-expanded", "true");
-		expect(artifactFrame().closest("[inert]")).toBeNull();
-		expect(screen.getByRole("button", { name: "Expand page" })).toBeInTheDocument();
-	});
-
-	it("opens a later report of a folded file unfolded", async () => {
-		const user = userEvent.setup();
-		const first = renderArtifact(listed, { ...artifactActivity, id: "act-fold-first" });
-		await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" }));
-		first.unmount();
-		renderArtifact(listed, { ...artifactActivity, id: "act-fold-later" });
-		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" })).toHaveAttribute("aria-expanded", "true");
-		expect(artifactFrame()).toBeInTheDocument();
-	});
-
-	it("opens the artifact in the Artifacts tab straight from the card", async () => {
-		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
-		try {
-			const user = userEvent.setup();
-			renderArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Artifacts tab" }));
-			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
-			expect(fetch).not.toHaveBeenCalled();
-		} finally {
-			fetch.mockRestore();
-		}
-	});
-
-	it("reads the source and saves the served page under the artifact's name", async () => {
-		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("<p>report</p>"));
-		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
-		const revoked = vi.fn();
-		Object.assign(URL, { createObjectURL: () => "blob:artifact", revokeObjectURL: revoked });
-		const clicked: HTMLAnchorElement[] = [];
-		const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-			clicked.push(this);
+			addEventListener() {}
+			close() {}
 		});
 		try {
-			const { user, dialog } = await expandArtifact();
-			await user.click(within(dialog).getByRole("button", { name: "View source" }));
-			expect(await within(dialog).findByText("<p>report</p>")).toBeInTheDocument();
-			expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:3001${url}?source=1`, expect.anything());
-			await user.click(within(dialog).getByRole("button", { name: "Save page" }));
-			await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:artifact"));
-			expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:3001${url}`, expect.anything());
-			expect(clicked.map((link) => link.download)).toEqual(["Q3 (final).html"]);
+			renderArtifact([], "https://lab.example:3001");
+			expect(opened).toEqual([]);
 		} finally {
-			click.mockRestore();
-			Object.assign(URL, original);
-			fetch.mockRestore();
+			vi.unstubAllGlobals();
 		}
 	});
 });

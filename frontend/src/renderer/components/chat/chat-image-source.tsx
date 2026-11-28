@@ -10,7 +10,6 @@ import { createContext, useContext, useMemo, useState, useSyncExternalStore, typ
 import { getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { isAbsoluteMarkdownAssetSrc, resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
 import type { SessionArtifact, WorkspaceSession } from "../../types/workspace";
-import { isInlineArtifactUrl } from "../../../shared/agent-page-url";
 
 type ChatImageSource = { sessionId: string; version: number; baseUrl?: string; remoteHost: boolean; hostId?: string; artifacts?: SessionArtifact[]; cloud?: WorkspaceSession["cloud"] };
 
@@ -70,14 +69,13 @@ function findChatArtifact(artifacts: readonly SessionArtifact[] | undefined, pat
 }
 
 /**
- * What the session lists for one of its artifact files, by path: where it is
- * now, the Browser panel URL, and the URL that frames the page inline from its
- * own origin.
+ * Where the session lists one of its artifact files now, with the chat's
+ * session and remote host; undefined when it does not list it, so nothing
+ * offers to open a file the session cannot show.
  */
-export function useChatArtifactLinks(path: string | undefined): { sessionId: string; path: string; previewUrl?: string; inlineUrl?: string } | undefined {
+export function useChatArtifactLinks(path: string | undefined): { sessionId: string; hostId?: string; path: string } | undefined {
 	const source = useContext(ChatImageSourceContext);
 	const artifact = path === undefined ? undefined : findChatArtifact(source?.artifacts, path);
 	if (!source || !artifact) return undefined;
-	const inlineUrl = artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
-	return { sessionId: source.sessionId, path: artifact.path, previewUrl: artifact.previewUrl, inlineUrl };
+	return { sessionId: source.sessionId, hostId: source.hostId, path: artifact.path };
 }

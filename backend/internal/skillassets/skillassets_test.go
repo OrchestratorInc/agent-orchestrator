@@ -276,7 +276,7 @@ func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testi
 		"Do not attach them unless requested or needed to explain an actionable failure",
 		"Summarize validation in the report note",
 		"not external publishing authorization",
-		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
+		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` shows in the thread as a row naming it, not as the page itself",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("report guidance missing %q", want)
@@ -294,7 +294,7 @@ func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 		"## ao render or a session artifact",
 		"when the page answers a question in the thread",
 		"attach it with `ao report --artifact <path>`",
-		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
+		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` shows in the thread as a row naming it, not as the page itself",
 		"add `--artifact` to `ao render` (or set `artifact: true` in `html_render`). Do this only when the user asks to keep the page.",
 	} {
 		if !strings.Contains(guidance, want) {

@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { darkTheme, lightTheme } from "../theme";
 import {
-	ARTIFACT_FRAME_HEIGHT,
 	RENDER_BRIDGE_SCRIPT,
-	artifactRenderRef,
 	readArtifactRef,
 	RENDER_MAX_HEIGHT,
 	REPORT_SETTLE_LIMIT_MS,
@@ -62,15 +60,9 @@ describe("readRenderRef", () => {
 });
 
 describe("readArtifactRef", () => {
-	it("reads the HTML page an agent reported, and builds the phone's own URL for it", () => {
+	it("reads the HTML page an agent reported by its path and name", () => {
 		const ref = readArtifactRef({ event: "artifact", artifact: { path: "site/report.html", name: "report.html", url: "/api/v1/sessions/ao-1/artifact-files/site/report.html" } } as never);
 		expect(ref).toEqual({ path: "site/report.html", name: "report.html" });
-		expect(artifactRenderRef("ao-1", ref!)).toEqual({
-			id: "artifact:site/report.html",
-			title: "report.html",
-			height: ARTIFACT_FRAME_HEIGHT,
-			path: "/api/v1/sessions/ao-1/preview/files/__ao_artifacts__/site/report.html",
-		});
 	});
 
 	it("ignores other events and paths that could leave the artifact folder", () => {
