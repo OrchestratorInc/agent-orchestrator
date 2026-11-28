@@ -43,39 +43,74 @@ export function uniqueMentions<T extends Pick<ComposerMention, "kind" | "id">>(m
 	});
 }
 
+/**
+ * The workspace's name as the @ menu titles its people, or undefined for the
+ * neutral title: a personal workspace is named by its owner's email, and a
+ * name in the menu is never an email address.
+ */
+export function mentionWorkspaceName(name: string | undefined): string | undefined {
+	const trimmed = name?.trim();
+	return trimmed && !/[^\s@]+@[^\s@]+\.[^\s@]+/.test(trimmed) ? trimmed : undefined;
+}
+
 /** What a chip reads as in the text: `@` and the name. */
 export function mentionText(mention: Pick<ComposerMention, "name">): string {
 	return `@${mention.name}`;
 }
 
 /**
- * Text with each mention's `@Name` picked out, for drawing it as a chip:
- * where a mention starts the text or follows whitespace and ends where the
- * name does. Longer names win, so "@Chen Wei" is not read as "@Chen".
+ * Picks each mention's `@Name` out of text, for drawing it as a chip: where a
+ * mention starts the text or follows whitespace and ends where the name does.
+ * Longer names win, so "@Chen Wei" is not read as "@Chen". Each `@Name` takes
+ * the next mention of that name, in order, so two people who share a name (or
+ * a person and a team) stay the ones written there; past the last of a name
+ * it takes that name's last mention again, so a list with each person once
+ * still draws every repeat. One splitter carries that order across the lines
+ * of one text.
  */
-export function splitByMentions<T extends { name: string }>(text: string, mentions: readonly T[]): Array<string | T> {
-	if (mentions.length === 0 || !text.includes("@")) return [text];
-	const ordered = [...mentions].filter((mention) => mention.name !== "").sort((a, b) => b.name.length - a.name.length);
-	const parts: Array<string | T> = [];
-	let plain = "";
-	let index = 0;
-	while (index < text.length) {
-		if (text[index] === "@" && (index === 0 || /\s/.test(text[index - 1]!))) {
-			const match = ordered.find((mention) => text.startsWith(mentionText(mention), index) &&
-				!/[\p{L}\p{N}_]/u.test(text[index + mentionText(mention).length] ?? " "));
-			if (match) {
-				if (plain) parts.push(plain);
-				plain = "";
-				parts.push(match);
-				index += mentionText(match).length;
-				continue;
-			}
-		}
-		plain += text[index];
-		index += 1;
+export function mentionSplitter<T extends { name: string }>(mentions: readonly T[]): (text: string) => Array<string | T> {
+	const queues = new Map<string, T[]>();
+	for (const mention of mentions) {
+		if (mention.name === "") continue;
+		const queue = queues.get(mention.name) ?? [];
+		queue.push(mention);
+		queues.set(mention.name, queue);
 	}
-	if (plain) parts.push(plain);
-	return parts;
+	const names = [...queues.keys()].sort((a, b) => b.length - a.length);
+	const last = new Map<string, T>();
+	const take = (name: string): T => {
+		const next = queues.get(name)!.shift() ?? last.get(name)!;
+		last.set(name, next);
+		return next;
+	};
+	return (text) => {
+		if (names.length === 0 || !text.includes("@")) return [text];
+		const parts: Array<string | T> = [];
+		let plain = "";
+		let index = 0;
+		while (index < text.length) {
+			if (text[index] === "@" && (index === 0 || /\s/.test(text[index - 1]!))) {
+				const name = names.find((candidate) => text.startsWith(`@${candidate}`, index) &&
+					!/[\p{L}\p{N}_]/u.test(text[index + candidate.length + 1] ?? " "));
+				if (name !== undefined) {
+					if (plain) parts.push(plain);
+					plain = "";
+					parts.push(take(name));
+					index += name.length + 1;
+					continue;
+				}
+			}
+			plain += text[index];
+			index += 1;
+		}
+		if (plain) parts.push(plain);
+		return parts;
+	};
+}
+
+/** Text with each mention's `@Name` picked out (mentionSplitter), for one piece of text. */
+export function splitByMentions<T extends { name: string }>(text: string, mentions: readonly T[]): Array<string | T> {
+	return mentionSplitter(mentions)(text);
 }
 
 /** The mentions an event records, each with the name it had when sent; anything malformed is left out. */

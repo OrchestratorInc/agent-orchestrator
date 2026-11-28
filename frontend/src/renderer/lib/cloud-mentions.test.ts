@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CloudCpError } from "./cloud-cp/errors";
-import { isPathQuery, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionSections, mentionToken, parseEventMentions, splitByMentions, uniqueMentions } from "./cloud-mentions";
+import { isPathQuery, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionSections, mentionToken, parseEventMentions, mentionWorkspaceName, splitByMentions, uniqueMentions } from "./cloud-mentions";
 
 describe("mention tokens", () => {
 	it("sends a person by userId and a team by teamId, never a name", () => {
@@ -27,6 +27,26 @@ describe("splitByMentions", () => {
 
 	it("leaves an email address and a name inside a longer word alone", () => {
 		expect(splitByMentions("mail ana@Chen or @Chenna", [chenShort])).toEqual(["mail ana@Chen or @Chenna"]);
+	});
+
+	it("gives each @Name the mention written there, in order, when a person and a team share a name", () => {
+		const person = { kind: "person" as const, id: "u-platform", name: "Platform" };
+		const team = { kind: "team" as const, id: "t-platform", name: "Platform" };
+		expect(splitByMentions("@Platform and @Platform", [person, team])).toEqual([person, " and ", team]);
+		const alexOne = { kind: "person" as const, id: "u-alex-1", name: "Alex" };
+		const alexTwo = { kind: "person" as const, id: "u-alex-2", name: "Alex" };
+		expect(splitByMentions("@Alex @Alex @Alex", [alexOne, alexTwo, alexOne])).toEqual([alexOne, " ", alexTwo, " ", alexOne]);
+	});
+
+	it("never names a workspace by an email address", () => {
+		expect(mentionWorkspaceName("Northwind")).toBe("Northwind");
+		expect(mentionWorkspaceName("pritom@example.com")).toBeUndefined();
+		expect(mentionWorkspaceName("  ")).toBeUndefined();
+		expect(mentionWorkspaceName(undefined)).toBeUndefined();
+	});
+
+	it("still draws every repeat of a name a list holds once", () => {
+		expect(splitByMentions("@Chen Wei, @Chen Wei", [chen])).toEqual([chen, ", ", chen]);
 	});
 });
 

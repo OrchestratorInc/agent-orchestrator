@@ -6,7 +6,7 @@ import { chatDraftScopeKey } from "../../lib/chat-drafts";
 import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
 import type { CloudCpMentionCandidates } from "../../lib/cloud-cp/types";
 import { useUiStore } from "../../stores/ui-store";
-import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
+import { lexicalEditorText, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatComposer, type ComposerMentionSource } from "./ChatComposer";
 
@@ -263,5 +263,87 @@ describe("mention chips", () => {
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(first.onSend).toHaveBeenCalled());
 		await waitFor(() => expect(localStorage.getItem(`ao.chatDraftMentions:${scope}`)).toBeNull());
+	});
+});
+
+describe("mention chips that share a name", () => {
+	const TWINS: CloudCpMentionCandidates = {
+		people: [
+			{ userId: "u-alex-1", name: "Alex Kim", present: false, inSession: true },
+			{ userId: "u-alex-2", name: "Alex Kim", present: false, inSession: false },
+		],
+		teams: [],
+	};
+
+	it("keeps two people with one name distinct through a remount and the send", async () => {
+		const first = renderComposer({ mentions: mentions({ candidates: TWINS }), draftSessionId: "session-twins" });
+		await typeInLexicalEditor(first.field, "@ale");
+		await userEvent.keyboard("{Enter}");
+		await typeInLexicalEditor(first.field, "and @ale");
+		await userEvent.keyboard("{ArrowDown}{Enter}");
+		await typeInLexicalEditor(first.field, "look");
+		first.view.unmount();
+		const second = renderComposer({ mentions: mentions({ candidates: TWINS }), draftSessionId: "session-twins" });
+		await waitFor(() => expect(second.field.querySelectorAll('[data-composer-token="person"]')).toHaveLength(2));
+		act(() => second.field.focus());
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(second.onSend).toHaveBeenCalled());
+		expect(second.onSend.mock.calls[0]![7]).toEqual([
+			{ kind: "person", id: "u-alex-1", name: "Alex Kim" },
+			{ kind: "person", id: "u-alex-2", name: "Alex Kim" },
+		]);
+	});
+
+	it("keeps which person each chip names, in order, when one is named twice around the other", async () => {
+		const scope = chatDraftScopeKey({ sessionId: "session-twice", incarnation: "session-twice" });
+		const first = renderComposer({ mentions: mentions({ candidates: TWINS }), draftSessionId: "session-twice" });
+		await typeInLexicalEditor(first.field, "@ale");
+		await userEvent.keyboard("{Enter}");
+		await typeInLexicalEditor(first.field, "and @ale");
+		await userEvent.keyboard("{ArrowDown}{Enter}");
+		await typeInLexicalEditor(first.field, "then @ale");
+		await userEvent.keyboard("{Enter}");
+		const ids = () => readDraftMentions(scope).map((mention) => mention.id);
+		await waitFor(() => expect(ids()).toEqual(["u-alex-1", "u-alex-2", "u-alex-1"]));
+		first.view.unmount();
+		const second = renderComposer({ mentions: mentions({ candidates: TWINS }), draftSessionId: "session-twice" });
+		await waitFor(() => expect(second.field.querySelectorAll('[data-composer-token="person"]')).toHaveLength(3));
+		await typeInLexicalEditor(second.field, " ok");
+		await waitFor(() => expect(lexicalEditorText(second.field)).toMatch(/ok$/));
+		expect(ids()).toEqual(["u-alex-1", "u-alex-2", "u-alex-1"]);
+	});
+
+	it("brings the draft's chips back when browsing sent messages returns to it", async () => {
+		const { field, onSend } = renderComposer({ mentions: mentions(), sentMessages: ["earlier question"] });
+		await typeInLexicalEditor(field, "hi @che");
+		await userEvent.keyboard("{Enter}");
+		await placeLexicalCaret(field, 0);
+		expect(!fireEvent.keyDown(field, { key: "ArrowUp" })).toBe(true);
+		expect(lexicalEditorText(field)).toBe("earlier question");
+		expect(!fireEvent.keyDown(field, { key: "ArrowDown" })).toBe(true);
+		expect(field.querySelector('[data-composer-token="person"]')).toHaveTextContent("Chen Wei");
+		act(() => field.focus());
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalled());
+		expect(onSend.mock.calls[0]![7]).toEqual([{ kind: "person", id: "u-chen", name: "Chen Wei" }]);
+	});
+});
+
+describe("a refused send with chips", () => {
+	it("saves its chips beside the restored text, so a remount still draws them", async () => {
+		const scope = chatDraftScopeKey({ sessionId: "session-refused", incarnation: "session-refused" });
+		const onSend = vi.fn().mockRejectedValue(Object.assign(new Error("Someone you mentioned can't open this session."), { code: "validation_error", status: 422 }));
+		const first = render(<ChatComposer onSend={onSend} filePaths={FILES} mentions={mentions()} draftSessionId="session-refused" />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInLexicalEditor(field, "@che");
+		await userEvent.keyboard("{Enter}");
+		await typeInLexicalEditor(field, "look");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalled());
+		await waitFor(() => expect(field.querySelector('[data-composer-token="person"]')).toHaveTextContent("Chen Wei"));
+		await waitFor(() => expect(readDraftMentions(scope)).toEqual([{ kind: "person", id: "u-chen", name: "Chen Wei" }]));
+		first.unmount();
+		const second = renderComposer({ mentions: mentions(), draftSessionId: "session-refused" });
+		await waitFor(() => expect(second.field.querySelector('[data-composer-token="person"]')).toHaveTextContent("Chen Wei"));
 	});
 });

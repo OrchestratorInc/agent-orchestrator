@@ -110,7 +110,11 @@ export interface ChatComposerDelivery {
 	/** Exact verified transcript excerpts attached to this delivery. */
 	excerpts?: ChatDraftExcerptReference[];
 	fileReferences?: ChatFileReference[];
-	/** The people and teams the message mentions, sent beside its text on every attempt. */
+	/**
+	 * The message's mention chips in order (a person named twice is there twice),
+	 * so a refused send puts each chip back; sent beside its text, each person or
+	 * team once, on every attempt.
+	 */
 	mentions?: ComposerMention[];
 }
 

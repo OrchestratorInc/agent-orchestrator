@@ -87,7 +87,7 @@ import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "
 import { composerModelPicker, openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { MAX_SUGGESTIONS, moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import { useTranslation } from "react-i18next";
-import { MAX_MENTIONS, isPathQuery, type ComposerMention } from "../../lib/cloud-mentions";
+import { MAX_MENTIONS, isPathQuery, uniqueMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import type { CloudCpMentionPerson, CloudCpMentionTeam } from "../../lib/cloud-cp/types";
 import { mentionSuggestions } from "./mentionSuggestions";
 import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
@@ -708,7 +708,8 @@ export const ChatComposer = memo(function ChatComposer({
 	 * message is never saved as the draft until it is edited: leaving mid-browse keeps
 	 * the user's own text.
 	 */
-	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
+	// draftMentions: the draft's chips, in order, put back with its text when browsing returns to it.
+	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; draftMentions: ComposerMention[]; shown: string } | null>(null);
 	const plainPasteShortcut = useRef(false);
 	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
 	const textPasteUploads = useRef(new Map<string, { cancelled: boolean }>());
@@ -1688,7 +1689,7 @@ export const ChatComposer = memo(function ChatComposer({
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) {
 			persistComposerText(snapshot.text);
-			if (draftScopeKey) writeDraftMentions(draftScopeKey, snapshot.mentions ?? []);
+			if (draftScopeKey) writeDraftMentions(draftScopeKey, snapshot.mentionChips ?? snapshot.mentions ?? []);
 		}
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
 			draftCaretRef.current = snapshot.caret;
@@ -1727,7 +1728,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const browse = historyBrowse.current;
 		if (!browse) return;
 		historyBrowse.current = null;
-		editor.current?.setText(browse.draft, "start");
+		editor.current?.setText(browse.draft, "start", browse.draftMentions);
 		const snapshot = editor.current?.getSnapshot();
 		if (snapshot) onEditorChange(snapshot);
 	}, [onEditorChange, sentMessagesScope]);
@@ -1965,8 +1966,9 @@ export const ChatComposer = memo(function ChatComposer({
 			? undefined
 			: durableDelivery;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
-		// What the chips name now; a retry keeps the mentions it was first sent with.
-		const draftMentions = editor.current?.getSnapshot().mentions ?? [];
+		// What the chips name now, every chip in order (so a refusal can put each
+		// back as it was); a retry keeps the mentions it was first sent with.
+		const draftMentions = editor.current?.getSnapshot().mentionChips ?? [];
 		const sendMentions = recoveringDelivery ? recoveringDelivery.mentions : draftMentions.length > 0 ? draftMentions : undefined;
 		setSendError(null);
 		setSteerOutcomeNotice(null);
@@ -2275,8 +2277,10 @@ export const ChatComposer = memo(function ChatComposer({
 			if (delivery.kind === "steer") {
 				if (!onSteer) throw new Error("Steering is unavailable");
 				const steerAttachments = prepared.recovered || nativePayloads.length === 0 ? undefined : nativePayloads;
-				const outcome = delivery.mentions?.length
-					? await onSteer(delivery.requestText, steerAttachments, delivery.clientMessageId, prepared.recovered, delivery.mentions)
+				// The chips go as tokens, each person or team once.
+				const sentMentions = delivery.mentions?.length ? uniqueMentions(delivery.mentions) : undefined;
+				const outcome = sentMentions
+					? await onSteer(delivery.requestText, steerAttachments, delivery.clientMessageId, prepared.recovered, sentMentions)
 					: await onSteer(delivery.requestText, steerAttachments, delivery.clientMessageId, prepared.recovered);
 				if (outcome?.status === "not-accepted") {
 					const cleared = clearRejectedChatComposerDelivery(
@@ -2299,16 +2303,17 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			} else {
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
+				const sentMentions = delivery.mentions?.length ? uniqueMentions(delivery.mentions) : undefined;
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
       // The text carries the captures for the agent; they are passed too, so the
       // surface can show the message as typed with its captures beside it.
-      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText, delivery.mentions);
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText, sentMentions);
      } else {
-      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, undefined, delivery.mentions);
+      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, undefined, sentMentions);
      }
-    } else if (delivery.mentions?.length) {
-     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts?.length ? delivery.excerpts : undefined, undefined, undefined, delivery.mentions);
+    } else if (sentMentions) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts?.length ? delivery.excerpts : undefined, undefined, undefined, sentMentions);
     } else if (delivery.excerpts?.length) {
      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
     } else {
@@ -2333,6 +2338,8 @@ export const ChatComposer = memo(function ChatComposer({
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
 				editor.current?.setText(textRef.current, undefined, delivery.mentions ?? []);
+				// The chips go back beside the text too, so a remount still draws them.
+				if (draftScopeKey) writeDraftMentions(draftScopeKey, delivery.mentions ?? []);
 			}
 			if (refused) {
 				const cleared = unsavedText.current
@@ -2345,6 +2352,7 @@ export const ChatComposer = memo(function ChatComposer({
 					hasTextRef.current = textRef.current.trim().length > 0;
 					setHasText(hasTextRef.current);
 					editor.current?.setText(textRef.current, undefined, delivery.mentions ?? []);
+					if (draftScopeKey) writeDraftMentions(draftScopeKey, delivery.mentions ?? []);
 				}
 				setDeliveryUncertain(false);
 				setDeliveryRecoveryNotice(null);
@@ -2526,12 +2534,12 @@ export const ChatComposer = memo(function ChatComposer({
 		const browsing = historyBrowse.current;
 		if (!caret || !(caret.atStart || (browsing && !older && caret.atEnd))) return false;
 		const browse = browsing ?? (older && sentMessages?.length
-			? { entries: [...sentMessages].reverse(), index: -1, draft: textRef.current, shown: textRef.current }
+			? { entries: [...sentMessages].reverse(), index: -1, draft: textRef.current, draftMentions: editor.current?.getSnapshot().mentionChips ?? [], shown: textRef.current }
 			: null);
 		if (!browse) return false;
 		const index = browse.index + (older ? 1 : -1);
 		if (index >= browse.entries.length) return false;
-		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start", index < 0 ? undefined : []);
+		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start", index < 0 ? browse.draftMentions : []);
 		const snapshot = editor.current?.getSnapshot();
 		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
 		// Stepping back to the saved draft is not erasing anything.

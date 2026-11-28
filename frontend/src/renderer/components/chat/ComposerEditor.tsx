@@ -55,7 +55,7 @@ import {
 } from "react";
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
-import { mentionText, splitByMentions, uniqueMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { mentionSplitter, mentionText, uniqueMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { cn } from "../../lib/utils";
 import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { MentionChip } from "./MentionChip";
@@ -82,6 +82,11 @@ export type ComposerEditorSnapshot = {
 	caret?: number;
 	/** The people and teams the draft's chips name, each once, in order. */
 	mentions?: ComposerMention[];
+	/**
+	 * Every chip, in document order, a person named twice twice: what restores
+	 * the draft's chips (setText) so two people who share a name stay distinct.
+	 */
+	mentionChips?: ComposerMention[];
 };
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
@@ -376,8 +381,8 @@ function readMention(node: ComposerTokenNode): ComposerMention | undefined {
 	}
 }
 
-/** Every mention chip in the draft, each once, in document order. */
-function $draftMentions(): ComposerMention[] {
+/** Every mention chip in the draft, in document order (a person named twice is there twice). */
+function $mentionChips(): ComposerMention[] {
 	const found: ComposerMention[] = [];
 	const visit = (node: LexicalNode) => {
 		if (node instanceof ComposerTokenNode) {
@@ -388,15 +393,7 @@ function $draftMentions(): ComposerMention[] {
 		if ($isElementNode(node)) for (const child of node.getChildren()) visit(child);
 	};
 	visit($getRoot());
-	return uniqueMentions(found);
-}
-
-/**
- * A line of restored text, with each mention's `@Name` made a chip again:
- * the draft is saved as text, and the mentions it held beside it.
- */
-function splitMentions(line: string, mentions: readonly ComposerMention[]): Array<string | ComposerMention> {
-	return splitByMentions(line, mentions);
+	return found;
 }
 
 function $insertComposerReference(path: string, display: string, wire: string): void {
@@ -421,7 +418,7 @@ function $composerTokens(): ComposerSentToken[] {
 		.getChildren()
 		.flatMap((paragraph) => ($isElementNode(paragraph) ? paragraph.getChildren() : []))
 		.flatMap<ComposerSentToken>((child) =>
-			// Mentions travel as their own tokens beside the text (see $draftMentions).
+			// Mentions travel as their own tokens beside the text (see $mentionChips).
 			child instanceof ComposerTokenNode && (child.__kind === "skill" || child.__kind === "file")
 				? [{ kind: child.__kind, value: child.__value, display: child.__display, wire: child.__wire }]
 				: [],
@@ -474,6 +471,9 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string | Composer
 function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end", mentions: readonly ComposerMention[] = []): void {
 	const root = $getRoot();
 	root.clear();
+	// The draft is saved as text, its chips beside it in order: each `@Name`
+	// becomes the chip that was there, across every line.
+	const split = mentionSplitter(mentions);
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
 		// A restored draft is plain text; paths of still-attached images become chips
@@ -484,7 +484,7 @@ function $replaceEditorText(text: string, attached: string[] = [], caret: "start
 				paragraph.append($createComposerTokenNode("image", segment.path));
 				continue;
 			}
-			for (const part of splitMentions(segment.text, mentions)) {
+			for (const part of split(segment.text)) {
 				paragraph.append(typeof part === "string" ? $createTextNode(part) : $createMentionNode(part));
 			}
 		}
@@ -662,25 +662,27 @@ function $applyLinePrefixEdit(node: TextNode, column: number, edit: LinePrefixEd
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
 	const caret = $caretOffset();
-	const mentions = $draftMentions();
+	const mentionChips = $mentionChips();
+	const mentions = uniqueMentions(mentionChips);
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-		return { text, hasText: text.trim().length > 0, caret, mentions };
+		return { text, hasText: text.trim().length > 0, caret, mentions, mentionChips };
 	}
 
 	const anchor = selection.anchor;
 	const node = anchor.getNode();
 	if (!$isTextNode(node) || anchor.type !== "text") {
-		return { text, hasText: text.trim().length > 0, caret, mentions };
+		return { text, hasText: text.trim().length > 0, caret, mentions, mentionChips };
 	}
 
 	const active = findActiveTrigger(node.getTextContent(), anchor.offset);
-	if (!active) return { text, hasText: text.trim().length > 0, caret, mentions };
+	if (!active) return { text, hasText: text.trim().length > 0, caret, mentions, mentionChips };
 	return {
 		text,
 		hasText: text.trim().length > 0,
 		caret,
 		mentions,
+		mentionChips,
 		trigger: {
 			...active,
 			key: `${node.getKey()}:${active.start}`,
