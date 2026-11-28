@@ -4353,6 +4353,7 @@
 	"coder.templateOptions.listPlaceholder": "Разделяйте значения запятыми",
 	"coder.templateOptions.selectPlaceholder": "Выберите вариант",
 	"coder.templateOptions.settingsHint": "Изменения применяются к новым сессиям.",
+	"settings.models.notInDeviceCatalog": "нет в каталоге устройства",
 	"settings.models.selectModel": "Выбрать модель",
 	"settings.models.useAgentModel": "Использовать модель агента",
 	"settings.models.pinnedNotListed": "Задано для этого проекта · {{agent}} не показывает её для этой учётной записи",
