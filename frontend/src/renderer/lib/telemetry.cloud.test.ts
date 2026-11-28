@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { aoBridge } from "./bridge";
 import {
+	clearCloudUser,
 	resetCloudTelemetryContextForTest,
 	sanitizeRendererExceptionProperties,
 	sanitizeRendererProperties,
@@ -101,5 +103,53 @@ describe("cloud funnel event allowlist", () => {
 		});
 		expect(exception.session_id_hash).toMatch(/^[0-9a-f]{64}$/);
 		expect(exception).not.toHaveProperty("session_id");
+	});
+});
+
+describe("cloud plan context", () => {
+	const org = { orgId: "22222222-2222-2222-2222-222222222222", orgKind: "b2c", billingMode: "self_serve" };
+
+	it.each([
+		["free", false],
+		["starter", true],
+		["pro", true],
+		["enterprise", true],
+		["none", false],
+		["unknown", false],
+	] as const)("tags events with cloud_plan %s", (plan, paid) => {
+		setCloudTelemetryContext({ ...org, plan, paid });
+		expect(withTelemetryContext({})).toMatchObject({ cloud_plan: plan, cloud_paid: paid });
+	});
+
+	it("reports unknown for a value outside the vocabulary, never the value", () => {
+		for (const junk of ["Pro Plan $49", "price_123", "acme-corp", "", undefined]) {
+			setCloudTelemetryContext({ ...org, plan: junk, paid: true });
+			const context = withTelemetryContext({});
+			expect(context).toMatchObject({ cloud_plan: "unknown", cloud_paid: false });
+			if (junk) expect(JSON.stringify(context)).not.toContain(junk);
+		}
+	});
+
+	it("moves to none on sign-out and tells main once per change", async () => {
+		const setPlan = vi.spyOn(aoBridge.telemetry, "setPlan").mockResolvedValue(true);
+		try {
+			setCloudTelemetryContext({ ...org, plan: "pro", paid: true });
+			setCloudTelemetryContext({ ...org, plan: "pro", paid: true });
+			clearCloudUser();
+			clearCloudUser();
+			expect(withTelemetryContext({})).toMatchObject({ cloud_plan: "none", cloud_paid: false });
+			await vi.waitFor(() => expect(setPlan.mock.calls).toEqual([["pro"], ["none"]]));
+		} finally {
+			setPlan.mockRestore();
+		}
+	});
+
+	it("keeps only vocabulary values on ao.billing.plan_changed", async () => {
+		expect(await sanitizeRendererProperties("ao.billing.plan_changed", { from_plan: "starter", to_plan: "pro", direction: "upgrade", price: 49, org_name: "Acme" })).toEqual({
+			from_plan: "starter", to_plan: "pro", direction: "upgrade",
+		});
+		expect(await sanitizeRendererProperties("ao.billing.plan_changed", { from_plan: "Pro $49", to_plan: "sub_123", direction: "sideways" })).toEqual({
+			from_plan: "unknown", to_plan: "unknown", direction: "unknown",
+		});
 	});
 });

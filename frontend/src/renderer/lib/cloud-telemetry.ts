@@ -16,7 +16,8 @@
 
 import type { CloudCpClient } from "./cloud-cp/client";
 import type { CloudCpCreateSessionRequest, CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
-import { captureRendererEvent, setCloudTelemetryContext } from "./telemetry";
+import { billingSummaryPlan, isPaidBillingSummary, type CloudPlan } from "../../shared/cloud-plan";
+import { captureRendererEvent, hashedTelemetryID, setCloudTelemetryContext } from "./telemetry";
 
 /** Pending session creations, keyed by session id, for time-to-ready. */
 const pendingSessions = new Map<string, { requestedAt: number; provider: string; kind: string }>();
@@ -28,6 +29,13 @@ const trialOffers = new Map<string, ReadonlySet<string>>();
 
 let reportedOfferings = new Set<string>();
 let defaultProvider = "";
+/** The signed-in org's offering from /me, re-tagged with the plan when billing loads. */
+let currentOffering: { orgId?: string; orgKind: string; billingMode: string } | undefined;
+/** Per org, the plan the last fresh billing summary showed this run. */
+const billedPlans = new Map<string, { plan: CloudPlan; paid: boolean }>();
+/** Per hashed org id, the plan last seen, so a change can be reported across launches. */
+const LAST_PLANS_KEY = "ao.telemetry.cloudPlans";
+const PLAN_RANKS = new Map<unknown, number>([["free", 0], ["starter", 1], ["pro", 2], ["enterprise", 3]]);
 
 function errorCode(error: unknown): string {
 	const code = (error as { code?: unknown } | null)?.code;
@@ -138,7 +146,11 @@ export function reportCloudOffering(me: CloudCpMeResponse): void {
 	defaultProvider = typeof offering.defaultProvider === "string" ? offering.defaultProvider : fallbackDefault;
 	const kind = typeof offering.kind === "string" ? offering.kind : "unknown";
 	const billingMode = typeof offering.billingMode === "string" ? offering.billingMode : "unknown";
-	setCloudTelemetryContext({ orgId, orgKind: kind, billingMode });
+	currentOffering = { orgId, orgKind: kind, billingMode };
+	// No org or billing off: no plan. Otherwise the plan the last fresh billing
+	// summary showed for this org, unknown until one has (a contract org never fetches one).
+	const plan = !orgId || billingMode === "off" ? { plan: "none", paid: false } : billedPlans.get(orgId) ?? { plan: "unknown", paid: false };
+	setCloudTelemetryContext({ ...currentOffering, ...plan });
 	const key = `${orgId ?? ""}:${kind}:${billingMode}:${defaultProvider}`;
 	if (reportedOfferings.has(key)) return;
 	reportedOfferings.add(key);
@@ -217,6 +229,42 @@ export function observeBillingSummary(summary: { entitled?: boolean; subscriptio
 	});
 }
 
+/**
+ * A fresh billing summary for orgId: tags events with its plan and reports
+ * ao.billing.plan_changed when it differs from the plan last seen for that org.
+ * The first summary for an org only records it; "none" and "unknown" are never
+ * compared, and a failed fetch never gets here.
+ */
+export async function observeBillingPlan(orgId: string, summary: Parameters<typeof billingSummaryPlan>[0]): Promise<void> {
+	const plan = billingSummaryPlan(summary);
+	const paid = isPaidBillingSummary(summary);
+	billedPlans.set(orgId, { plan, paid });
+	if (currentOffering?.orgId === orgId) setCloudTelemetryContext({ ...currentOffering, plan, paid });
+	const to = PLAN_RANKS.get(plan);
+	if (to === undefined) return;
+	const orgHash = await hashedTelemetryID(orgId);
+	if (!orgHash) return;
+	let lastPlans: Record<string, unknown> = {};
+	try {
+		const parsed = JSON.parse(window.localStorage.getItem(LAST_PLANS_KEY) ?? "{}") as unknown;
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) lastPlans = parsed as Record<string, unknown>;
+	} catch {
+		// Unreadable: treated as a first load.
+	}
+	const previous = Object.hasOwn(lastPlans, orgHash) ? lastPlans[orgHash] : undefined;
+	if (previous === plan) return;
+	try {
+		window.localStorage.setItem(LAST_PLANS_KEY, JSON.stringify({ ...lastPlans, [orgHash]: plan }));
+	} catch {
+		// Best effort: without storage a change is simply not reported.
+		return;
+	}
+	const from = PLAN_RANKS.get(previous);
+	if (from === undefined) return;
+	const direction = plan === "free" ? "cancel" : to > from ? "upgrade" : to < from ? "downgrade" : "same_tier";
+	void captureRendererEvent("ao.billing.plan_changed", { from_plan: previous, to_plan: plan, direction });
+}
+
 function prunePending(now: number): void {
 	for (const [id, entry] of pendingSessions) {
 		if (now - entry.requestedAt > PENDING_SESSION_TTL_MS) pendingSessions.delete(id);
@@ -265,6 +313,8 @@ export function resetCloudTelemetryForTest(): void {
 	reportedOfferings = new Set();
 	defaultProvider = "";
 	trialOffers.clear();
+	currentOffering = undefined;
+	billedPlans.clear();
 }
 
 function projectProvider(config: Record<string, unknown> | undefined): string {
@@ -397,6 +447,11 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 		const summary = await client.getBilling(orgId, options);
 		trialOffers.set(orgId, new Set((summary.plans ?? []).filter((offer) => (offer.trialDays ?? 0) > 0).map((offer) => offer.name)));
 		observeBillingSummary(summary);
+		try {
+			await observeBillingPlan(orgId, summary);
+		} catch {
+			// Telemetry must never break the caller.
+		}
 		return summary;
 	};
 	return instrumented;

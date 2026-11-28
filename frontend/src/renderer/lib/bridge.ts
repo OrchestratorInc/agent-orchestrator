@@ -241,6 +241,7 @@ export const aoBridge: AoBridge =
 			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
+			setPlan: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,

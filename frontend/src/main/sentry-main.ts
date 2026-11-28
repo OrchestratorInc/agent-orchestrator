@@ -13,6 +13,7 @@ import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
 import { onboardingFailureCause, onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
+import { cloudPlan, isPaidCloudPlan, type CloudPlan } from "../shared/cloud-plan";
 
 export function electronMainSentryDsn(version: string, isDev: boolean): string {
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
@@ -27,8 +28,17 @@ export function electronMainSentryDsn(version: string, isDev: boolean): string {
 const ERROR_SAMPLE_RATE = "0.1";
 const ALWAYS_SENT_KINDS = new Set(["uncaught_exception", "process_exit"]);
 
+// The install's AO Cloud plan, as the renderer last reported it (telemetry:setPlan).
+// Every event is tagged with it, and a paid plan sends outside the sample.
+let currentPlan: CloudPlan = "unknown";
+
+export function setMainSentryPlan(plan: unknown): void {
+	currentPlan = cloudPlan(plan);
+}
+
 function alwaysSentEvent(event: Sentry.ErrorEvent): boolean {
 	if (ALWAYS_SENT_KINDS.has(String(event.tags?.kind))) return true;
+	if (isPaidCloudPlan(currentPlan)) return true;
 	return event.tags?.category === "onboarding" && parseOnboardingFailureCode(event.tags?.code) !== undefined;
 }
 
@@ -78,7 +88,7 @@ function admitMainSentryEvent(event: Sentry.ErrorEvent | null, sampled: boolean,
 	const alwaysSent = alwaysSentEvent(event);
 	if (!alwaysSent && !sampled) return null;
 	if (!budget(event.fingerprint ?? [])) return null;
-	return { ...event, tags: { ...event.tags, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
+	return { ...event, tags: { ...event.tags, plan: currentPlan, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
 }
 
 const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags", "exception"]);

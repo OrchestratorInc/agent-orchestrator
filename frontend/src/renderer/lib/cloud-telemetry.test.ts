@@ -10,6 +10,7 @@ vi.mock("./telemetry", () => ({
 	setCloudTelemetryContext: vi.fn((context: Record<string, unknown>) => {
 		contexts.push(context);
 	}),
+	hashedTelemetryID: vi.fn(async (value: unknown) => (typeof value === "string" && value ? `hash:${value}` : undefined)),
 }));
 
 import type { CloudCpClient } from "./cloud-cp/client";
@@ -72,6 +73,7 @@ beforeEach(() => {
 	contexts.length = 0;
 	resetCloudTelemetryForTest();
 	window.sessionStorage.clear();
+	window.localStorage.clear();
 });
 
 describe("cloud funnel telemetry", () => {
@@ -226,7 +228,7 @@ describe("cloud funnel telemetry", () => {
 		await client.me();
 		expect(events()).toEqual(["ao.renderer.cloud_offering_resolved"]);
 		expect(captured[0]?.properties).toMatchObject({ org_kind: "b2c", billing_mode: "self_serve", default_provider: "freestyle", provider_count: 1 });
-		expect(contexts.at(-1)).toEqual({ orgId: "org-1", orgKind: "b2c", billingMode: "self_serve" });
+		expect(contexts.at(-1)).toEqual({ orgId: "org-1", orgKind: "b2c", billingMode: "self_serve", plan: "unknown", paid: false });
 
 		reportCloudOffering({ ...me, offering: undefined } as unknown as CloudCpMeResponse);
 		expect(captured.at(-1)?.properties).toMatchObject({ org_kind: "unknown", billing_mode: "unknown", default_provider: "freestyle" });
@@ -258,7 +260,7 @@ describe("cloud funnel telemetry", () => {
 		summary = { enabled: true, exempt: false, plan: "starter", entitled: true, subscriptionStatus: "active" };
 		await client.getBilling("org-1");
 		await client.getBilling("org-1");
-		expect(events()).toEqual(["ao.renderer.cloud_checkout_started", "ao.renderer.cloud_checkout_completed"]);
+		expect(events()).toEqual(["ao.renderer.cloud_checkout_started", "ao.renderer.cloud_checkout_completed", "ao.billing.plan_changed"]);
 		expect(captured[1]?.properties).toMatchObject({ plan: "starter" });
 	});
 
@@ -271,13 +273,99 @@ describe("cloud funnel telemetry", () => {
 		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "starter", trial: true } });
 		summary = { enabled: true, exempt: false, plan: "starter", entitled: true, subscriptionStatus: "trialing", plans: [plans[1]] };
 		await client.getBilling("org-1");
-		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "starter", trial: true } });
+		expect(captured.at(-2)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "starter", trial: true } });
 		// The trial is used up: a later checkout of another plan is paid.
 		await client.createBillingCheckout("org-1", "pro");
 		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "pro", trial: false } });
 		summary = { enabled: true, exempt: false, plan: "pro", entitled: true, subscriptionStatus: "active", plans: [plans[1]] };
 		await client.getBilling("org-1");
-		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "pro", trial: false } });
+		expect(captured.at(-2)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "pro", trial: false } });
+	});
+
+	describe("plan tagging and ao.billing.plan_changed", () => {
+		const paid = (plan: string) => ({ enabled: true, exempt: false, billingMode: "self_serve", plan, entitled: plan !== "free" });
+		const me = {
+			user: { id: "u", email: "a@b.c", displayName: "A", authProvider: "workos" },
+			organizations: [{ id: "org-1", slug: "o", displayName: "O", role: "owner" }],
+			offering: { providers: [], billingMode: "self_serve", kind: "b2c" },
+		} as unknown as CloudCpMeResponse;
+		const planChanges = () => captured.filter((entry) => entry.event === "ao.billing.plan_changed").map((entry) => entry.properties);
+
+		function billingClient(initial: Record<string, unknown>) {
+			let summary: Record<string, unknown> | Error = initial;
+			const client = instrumentCloudClient(fakeClient({
+				me: vi.fn(async () => me),
+				getBilling: vi.fn(async () => {
+					if (summary instanceof Error) throw summary;
+					return summary;
+				}),
+			} as unknown as Partial<CloudCpClient>));
+			return { client, set: (next: Record<string, unknown> | Error) => { summary = next; } };
+		}
+
+		it("reports upgrade, downgrade and cancel, but not the first load", async () => {
+			const { client, set } = billingClient(paid("starter"));
+			await client.getBilling("org-1");
+			expect(planChanges()).toEqual([]);
+			set(paid("pro"));
+			await client.getBilling("org-1");
+			await client.getBilling("org-1");
+			set(paid("starter"));
+			await client.getBilling("org-1");
+			set(paid("pro"));
+			await client.getBilling("org-1");
+			set(paid("free"));
+			await client.getBilling("org-1");
+			expect(planChanges()).toEqual([
+				{ from_plan: "starter", to_plan: "pro", direction: "upgrade" },
+				{ from_plan: "pro", to_plan: "starter", direction: "downgrade" },
+				{ from_plan: "starter", to_plan: "pro", direction: "upgrade" },
+				{ from_plan: "pro", to_plan: "free", direction: "cancel" },
+			]);
+		});
+
+		it("keeps the last plan across launches, per org", async () => {
+			const first = billingClient(paid("starter"));
+			await first.client.getBilling("org-1");
+			resetCloudTelemetryForTest();
+			const second = billingClient(paid("pro"));
+			await second.client.getBilling("org-1");
+			await second.client.getBilling("org-2");
+			expect(planChanges()).toEqual([{ from_plan: "starter", to_plan: "pro", direction: "upgrade" }]);
+			// Keyed by the hashed org id (the mock's hash), never the raw id.
+			expect(JSON.parse(window.localStorage.getItem("ao.telemetry.cloudPlans") ?? "{}")).toEqual({ "hash:org-1": "pro", "hash:org-2": "pro" });
+		});
+
+		it("does not report a failed fetch, billing off or a sign-out", async () => {
+			const { client, set } = billingClient(paid("pro"));
+			await client.getBilling("org-1");
+			set(new Error("network"));
+			await expect(client.getBilling("org-1")).rejects.toThrow("network");
+			set({ enabled: false, exempt: false, plan: "", entitled: false });
+			await client.getBilling("org-1");
+			noteCloudSession(null, false);
+			set(paid("pro"));
+			await client.getBilling("org-1");
+			expect(planChanges()).toEqual([]);
+		});
+
+		it("tags the org's events with the plan once billing loads", async () => {
+			const { client, set } = billingClient(paid("pro"));
+			await client.me();
+			expect(contexts.at(-1)).toMatchObject({ orgId: "org-1", plan: "unknown", paid: false });
+			await client.getBilling("org-1");
+			expect(contexts.at(-1)).toMatchObject({ orgId: "org-1", orgKind: "b2c", billingMode: "self_serve", plan: "pro", paid: true });
+			// A later /me keeps the plan billing showed.
+			await client.me();
+			expect(contexts.at(-1)).toMatchObject({ plan: "pro", paid: true });
+			// Exempt: the plan is known, but the org does not pay.
+			set({ ...paid("pro"), exempt: true });
+			await client.getBilling("org-1");
+			expect(contexts.at(-1)).toMatchObject({ plan: "pro", paid: false });
+			// Billing off on this org: none.
+			reportCloudOffering({ ...me, offering: { providers: [], billingMode: "off", kind: "b2c" } } as unknown as CloudCpMeResponse);
+			expect(contexts.at(-1)).toMatchObject({ plan: "none", paid: false });
+		});
 	});
 
 	it("passes other client methods through untouched", async () => {

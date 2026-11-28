@@ -26,6 +26,23 @@ describe("TelemetryIdentityController opt-out", () => {
 	});
 });
 
+describe("TelemetryIdentityController plan hand-off", () => {
+	it("posts a plan-only body, replays it to a restarted daemon, and stops on an older daemon's 400", async () => {
+		const { ctl, fetcher } = await controller();
+		const bodies = () => fetcher.mock.calls.map((call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string));
+		await ctl.setPlan("pro");
+		await ctl.setPlan("pro");
+		expect(bodies()).toEqual([{ plan: "pro" }]);
+		ctl.invalidate();
+		await ctl.flush();
+		expect(bodies()).toEqual([{ plan: "pro" }, { plan: "pro" }]);
+		fetcher.mockResolvedValue(new Response(null, { status: 400 }));
+		await ctl.setPlan("free");
+		await ctl.flush();
+		expect(bodies()).toEqual([{ plan: "pro" }, { plan: "pro" }, { plan: "free" }]);
+	});
+});
+
 describe("TelemetryIdentityController cloud user hand-off", () => {
 	it("does not send a launch-time sign-out before the renderer resolves its session", async () => {
 		const { ctl, fetcher } = await controller();

@@ -47,6 +47,10 @@ export class TelemetryIdentityController {
 	// Stamped on every POST so the daemon can refuse one that was delayed in
 	// transit (a client timeout cannot recall it) until after a newer one landed.
 	private sequence = 0;
+	// The AO Cloud plan for the daemon's Sentry tag and sampling, in memory on
+	// both sides, so it is replayed to a restarted daemon like the user.
+	private plan: string | null = null;
+	private planPushed = true;
 
 	constructor(
 		private readonly dataDir: string,
@@ -103,6 +107,7 @@ export class TelemetryIdentityController {
 	 * the next ready transition must replay the signed-in user.
 	 */
 	invalidate(): void {
+		if (this.plan !== null) this.planPushed = false;
 		if (!this.known) return;
 		this.pushed = false;
 		this.generation++;
@@ -158,9 +163,33 @@ export class TelemetryIdentityController {
 
 	/** Retries the hand-off; called when the daemon becomes ready. */
 	flush(): Promise<void> {
-		const run = this.queue.then(() => this.flushOnce());
+		const run = this.queue.then(() => this.flushOnce()).then(() => this.flushPlan());
 		this.queue = run.catch(() => undefined);
 		return run;
+	}
+
+	/** Records the plan (already from the fixed vocabulary) and hands it to the daemon. */
+	setPlan(plan: string): Promise<void> {
+		if (plan === this.plan) return Promise.resolve();
+		this.plan = plan;
+		this.planPushed = false;
+		return this.flush();
+	}
+
+	// A plan-only body on the identity route: no cloudUserId and no sequence, so
+	// the daemon leaves the identity alone.
+	private async flushPlan(): Promise<void> {
+		const plan = this.plan;
+		if (plan === null || this.planPushed) return;
+		const base = this.origin();
+		if (!base) return;
+		try {
+			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { plan } });
+			// A daemon without plan support refuses the field (400) or the route (404/405): nothing to retry.
+			if (this.plan === plan) this.planPushed = response.ok || response.status === 400 || response.status === 404 || response.status === 405;
+		} catch {
+			// Daemon not reachable yet; flush() runs again on the next ready transition.
+		}
 	}
 
 	/** Strictly increasing and still increasing across an app restart (wall-clock based). */

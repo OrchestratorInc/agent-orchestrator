@@ -12,6 +12,7 @@ import (
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 func TestTelemetryIdentityRoutes(t *testing.T) {
@@ -79,6 +80,17 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 	if _, ok := got["email"]; ok {
 		t.Fatal("identity response leaks email")
+	}
+	// A plan-only body sets the Sentry plan and leaves the signed-in user alone.
+	t.Cleanup(func() { sentryobs.SetPlan("unknown") })
+	if c := post("127.0.0.1:3001", "", `{"plan":"pro"}`); c != http.StatusNoContent {
+		t.Fatalf("plan-only = %d, want 204", c)
+	}
+	if c := post("127.0.0.1:3001", "app://renderer", `{"plan":"pro"}`); c != http.StatusForbidden {
+		t.Fatalf("plan from renderer origin = %d, want 403", c)
+	}
+	if got := get(); got["cloudUserId"] != "user_01H" || got["isSignedIn"] != true {
+		t.Fatalf("plan-only body changed the identity: %#v", got)
 	}
 	if c := post("127.0.0.1:3001", "", `{"cloudUserId":""}`); c != http.StatusNoContent {
 		t.Fatalf("sign-out = %d, want 204", c)

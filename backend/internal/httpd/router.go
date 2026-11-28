@@ -22,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
@@ -364,7 +365,12 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 }
 
 type telemetryIdentityRequest struct {
-	CloudUserID string `json:"cloudUserId"`
+	// Absent leaves the identity alone only when Plan is set; a body with
+	// neither keeps the old meaning, a sign-out.
+	CloudUserID *string `json:"cloudUserId"`
+	// Plan is the install's AO Cloud plan from a fixed vocabulary
+	// (sentryobs.SetPlan), kept in memory for Sentry tags and sampling.
+	Plan *string `json:"plan,omitempty"`
 	// Sequence orders hand-offs from one desktop. A request cannot be recalled
 	// once sent (a client timeout leaves it in flight), so the daemon, not the
 	// client, rejects one older than what it already applied. Zero means unordered.
@@ -395,6 +401,17 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "request body must be valid JSON", nil)
 			return
 		}
+		if body.Plan != nil {
+			sentryobs.SetPlan(*body.Plan)
+			if body.CloudUserID == nil {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		cloudUserID := ""
+		if body.CloudUserID != nil {
+			cloudUserID = *body.CloudUserID
+		}
 		// Check-and-apply is one critical section so a late older request cannot
 		// slip in after a newer one has committed. The newest sequence is recorded
 		// before applying: it is the user's latest intent even if saving fails.
@@ -407,7 +424,7 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 			}
 			lastSeq = body.Sequence
 		}
-		if err := ident.SetCloudUserID(req.Context(), body.CloudUserID); err != nil {
+		if err := ident.SetCloudUserID(req.Context(), cloudUserID); err != nil {
 			if errors.Is(err, ports.ErrInvalidCloudUserID) {
 				envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
 				return

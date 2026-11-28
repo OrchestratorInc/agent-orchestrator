@@ -17,6 +17,7 @@ import { isUiUsageEvent, sanitizeUiUsageProperties } from "./ui-usage-registry";
 import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
+import { cloudPlan as cloudPlanValue, isPaidCloudPlan, type CloudPlan } from "../../shared/cloud-plan";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 import { reserveException } from "./reported-errors";
@@ -422,6 +423,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 		email: user.email,
 		ao_cloud_user_id: user.id,
 		...(githubLogin ? { github_login: githubLogin } : {}),
+		...cloudPlanPersonProperties(),
 	});
 	identifiedId = user.id;
 	identifyCalledFor = user.id;
@@ -477,6 +479,8 @@ export function clearCloudUser(): void {
 	signInKnown = true;
 	pendingWebVisitor = null;
 	identifyCalledFor = null;
+	// The departing person keeps its last plan; only events and Sentry move to none.
+	setCloudPlan("none", false, false);
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -616,15 +620,34 @@ function enumValue(value: unknown, allowed: ReadonlySet<string>, fallback = "unk
 	return typeof value === "string" && allowed.has(value) ? value : fallback;
 }
 
-export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string }): void {
+export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string; plan?: string; paid?: boolean }): void {
 	const next: TelemetryProperties = {
 		cloud_org_kind: enumValue(context.orgKind, CLOUD_ORG_KINDS),
 		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
 	};
 	cloudContext = { ...cloudContext, ...next };
+	const plan = cloudPlanValue(context.plan);
+	setCloudPlan(plan, context.paid === true && isPaidCloudPlan(plan));
 	void hashedTelemetryID(context.orgId).then((hash) => {
 		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
 	});
+}
+
+/**
+ * The plan on every event (cloud_plan, cloud_paid), on the identified person,
+ * and in Electron main, which tags Sentry events with it. Only a change is
+ * passed on; main keeps it in memory and sends nothing itself.
+ */
+function setCloudPlan(plan: CloudPlan, paid: boolean, updatePerson = true): void {
+	const changed = cloudContext.cloud_plan !== plan || cloudContext.cloud_paid !== paid;
+	cloudContext = { ...cloudContext, cloud_plan: plan, cloud_paid: paid };
+	if (!changed) return;
+	void Promise.resolve().then(() => aoBridge.telemetry.setPlan(plan)).catch(() => false);
+	if (updatePerson && posthogReady && identifiedId && !analyticsOptedOut) posthog.setPersonProperties(cloudPlanPersonProperties());
+}
+
+function cloudPlanPersonProperties(): TelemetryProperties {
+	return typeof cloudContext.cloud_plan === "string" ? { cloud_plan: cloudContext.cloud_plan, cloud_paid: cloudContext.cloud_paid === true } : {};
 }
 
 function omitKey(properties: TelemetryProperties, key: string): TelemetryProperties {
@@ -844,7 +867,7 @@ async function sha256Hex(raw: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
+export async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
@@ -946,6 +969,7 @@ const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
 const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
 const CLOUD_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const CLOUD_PLAN_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const PLAN_CHANGE_DIRECTIONS = new Set(["upgrade", "downgrade", "cancel", "same_tier"]);
 
 function cloudCode(value: unknown): string {
 	return typeof value === "string" && CLOUD_CODE_PATTERN.test(value) ? value : "other";
@@ -1014,6 +1038,11 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 			if (duration !== undefined && event === "ao.renderer.cloud_checkout_completed") safe.duration_ms = duration;
 			break;
 		}
+		case "ao.billing.plan_changed":
+			safe.from_plan = cloudPlanValue(properties?.from_plan);
+			safe.to_plan = cloudPlanValue(properties?.to_plan);
+			safe.direction = enumValue(properties?.direction, PLAN_CHANGE_DIRECTIONS);
+			break;
 		case "ao.renderer.cloud_plan_refusal_shown":
 		case "ao.renderer.cloud_limit_reached":
 			safe.code = cloudCode(properties?.code);
@@ -1035,6 +1064,7 @@ const CLOUD_FUNNEL_EVENTS = new Set([
 	"ao.renderer.cloud_upgrade_viewed",
 	"ao.renderer.cloud_checkout_started",
 	"ao.renderer.cloud_checkout_completed",
+	"ao.billing.plan_changed",
 	"ao.renderer.cloud_plan_refusal_shown",
 	"ao.renderer.cloud_limit_reached",
 ]);
