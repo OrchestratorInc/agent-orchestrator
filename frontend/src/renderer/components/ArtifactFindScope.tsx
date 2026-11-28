@@ -38,10 +38,10 @@ export function ArtifactFindScope({ children, identity, enabled = true, classNam
 	const pending = useRef<(() => void) | undefined>(undefined);
 	// Content changes never abort a running search: they mark it stale, and the
 	// next search is a refresh that keeps the old highlights until it paints.
-	const searching = useRef(false), stale = useRef(false), refreshing = useRef(false);
+	const searching = useRef(false), stale = useRef(false), refreshing = useRef(false), movedDuringRefresh = useRef(false);
 	const cancel = useCallback(() => {
 		generation.current++;
-		stale.current = false; refreshing.current = false;
+		stale.current = false; refreshing.current = false; movedDuringRefresh.current = false;
 		pending.current?.(); pending.current = undefined;
 		result.current?.clear(); result.current = undefined;
 		engine.clear();
@@ -115,7 +115,8 @@ export function ArtifactFindScope({ children, identity, enabled = true, classNam
 			if (event.data.method === "ao/find-changed" && event.data.params?.generation === generation.current && current.current.open) contentChanged();
 			if (event.data.method === "ao/find-close" && current.current.open) close();
 		};
-		const loaded = () => { cancel(); configure(); invalidate(); };
+		// Load does not bubble, so this capture listener also sees every image and media load; only a frame's load matters.
+		const loaded = (event: Event) => { if (!(event.target instanceof HTMLIFrameElement)) return; cancel(); configure(); invalidate(); };
 		element.addEventListener("load", loaded, true);
 		window.addEventListener("message", message);
 		// Only a newly added frame needs configuring; other reader edits (PDF text layers, code views) do not.
@@ -147,8 +148,10 @@ export function ArtifactFindScope({ children, identity, enabled = true, classNam
 		priorIdentity.current = identity; priorQuery.current = query;
 		const index = changed ? 0 : current.current.active;
 		const refresh = refreshing.current && !changed; refreshing.current = false;
+		if (!refresh) movedDuringRefresh.current = false;
 		if (changed) { setActive(0); requestedScroll.current = true; }
 		// A refresh keeps the previous highlights and count until the new result paints over them.
+		const previous = refresh ? result.current : undefined;
 		if (!refresh) result.current?.clear();
 		result.current = undefined;
 		if (isEmptyFindQuery(query)) { setState({ phase: "idle", total: 0 }); return; }
@@ -160,19 +163,21 @@ export function ArtifactFindScope({ children, identity, enabled = true, classNam
 			const frame = Array.from(element!.querySelectorAll("iframe")).find((frame) => visible(frame) && !frame.closest(".hidden"));
 			if (frame?.contentWindow) {
 				return new Promise((resolve, reject) => {
+					// A failed refresh must not leave the previous search's highlights painted.
+					const clearFrame = () => { if (refresh) frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-cancel", params: { generation: token } } satisfies ArtifactFindMessage, "*"); };
 					const send = (selected: number, reveal: boolean) => frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find", params: { generation: token, query, active: selected, reveal } } satisfies ArtifactFindMessage, "*");
 					const onResult = (event: MessageEvent) => {
 						if (event.source !== frame!.contentWindow) return;
 						if (event.data?.jsonrpc === "2.0" && event.data.params?.generation === token) {
 							if (event.data.method === "ao/find-started") { window.clearTimeout(timeout); return; }
-							if (event.data.method === "ao/find-error") { reject(new AoError("ARTIFACT_FIND_FRAME_FAILED", "The artifact frame could not complete the search")); return; }
+							if (event.data.method === "ao/find-error") { clearFrame(); reject(new AoError("ARTIFACT_FIND_FRAME_FAILED", "The artifact frame could not complete the search")); return; }
 						}
 						const data = readArtifactFindResult(event.data, token);
 						if (!data) return;
 						window.clearTimeout(timeout);
 						resolve({ total: data.total, active: data.active, paint: (selected, reveal) => { if (!stop.signal.aborted && token === generation.current) send(selected, reveal); }, clear: () => frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-cancel", params: { generation: token } } satisfies ArtifactFindMessage, "*") });
 					};
-					const timeout = window.setTimeout(() => reject(new AoError("ARTIFACT_FIND_FRAME_TIMEOUT", "The artifact frame did not acknowledge the search")), 5000);
+					const timeout = window.setTimeout(() => { clearFrame(); reject(new AoError("ARTIFACT_FIND_FRAME_TIMEOUT", "The artifact frame did not acknowledge the search")); }, 5000);
 					dispose = () => {
 						window.clearTimeout(timeout); window.removeEventListener("message", onResult);
 						// The frame's next search replaces this one; cancelling here would wipe its highlights.
@@ -202,21 +207,27 @@ export function ArtifactFindScope({ children, identity, enabled = true, classNam
 			if (stop.signal.aborted || token !== generation.current) return;
 			searching.current = false;
 			result.current = found;
-			const selected = Math.min(found.active ?? index, Math.max(0, found.total - 1));
+			// Previous/Next pressed during a refresh wins over the retained occurrence, and is revealed.
+			const moved = refresh && movedDuringRefresh.current; movedDuringRefresh.current = false;
+			const selected = Math.min(moved ? current.current.active : found.active ?? index, Math.max(0, found.total - 1));
 			setActive(selected); setState({ phase: "ready", total: found.total, warning: found.warning });
-			found.paint(selected, requestedScroll.current); requestedScroll.current = false;
+			found.paint(selected, requestedScroll.current || moved); requestedScroll.current = false;
 			if (stale.current) { stale.current = false; contentChanged(); }
 		}).catch((error: unknown) => {
 			if (stop.signal.aborted || token !== generation.current) return;
-			searching.current = false; stale.current = false;
+			searching.current = false; stale.current = false; movedDuringRefresh.current = false;
+			if (refresh) { previous?.clear(); engine.clear(); }
 			setState({ phase: "error", total: 0, warning: error instanceof Error && error.name === "AbortError" ? undefined : "failed" });
 		});
 		return () => { release(); if (pending.current === release) pending.current = undefined; };
 	}, [enabled, open, query, identity, revision, engine, setOpen, cancel, contentChanged]);
 	const move = (direction: number) => {
-		if (!result.current?.total || state.phase !== "ready") return;
+		if (!state.total || state.phase !== "ready") return;
 		const selected = (active + direction + state.total) % state.total;
-		setActive(selected); result.current.paint(selected, true);
+		setActive(selected); current.current.active = selected;
+		// A refresh is replacing the result: it paints and reveals this occurrence when it lands.
+		if (result.current) result.current.paint(selected, true);
+		else movedDuringRefresh.current = true;
 	};
 	useEffect(() => {
 		if (!enabled) {

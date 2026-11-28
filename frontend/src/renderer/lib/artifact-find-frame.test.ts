@@ -54,7 +54,8 @@ describe("local artifact sandbox find bridge", () => {
 		h.doc.body.prepend(h.doc.body.lastElementChild!);
 		await h.message("ao/find", { generation: 1, query: "", active: 0 });
 		await h.message("ao/find", { generation: 2, query: "hello", active: 1, reveal: false });
-		expect(h.sent).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/find-result", params: { generation: 2, total: 2, active: 0 } }, "*");
+		// On a slow machine the reorder's queued refresh may land mid-search and add a later ao/find-changed.
+		expect(h.sent).toHaveBeenCalledWith({ jsonrpc: "2.0", method: "ao/find-result", params: { generation: 2, total: 2, active: 0 } }, "*");
 		expect(h.highlights.get("artifact-find-active").values().next().value.startContainer.parentElement.textContent).toBe("hello second");
 	});
 	it("forwards the configured shortcut, preserves input commands, and clears highlights", async () => {

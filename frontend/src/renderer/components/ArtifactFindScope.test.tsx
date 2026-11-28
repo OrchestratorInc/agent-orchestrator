@@ -185,6 +185,53 @@ describe("find within a local artifact", () => {
 			expect(await screen.findByText("1/3")).toBeInTheDocument();
 		} finally { clearInterval(ticker); }
 	});
+	describe("while a refresh is replacing the result", () => {
+		function setup() {
+			const finishers: Array<(result: ArtifactFindResult) => void> = [], failures: Array<(error: Error) => void> = [];
+			const adapter: ArtifactFindAdapter = { search: vi.fn(() => new Promise<ArtifactFindResult>((resolve, reject) => { finishers.push(resolve); failures.push(reject); })) };
+			function Document() {
+				const register = useArtifactFindRegistration(), element = useRef<HTMLParagraphElement>(null);
+				useLayoutEffect(() => element.current ? register?.(element.current, adapter) : undefined, [register]);
+				return <div><p ref={element} data-testid="content">hello</p><img alt="" data-testid="image" /></div>;
+			}
+			render(<ArtifactFindScope identity="refresh"><Document /></ArtifactFindScope>);
+			// Edit the document once, then wait for the refresh search it starts.
+			const refresh = async () => { screen.getByTestId("content").textContent = "hello again"; await waitFor(() => expect(adapter.search).toHaveBeenCalledTimes(2)); };
+			return { adapter, finishers, failures, refresh };
+		}
+		it("applies Previous/Next pressed during the refresh once it paints", async () => {
+			const { finishers, refresh } = setup();
+			await search(); await waitFor(() => expect(finishers).toHaveLength(1));
+			await act(async () => { finishers[0]({ total: 3, paint: vi.fn(), clear: vi.fn() }); });
+			await screen.findByText("1/3");
+			await refresh();
+			fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+			expect(screen.getByText("2/3")).toBeInTheDocument();
+			const paint = vi.fn();
+			await act(async () => { finishers[1]({ total: 3, active: 0, paint, clear: vi.fn() }); });
+			expect(paint).toHaveBeenLastCalledWith(1, true); expect(screen.getByText("2/3")).toBeInTheDocument();
+		});
+		it("clears the previous highlights when the refresh fails", async () => {
+			const { finishers, failures, refresh } = setup();
+			await search(); await waitFor(() => expect(finishers).toHaveLength(1));
+			const clear = vi.fn();
+			await act(async () => { finishers[0]({ total: 2, paint: vi.fn(), clear }); });
+			await screen.findByText("1/2");
+			await refresh(); expect(clear).not.toHaveBeenCalled();
+			await act(async () => { failures[1](new Error("refresh failed")); });
+			expect(clear).toHaveBeenCalled(); expect(await screen.findByText(/Could not search this artifact/)).toBeInTheDocument();
+		});
+		it("does not restart Find when an image inside the reader loads", async () => {
+			const { adapter, finishers } = setup();
+			await search(); await waitFor(() => expect(finishers).toHaveLength(1));
+			const clear = vi.fn();
+			await act(async () => { finishers[0]({ total: 2, paint: vi.fn(), clear }); });
+			await screen.findByText("1/2");
+			fireEvent.load(screen.getByTestId("image"));
+			await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+			expect(clear).not.toHaveBeenCalled(); expect(adapter.search).toHaveBeenCalledTimes(1); expect(screen.getByText("1/2")).toBeInTheDocument();
+		});
+	});
 	it("reconfigures frames only when an iframe is added", async () => {
 		function Reader({ frames }: { frames: number }) {
 			return <ArtifactFindScope identity="html"><p data-testid="text">text</p>{Array.from({ length: frames }, (_, index) => <iframe key={index} title={`frame-${index}`} />)}</ArtifactFindScope>;
