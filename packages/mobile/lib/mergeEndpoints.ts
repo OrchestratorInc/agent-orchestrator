@@ -5,7 +5,8 @@ import type { Endpoint, EndpointKind } from "./endpoints";
  *
  * The daemon's list is authoritative for every kind it mentions — a rotated
  * tunnel hostname or a changed DHCP lease must replace the old value, which is
- * what makes a pairing self-healing.
+ * what makes a pairing self-healing. The one exception is a LAN name (see
+ * isName below), which outlives the addresses the daemon lists.
  *
  * But a kind the daemon omits entirely is treated as *unknown*, not as
  * *absent*. Measured on device: a quick tunnel takes ~34s to restart and
@@ -28,5 +29,20 @@ import type { Endpoint, EndpointKind } from "./endpoints";
  */
 export function mergeEndpoints(stored: Endpoint[], fresh: Endpoint[]): Endpoint[] {
 	const refreshed = new Set<EndpointKind>(fresh.map((e) => e.kind));
-	return [...fresh, ...stored.filter((e) => !refreshed.has(e.kind))];
+	const freshHosts = new Set(fresh.map((e) => e.host.toLowerCase()));
+	return [...fresh, ...stored.filter((e) =>
+		!refreshed.has(e.kind) || (e.kind === "lan" && isName(e.host) && !freshHosts.has(e.host.toLowerCase())))];
+}
+
+/**
+ * A LAN endpoint named rather than numbered — the Mac's mDNS name
+ * (studio.local) or a name typed by hand — outlives the address it resolves
+ * to, so the advertised list never replaces it. The daemon advertises the
+ * machine's current IPs, which a DHCP lease change makes dead; without a kept
+ * name, a phone with no other usable route (an iPhone cannot use plain-HTTP
+ * Tailscale) never reaches the machine again to learn the new address. A name
+ * the refresh lists itself, on whatever port, is taken from the refresh.
+ */
+function isName(host: string): boolean {
+	return !/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && !host.includes(":");
 }

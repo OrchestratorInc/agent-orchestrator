@@ -49,4 +49,35 @@ describe("merging a refreshed endpoint list over the stored one", () => {
 	it("has nothing to keep on a first pairing", () => {
 		expect(mergeEndpoints([], [lan, newTunnel])).toEqual([lan, newTunnel]);
 	});
+
+	// A Mac's mDNS name follows it across DHCP leases; its IP does not. A
+	// refresh that lists only the machine's current IPs must not throw the
+	// name away, or the next lease change leaves the phone with nothing that
+	// works (an iPhone cannot fall back to plain-HTTP Tailscale).
+	it("keeps a stored LAN name the refresh does not list", () => {
+		const named: Endpoint = { kind: "lan", host: "studio.local", port: 3011, secure: false };
+		expect(mergeEndpoints([named, lan, tailscale], [lan2, tailscale])).toEqual([lan2, tailscale, named]);
+	});
+
+	it("keeps a hand-typed unqualified LAN name", () => {
+		const named: Endpoint = { kind: "lan", host: "studio", port: 3011, secure: false };
+		expect(mergeEndpoints([named], [lan])).toEqual([lan, named]);
+	});
+
+	it("does not duplicate a LAN name the refresh lists too", () => {
+		const named: Endpoint = { kind: "lan", host: "studio.local", port: 3011, secure: false };
+		expect(mergeEndpoints([named, lan], [lan2, named])).toEqual([lan2, named]);
+	});
+
+	// The daemon moved ports: the name it now advertises is authoritative.
+	it("drops a stored LAN name the refresh lists on another port", () => {
+		const named: Endpoint = { kind: "lan", host: "studio.local", port: 3011, secure: false };
+		const moved: Endpoint = { ...named, port: 3012 };
+		expect(mergeEndpoints([named], [moved])).toEqual([moved]);
+	});
+
+	it("still replaces stored LAN IP addresses, v4 and v6", () => {
+		const v6: Endpoint = { kind: "lan", host: "fd00::2", port: 3011, secure: false };
+		expect(mergeEndpoints([lan, v6], [lan2])).toEqual([lan2]);
+	});
 });

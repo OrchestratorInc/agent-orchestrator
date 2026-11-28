@@ -111,6 +111,21 @@ describe("connectHost", () => {
 		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, manual]);
 	});
 
+	// The pairing's own name must survive a connect that an IP won: the IP is
+	// what a DHCP lease change kills, and the name is how the phone finds the
+	// machine afterwards.
+	it("keeps the machine's LAN name when one of its IPs wins the race", async () => {
+		const named: Endpoint = { kind: "lan", host: "studio.local", port: 3011, secure: false };
+		const d = deps({
+			findHost: vi.fn(async () => host({ endpoints: [named, lan] })),
+			refreshEndpoints: vi.fn(async () => [lan]),
+		});
+
+		await connectHost("h_paired", d);
+
+		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, named]);
+	});
+
 	// A quick tunnel takes ~34s to restart and settle, and the daemon advertises
 	// no tunnel for that whole window. Replacing the stored list wholesale there
 	// erased the only endpoint that works away from home — and nothing refreshes
