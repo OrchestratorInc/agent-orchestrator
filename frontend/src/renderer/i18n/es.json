@@ -1484,6 +1484,8 @@
 	"mobile.getApp": "Obtener la aplicación",
 	"mobile.scanHint": "Escanea con la app móvil de Orchestrator",
 	"mobile.remoteAccessOn": "Acceso remoto activado",
+	"mobile.publicTunnel.label": "Acceso desde cualquier lugar",
+	"mobile.publicTunnel.help": "Usa un túnel de Cloudflare, que puede leer el tráfico. Desactivado: solo se conectan los dispositivos de esta red o de Tailscale.",
 	"mobile.hideQR": "Ocultar código QR del App Store",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "Obtén Orchestrator en el App Store",

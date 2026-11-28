@@ -749,6 +749,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers: mobile wire envelopes
 	"ControllersMobileStatusResponse":             "MobileStatusResponse",
 	"ControllersSetBrowserRemoteAccessRequest":    "SetBrowserRemoteAccessRequest",
+	"ControllersSetPublicTunnelRequest":           "SetPublicTunnelRequest",
 	"MobilebridgeEndpoint":                        "MobileEndpoint",
 	"MobilebridgeTunnelStatus":                    "MobileTunnelStatus",
 	"ControllersIdentityResponse":                 "IdentityResponse",
@@ -3193,6 +3194,17 @@ func mobileOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/mobile/browser-control", id: "setMobileBrowserRemoteAccess", tag: "mobile",
 			summary: "Allow or deny paired-device access to the desktop browser",
 			reqBody: controllers.SetBrowserRemoteAccessRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MobileStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/mobile/public-tunnel", id: "setMobilePublicTunnel", tag: "mobile",
+			summary: "Publish the mobile bridge through the public tunnel, or keep it to this network and Tailscale",
+			reqBody: controllers.SetPublicTunnelRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.MobileStatusResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

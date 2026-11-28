@@ -3533,6 +3533,11 @@ type SetBrowserRemoteAccessRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+// SetPublicTunnelRequest is the body for POST /api/v1/mobile/public-tunnel.
+type SetPublicTunnelRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,
 // in which `tailscale serve` fronts the bridge with a real certificate so iOS
 // can pair by scanning (App Transport Security blocks cleartext to Tailscale's

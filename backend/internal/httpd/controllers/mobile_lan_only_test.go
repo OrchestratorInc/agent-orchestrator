@@ -149,6 +149,65 @@ func TestLANOnlyStartRemoteAccessEnablesPublicTunnel(t *testing.T) {
 	}
 }
 
+func TestPublicTunnelOffWhileDisabledKeepsBridgeOffAndPrivate(t *testing.T) {
+	tunnel := &fakeTunnel{}
+	bridge := lanOnlyBridge(t, tunnel)
+	status, err := bridge.SetPublicTunnel(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Enabled || bridge.LAN.Running() || !status.NoPublicTunnel || tunnel.startedOn != 0 {
+		t.Fatal("turning the public tunnel off started the bridge or did not report the choice")
+	}
+	if state := loadLANOnlyState(t, bridge.ConfigPath); state.Enabled || !state.NoPublicTunnel {
+		t.Fatalf("choice was not saved for the next enable: %+v", state)
+	}
+	if _, err := bridge.SetPublicTunnel(true); err != nil {
+		t.Fatal(err)
+	}
+	if bridge.LAN.Running() || tunnel.startedOn != 0 || loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
+		t.Fatal("turning the public tunnel back on while disabled started something or was not saved")
+	}
+}
+
+func TestPublicTunnelSwitchWhileRunningKeepsPassword(t *testing.T) {
+	tunnel := &fakeTunnel{}
+	bridge := lanOnlyBridge(t, tunnel)
+	before, err := bridge.Enable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, err := bridge.SetPublicTunnel(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Password != before.Password || !off.NoPublicTunnel || tunnel.stops != 1 || !bridge.LAN.Running() {
+		t.Fatal("turning the public tunnel off rotated the password, kept the tunnel, or stopped the listener")
+	}
+	tunnel.startedOn = 0
+	on, err := bridge.SetPublicTunnel(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.Password != before.Password || on.NoPublicTunnel || tunnel.startedOn != 3011 || loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
+		t.Fatal("turning the public tunnel on rotated the password or did not start and save it")
+	}
+}
+
+func TestPublicTunnelOffRefusedOnTunnelOnlyHost(t *testing.T) {
+	tunnel := &fakeTunnel{}
+	bridge := lanOnlyBridge(t, tunnel)
+	if _, err := bridge.EnableTunnelOnly(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bridge.SetPublicTunnel(false); err == nil {
+		t.Fatal("turned off the only way into a tunnel-only host")
+	}
+	if tunnel.stops != 0 || loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
+		t.Fatal("a refused switch stopped the tunnel or saved the choice")
+	}
+}
+
 func TestTunnelOnlyPersistsLoopbackAndAdvertisesOnlyTunnel(t *testing.T) {
 	tunnel := &fakeTunnel{endpoint: &mobilebridge.TunnelEndpoint{Ready: true, Hostname: "test.trycloudflare.com"}}
 	bridge := lanOnlyBridge(t, tunnel)

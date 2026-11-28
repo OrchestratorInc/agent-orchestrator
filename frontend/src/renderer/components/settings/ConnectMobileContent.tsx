@@ -230,6 +230,7 @@ interface MobileStatus {
 	accountLinked?: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
+	loopbackOnly?: boolean;
 	browserRemoteAccess?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
@@ -478,6 +479,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const enable = useMutation({
 		mutationFn: async () => {
+			if (query.data?.noPublicTunnel === true) {
+				const { data, error } = await apiClient.POST("/api/v1/mobile/enable-lan-only");
+				if (error) throw apiErrorException(error);
+				return data;
+			}
 			// Signed in or not, it starts as before fixed addresses: an app that
 			// quits while the link runs leaves remote access on its quick tunnel,
 			// not a computer that only serves this network after a restart. The
@@ -578,6 +584,25 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSettled: invalidate,
 	});
 
+	const setPublicTunnel = useMutation({
+		mutationFn: async (on: boolean) => {
+			if (on && query.data?.enabled) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
+			const { data, error } = await apiClient.POST("/api/v1/mobile/public-tunnel", { body: { enabled: on } });
+			if (error) throw apiErrorException(error);
+			return data;
+		},
+		onMutate: async (on) => {
+			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, noPublicTunnel: !on });
+			return { previous };
+		},
+		onError: (_error, _on, context) => {
+			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
+		},
+		onSettled: invalidate,
+	});
+
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
 	// to a 100.x address, so a Tailscale pairing without it works on Android and
@@ -654,7 +679,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// No connector on this machine at all: cloudflared is absent and nothing
 	// installs it. Pairing still works on the local network, so this is a
 	// caveat to state rather than a failure to block on.
-	const remoteAccessUnavailable = status?.tunnel ? status.tunnel.supported === false : false;
+	const remoteAccessUnavailable = status?.noPublicTunnel !== true && status?.tunnel?.supported === false;
 	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
 	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
@@ -666,6 +691,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.isPending ||
 		setSecure.isPending ||
 		setBrowserRemoteAccess.isPending ||
+		setPublicTunnel.isPending ||
 		stayAwake.busy;
 
 	const clearActionErrors = () => {
@@ -675,6 +701,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
+		setPublicTunnel.reset();
 		setLinkError("");
 	};
 
@@ -728,6 +755,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		(setPublicTunnel.error instanceof Error && setPublicTunnel.error.message) ||
 		(pairingCodeFailed && pairing.error instanceof Error && pairing.error.message) ||
 		stayAwake.error ||
 		linkError ||
@@ -978,7 +1006,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{qrValue && signInConfigured && !signedIn && !status?.tunnel?.fixed && (
+				{qrValue && signInConfigured && !signedIn && !status?.noPublicTunnel && !status?.tunnel?.fixed && (
 					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-hint" role="status">
 						{t("mobile.signInForFixedAddress", "Sign in to Orchestrator to give this computer an address that stays the same after restarts.")}
 					</p>
@@ -1017,6 +1045,25 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					disabled={busy}
 					checked={enabled}
 					onCheckedChange={(next) => (next ? startBridge() : turnOff())}
+				/>
+			</SettingsRow>
+			<SettingsRow
+				icon={Globe}
+				label={t("mobile.publicTunnel.label", "Reach from anywhere")}
+				description={t(
+					"mobile.publicTunnel.help",
+					"Uses a Cloudflare tunnel, which can read the traffic. Off: only devices on this network or on Tailscale connect.",
+				)}
+				data-testid="mobile-public-tunnel"
+			>
+				<Switch
+					aria-label={t("mobile.publicTunnel.label", "Reach from anywhere")}
+					disabled={busy || (status.enabled && status.loopbackOnly === true)}
+					checked={status.noPublicTunnel !== true}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setPublicTunnel.mutate(next);
+					}}
 				/>
 			</SettingsRow>
 

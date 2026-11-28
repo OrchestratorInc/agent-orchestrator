@@ -31,6 +31,7 @@ type mobileBridge interface {
 	SetSecurePairing(on bool) (MobileStatusResponse, error)
 	SetKeepAwake(on bool) (MobileStatusResponse, error)
 	SetBrowserRemoteAccess(on bool) (MobileStatusResponse, error)
+	SetPublicTunnel(on bool) (MobileStatusResponse, error)
 	SetKeepAwakeLid(on, lidClosed bool) (MobileStatusResponse, error)
 }
 
@@ -293,6 +294,21 @@ func (c *MobileController) BrowserRemoteAccess(w http.ResponseWriter, r *http.Re
 	res, err := c.Bridge.SetBrowserRemoteAccess(body.Enabled)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_BROWSER_CONTROL", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
+}
+
+// PublicTunnel turns publishing through the public tunnel on or off.
+func (c *MobileController) PublicTunnel(w http.ResponseWriter, r *http.Request) {
+	var body SetPublicTunnelRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "invalid_request", "MOBILE_PUBLIC_TUNNEL", "invalid body", nil)
+		return
+	}
+	res, err := c.Bridge.SetPublicTunnel(body.Enabled)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_PUBLIC_TUNNEL", err.Error(), nil)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
@@ -1381,7 +1397,10 @@ func (b *BridgeService) EnableTunnelOnly() (MobileStatusResponse, error) {
 func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
+	return b.startRemoteAccessLocked()
+}
 
+func (b *BridgeService) startRemoteAccessLocked() (MobileStatusResponse, error) {
 	st, err := mobilebridge.Load(b.ConfigPath)
 	if err != nil {
 		return MobileStatusResponse{}, err
@@ -1405,6 +1424,34 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 	// A link that just reached AO Cloud may follow a refused publish; publish
 	// again now so its status does not wait out the refusal backoff.
 	b.nudgeListing()
+	return b.Status(), nil
+}
+
+// SetPublicTunnel saves and applies whether the bridge uses the public tunnel.
+func (b *BridgeService) SetPublicTunnel(on bool) (MobileStatusResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return MobileStatusResponse{}, err
+	}
+	if !on && st.Enabled && st.LoopbackOnly {
+		return MobileStatusResponse{}, errors.New("this computer is reached only through its tunnel; run `ao remote-host disable` before turning the tunnel off")
+	}
+	if on && st.Enabled && b.LAN.Running() {
+		return b.startRemoteAccessLocked()
+	}
+	if st.NoPublicTunnel != !on {
+		st.NoPublicTunnel = !on
+		if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
+	if !on {
+		if t := b.tunnel(); t != nil {
+			t.Stop()
+		}
+	}
 	return b.Status(), nil
 }
 

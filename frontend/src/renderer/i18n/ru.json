@@ -1446,6 +1446,8 @@
 	"mobile.getApp": "Скачать приложение",
 	"mobile.scanHint": "Отсканируйте код в мобильном приложении Orchestrator",
 	"mobile.remoteAccessOn": "Удалённый доступ включён",
+	"mobile.publicTunnel.label": "Доступ откуда угодно",
+	"mobile.publicTunnel.help": "Использует туннель Cloudflare, который может читать трафик. Выкл.: подключаются только устройства в этой сети или в Tailscale.",
 	"mobile.remoteAccessEnabling": "Включение удалённого доступа",
 	"mobile.remoteAccessEnablingHint": "Пока доступно только в этой сети",
 	"mobile.remoteAccessEnablingHintTailscale": "Пока доступ извне возможен только через Tailscale",

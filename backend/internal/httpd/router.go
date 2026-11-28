@@ -212,6 +212,7 @@ func mountMobile(r chi.Router, c *controllers.MobileController) {
 	r.Post("/api/v1/mobile/pairing-code", c.NewPairingCode)
 	r.Post("/api/v1/mobile/require-device-credentials", c.RequireDeviceCredentials)
 	r.Post("/api/v1/mobile/browser-control", c.BrowserRemoteAccess)
+	r.Post("/api/v1/mobile/public-tunnel", c.PublicTunnel)
 }
 
 // mountMobileDevices registers the desktop-only mobile device roster. These sit

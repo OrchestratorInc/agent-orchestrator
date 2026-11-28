@@ -63,7 +63,14 @@ vi.mock("../../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async (
 vi.mock("../../lib/api-client", () => ({
 	apiClient: {
 		GET: async (path: string) => (path === "/api/v1/mobile/devices" ? { data: { devices: [] } } : { data: structuredClone(fake.status) }),
-		POST: vi.fn(async (path: string) => {
+		POST: vi.fn(async (path: string, init?: { body?: { enabled?: boolean } }) => {
+			if (path === "/api/v1/mobile/public-tunnel") fake.status.noPublicTunnel = init?.body?.enabled === false;
+			if (path === "/api/v1/mobile/enable-lan-only") {
+				Object.assign(fake.status, {
+					enabled: true, noPublicTunnel: true, password: "pw-1",
+					endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+				});
+			}
 			if (path === "/api/v1/mobile/enable") {
 				Object.assign(fake.status, {
 					enabled: true, noPublicTunnel: false, password: "pw-1",
@@ -221,6 +228,39 @@ test("on an AO Cloud without fixed addresses a new password is listed at the tun
 	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
 		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://quiet-river.trycloudflare.com:443" },
 	));
+});
+
+test("with Reach from anywhere off, a signed-in computer pairs on this network and Tailscale only", async () => {
+	fake.signedIn = true;
+	fake.tunnelHost = "quiet-river.trycloudflare.com";
+	renderContent();
+	const reach = await screen.findByRole("switch", { name: "Reach from anywhere" });
+	expect(reach).toBeChecked();
+	await userEvent.click(reach);
+	await waitFor(() => expect(reach).not.toBeChecked());
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/public-tunnel", "/api/v1/mobile/enable-lan-only"]));
+	expect(vi.mocked(apiClient.POST).mock.calls[0]).toEqual(["/api/v1/mobile/public-tunnel", { body: { enabled: false } }]);
+	expect(linkThisComputer).not.toHaveBeenCalled();
+	expect(fake.status.endpoints.map((e) => e.kind)).toEqual(["lan"]);
+	expect(screen.queryByTestId("mobile-sign-in-hint")).toBeNull();
+});
+
+test("turning Reach from anywhere back on links the computer and starts its tunnel", async () => {
+	fake.signedIn = true;
+	Object.assign(fake.status, {
+		enabled: true, noPublicTunnel: true, password: "pw-1",
+		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+	});
+	renderContent();
+	const reach = await screen.findByRole("switch", { name: "Reach from anywhere" });
+	expect(reach).not.toBeChecked();
+	await userEvent.click(reach);
+
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/remote-access"]));
+	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", undefined);
+	await waitFor(() => expect(reach).toBeChecked());
 });
 
 test("a LAN-only computer gets a new password without being listed", async () => {

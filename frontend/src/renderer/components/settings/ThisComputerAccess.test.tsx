@@ -27,6 +27,7 @@ const fake = vi.hoisted(() => {
 		linked: false,
 		// Status reads left while the daemon downloads its own cloudflared.
 		downloadReads: 0,
+		publicTunnelRejects: false,
 	};
 	const cloud = {
 		hosts: new Map<string, { label: string; url: string; token: string }>(),
@@ -76,7 +77,7 @@ const fake = vi.hoisted(() => {
 		}
 		return snapshot();
 	};
-	const post = (path: string, init?: { headers?: Record<string, string> }) => {
+	const post = (path: string, init?: { headers?: Record<string, string>; body?: { enabled?: boolean } }) => {
 		log.push(path);
 		switch (path) {
 			case "/api/v1/mobile/enable":
@@ -96,6 +97,10 @@ const fake = vi.hoisted(() => {
 					daemon.password = `pw-${++daemon.passwordsIssued}`;
 				}
 				daemon.noPublicTunnel = true;
+				return { data: snapshot() };
+			case "/api/v1/mobile/public-tunnel":
+				if (daemon.publicTunnelRejects) throw new TypeError("Failed to fetch");
+				daemon.noPublicTunnel = !init?.body?.enabled;
 				return { data: snapshot() };
 			case "/api/v1/mobile/disable":
 				daemon.enabled = false;
@@ -158,7 +163,7 @@ vi.mock("../../lib/api-client", () => ({
 			if (path === "/api/v1/system/install/{target}") return { data: { target: "cloudflared", status: fake.daemon.downloadReads > 0 ? "running" : "idle" } };
 			return { error: { error: { message: `unexpected GET ${path}` } } };
 		}),
-		POST: vi.fn(async (path: string, init?: { headers?: Record<string, string> }) => fake.post(path, init)),
+		POST: vi.fn(async (path: string, init?: { headers?: Record<string, string>; body?: { enabled?: boolean } }) => fake.post(path, init)),
 	},
 	apiErrorMessage: (error: unknown) => (error as { error?: { message?: string } } | undefined)?.error?.message ?? "Request failed",
 }));
@@ -195,7 +200,7 @@ beforeEach(() => {
 afterEach(() => {
 	vi.useRealTimers();
 	cloudBridge().request = originalCloudRequest;
-	Object.assign(fake.daemon, { enabled: false, password: "", noPublicTunnel: false, connector: true, tunnelHost: "", tunnelError: "", readsUntilTunnel: 0, passwordsIssued: 0, linked: false, downloadReads: 0 });
+	Object.assign(fake.daemon, { enabled: false, password: "", noPublicTunnel: false, connector: true, tunnelHost: "", tunnelError: "", readsUntilTunnel: 0, passwordsIssued: 0, linked: false, downloadReads: 0, publicTunnelRejects: false });
 	fake.cloud.hosts.clear();
 	fake.cloud.failPut = false;
 	fake.cloud.failDelete = false;
@@ -402,6 +407,26 @@ it("puts a paired phone's LAN-only access back when linking fails", async () => 
 
 	expect(await screen.findByRole("alert")).toBeVisible();
 	expect(fake.daemon).toMatchObject({ enabled: true, noPublicTunnel: true, password: "pw-phone", tunnelHost: "" });
+});
+
+it("keeps Reach from anywhere off when turning on from a stopped bridge fails", async () => {
+	Object.assign(fake.daemon, { noPublicTunnel: true });
+	fake.cloud.failPut = true;
+	renderAccess();
+	fireEvent.click(await readySwitch());
+
+	expect(await screen.findByRole("alert")).toBeVisible();
+	expect(fake.daemon).toMatchObject({ enabled: false, noPublicTunnel: true });
+});
+
+it("still stops remote access when keeping Reach from anywhere off fails after a failed turn-on", async () => {
+	Object.assign(fake.daemon, { noPublicTunnel: true, publicTunnelRejects: true });
+	fake.cloud.failPut = true;
+	renderAccess();
+	fireEvent.click(await readySwitch());
+
+	expect(await screen.findByRole("alert")).toBeVisible();
+	expect(fake.daemon.enabled).toBe(false);
 });
 
 it("leaves remote access that was already on running when linking fails", async () => {
