@@ -43,6 +43,54 @@ var installID atomic.Pointer[string]
 // send. The same hash picks the same installs in Electron main
 // (frontend/src/shared/sentry-config.ts installInErrorSample).
 var sampled atomic.Bool
+
+// plan is the install's AO Cloud plan, as the desktop last reported it
+// (frontend/src/shared/cloud-plan.ts). Every event is tagged with it, and a
+// paid plan sends non-fatal errors outside the sample; budgets still apply.
+var plan atomic.Pointer[string]
+
+var cloudPlans = map[string]struct{}{"free": {}, "starter": {}, "pro": {}, "enterprise": {}, "none": {}, "unknown": {}}
+
+// SetPlan records the plan; a value outside the vocabulary is "unknown".
+func SetPlan(value string) {
+	if _, ok := cloudPlans[value]; !ok {
+		value = "unknown"
+	}
+	plan.Store(&value)
+}
+
+func currentPlan() string {
+	if p := plan.Load(); p != nil {
+		return *p
+	}
+	return "unknown"
+}
+
+func isPaidPlan(p string) bool {
+	switch p {
+	case "starter", "pro", "enterprise":
+		return true
+	}
+	return false
+}
+
+// admitPlan reads the plan once for a non-fatal event: whether the install
+// sends it, and tags carrying that same plan so admission, the plan tag and
+// sample_rate agree even if the plan changes before the send. tags is never
+// modified.
+func admitPlan(tags map[string]string) (map[string]string, bool) {
+	p := currentPlan()
+	if !sampled.Load() && !isPaidPlan(p) {
+		return tags, false
+	}
+	out := make(map[string]string, len(tags)+1)
+	for k, v := range tags {
+		out[k] = v
+	}
+	out["plan"] = p
+	return out, true
+}
+
 var release atomic.Pointer[string]
 var environment atomic.Pointer[string]
 var approvedRoutes sync.Map
@@ -447,6 +495,9 @@ func safeSentryTag(key, value string) bool {
 		return safeErrorCode(value)
 	case "sample_rate":
 		return value == sampledErrorRate || value == fatalErrorRate
+	case "plan":
+		_, ok := cloudPlans[value]
+		return ok
 	case "install_id":
 		id := installID.Load()
 		return id != nil && value != "" && value == *id
@@ -520,7 +571,11 @@ func CaptureErrorAsync(ctx context.Context, err error, tags map[string]string, f
 }
 
 func captureErrorFor(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
-	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) || ctx.Err() != nil || !sampled.Load() || !enterCapture(ctx) {
+	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) || ctx.Err() != nil {
+		return
+	}
+	tags, send := admitPlan(tags)
+	if !send || !enterCapture(ctx) {
 		return
 	}
 	defer leaveCapture()
@@ -663,13 +718,19 @@ func stackAtSite(site telemetrymeta.FailureSite, operation string) *sentry.Stack
 
 func applyTags(scope *sentry.Scope, level sentry.Level, tags map[string]string, route telemetrymeta.SafeRoute) {
 	scope.SetTag("platform", "daemon")
-	if level == sentry.LevelFatal {
+	// Non-fatal events carry the plan admitPlan read; panics read it now.
+	plan := tags["plan"]
+	if plan == "" {
+		plan = currentPlan()
+	}
+	scope.SetTag("plan", plan)
+	if level == sentry.LevelFatal || isPaidPlan(plan) {
 		scope.SetTag("sample_rate", fatalErrorRate)
 	} else {
 		scope.SetTag("sample_rate", sampledErrorRate)
 	}
 	for k, v := range tags {
-		if k == "install_id" || k == "path" || k == "area" || k == "sample_rate" {
+		if k == "install_id" || k == "path" || k == "area" || k == "sample_rate" || k == "plan" {
 			continue
 		}
 		if v != "" {

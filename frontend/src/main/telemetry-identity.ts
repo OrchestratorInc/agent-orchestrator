@@ -47,6 +47,16 @@ export class TelemetryIdentityController {
 	// Stamped on every POST so the daemon can refuse one that was delayed in
 	// transit (a client timeout cannot recall it) until after a newer one landed.
 	private sequence = 0;
+	// The AO Cloud plan for the daemon's Sentry tag and sampling, in memory on
+	// both sides, so it is replayed to a restarted daemon like the user.
+	private plan: string | null = null;
+	private planPushed = true;
+	// Bumped on every invalidate, so a late answer from a daemon that already
+	// left `ready` cannot mark the plan pushed for the next one.
+	private planGeneration = 0;
+	// Orders plan-only POSTs on the daemon's own plan counter, apart from the
+	// identity sequence.
+	private planSequence = 0;
 
 	constructor(
 		private readonly dataDir: string,
@@ -103,6 +113,8 @@ export class TelemetryIdentityController {
 	 * the next ready transition must replay the signed-in user.
 	 */
 	invalidate(): void {
+		this.planGeneration++;
+		if (this.plan !== null) this.planPushed = false;
 		if (!this.known) return;
 		this.pushed = false;
 		this.generation++;
@@ -158,9 +170,52 @@ export class TelemetryIdentityController {
 
 	/** Retries the hand-off; called when the daemon becomes ready. */
 	flush(): Promise<void> {
-		const run = this.queue.then(() => this.flushOnce());
+		const run = this.queue.then(() => this.flushOnce()).then(() => this.flushPlan());
 		this.queue = run.catch(() => undefined);
 		return run;
+	}
+
+	/** Records the plan (already from the fixed vocabulary) and hands it to the daemon. */
+	setPlan(plan: string): Promise<void> {
+		// Only a delivered plan is skipped; a pending one is retried.
+		if (plan === this.plan && this.planPushed) return Promise.resolve();
+		this.plan = plan;
+		this.planPushed = false;
+		return this.flush();
+	}
+
+	// A plan-only body on the identity route: no cloudUserId, so the daemon
+	// leaves the identity alone, and its own sequence, so a delayed older plan
+	// cannot replace a newer one.
+	private async flushPlan(): Promise<void> {
+		const plan = this.plan;
+		if (plan === null || this.planPushed) return;
+		const base = this.origin();
+		if (!base) return;
+		const generation = this.planGeneration;
+		try {
+			// As for the identity: a 409 on the first attempt means this process is
+			// behind the daemon's plan counter, so it jumps past it once.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				this.planSequence = Math.max(this.planSequence + 1, Date.now());
+				const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { plan, sequence: this.planSequence } });
+				if (this.plan !== plan || this.planGeneration !== generation) return;
+				if (response.status === 409 && attempt === 0) {
+					const last = await daemonSequence(response);
+					if (last !== null) {
+						this.planSequence = Math.max(this.planSequence, last);
+						// Reading the body awaited: a newer plan, or a restart, leaves this one to the queued flush.
+						if (this.plan !== plan || this.planGeneration !== generation) return;
+						continue;
+					}
+				}
+				// A daemon without plan support refuses the field (400) or the route (404/405): nothing to retry.
+				this.planPushed = response.ok || response.status === 400 || response.status === 404 || response.status === 405;
+				return;
+			}
+		} catch {
+			// Daemon not reachable yet; flush() runs again on the next ready transition.
+		}
 	}
 
 	/** Strictly increasing and still increasing across an app restart (wall-clock based). */

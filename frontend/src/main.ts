@@ -58,7 +58,8 @@ import {
 } from "./main/auto-updater";
 import { REMOTE_APP_UPDATE_ACTION, runRemoteAppUpdate } from "./main/remote-app-update";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
-import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
+import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture, setMainSentryPlan } from "./main/sentry-main";
+import { cloudPlan } from "./shared/cloud-plan";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
 import { TelemetryIdentityController } from "./main/telemetry-identity";
@@ -3881,6 +3882,15 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || (userId !== null && typeof userId !== "string")) throw new Error("invalid cloud user request");
 	return telemetryIdentity.setCloudUser(userId);
+});
+// The renderer's AO Cloud plan, from a fixed vocabulary: kept in memory for
+// Sentry tags and sampling here and in the daemon. Nothing is sent from here.
+ipcMain.handle("telemetry:setPlan", (event, plan: unknown) => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return false;
+	const safe = cloudPlan(plan);
+	setMainSentryPlan(safe);
+	void telemetryIdentity.setPlan(safe);
+	return true;
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getLifetimeSessions", () => {
