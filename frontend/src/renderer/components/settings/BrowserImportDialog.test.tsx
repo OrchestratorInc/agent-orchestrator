@@ -40,6 +40,20 @@ const safariSource = {
 	historySupport: true as const,
 };
 
+const appBoundSource = {
+	...source,
+	id: "a2".padEnd(32, "2"),
+	cookieSupport: "unsupported" as const,
+	cookieSupportReason: "chromium-app-bound-encryption" as const,
+};
+
+const importedProfile = {
+	id: "11111111-1111-4111-8111-111111111111",
+	name: "Google Chrome",
+	createdAt: "2026-01-01T00:00:00.000Z",
+	updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
 describe("BrowserImportDialog", () => {
 	const originalBridge = aoBridge.browserProfiles;
 
@@ -110,6 +124,7 @@ describe("BrowserImportDialog", () => {
 		expect(status).not.toContainElement(screen.getByText("Cookies and site sign-ins"));
 		expect(status).not.toContainElement(screen.getByText("Select a new profile from the browser toolbar to use the imported data."));
 		expect(screen.getAllByText("Import complete")).toHaveLength(1);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByText(/^Import details/));
 		expect(details).toHaveAttribute("open");
 		expect(status).toHaveTextContent(/^12 cookies · 34 history entries$/);
@@ -121,6 +136,103 @@ describe("BrowserImportDialog", () => {
 			includeHistory: true,
 			destination: { mode: "merge", name: "Google Chrome" },
 		}));
+	});
+
+	it("warns before importing app-bound Chrome and reports lost sign-ins in the result", async () => {
+		const bridge: AoBridge["browserProfiles"] = {
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
+			create: vi.fn(),
+			rename: vi.fn(),
+			clear: vi.fn(),
+			usage: vi.fn(async () => ({ sessions: [] })),
+			delete: vi.fn(),
+			setDefault: vi.fn(),
+			discoverImportSources: vi.fn(async () => ({ sources: [appBoundSource] })),
+			import: vi.fn(async () => ({
+				sourceName: appBoundSource.name,
+				entries: [{
+					sourceProfileNames: ["Default"],
+					destinationProfile: importedProfile,
+					importedCookies: 0,
+					skippedCookies: 4,
+					importedHistoryEntries: 21,
+					warnings: [{ code: "cookie-encryption-unsupported" as BrowserImportWarning["code"], count: 4 }],
+				}],
+			})),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		aoBridge.browserProfiles = bridge;
+
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		expect(await screen.findByText(/newer scheme that Orchestrator cannot read/)).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
+		expect(await screen.findByRole("heading", { name: "Import needs attention" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent(/No cookies were imported/);
+	});
+
+	it("keeps the app-bound warning visible when some other cookies still import", async () => {
+		const bridge: AoBridge["browserProfiles"] = {
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
+			create: vi.fn(),
+			rename: vi.fn(),
+			clear: vi.fn(),
+			usage: vi.fn(async () => ({ sessions: [] })),
+			delete: vi.fn(),
+			setDefault: vi.fn(),
+			discoverImportSources: vi.fn(async () => ({ sources: [appBoundSource] })),
+			import: vi.fn(async () => ({
+				sourceName: appBoundSource.name,
+				entries: [{
+					sourceProfileNames: ["Default"],
+					destinationProfile: importedProfile,
+					importedCookies: 5,
+					skippedCookies: 4,
+					importedHistoryEntries: 21,
+					warnings: [{ code: "cookie-encryption-unsupported" as BrowserImportWarning["code"], count: 4 }],
+				}],
+			})),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		aoBridge.browserProfiles = bridge;
+
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		await userEvent.click(await screen.findByRole("button", { name: "Start import" }));
+		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent(/saved sign-ins may be missing/);
+		expect(screen.getByRole("status")).toHaveTextContent(/^5 cookies · 21 history entries$/);
+	});
+
+	it.each([
+		{ warning: "encrypted-cookies-skipped", cookies: true, history: 2 },
+		{ warning: "cookie-write-failed", cookies: true, history: 2 },
+		{ warning: "cookie-database-missing", cookies: true, history: 2 },
+		{ warning: "encrypted-cookies-skipped", cookies: true, history: 0 },
+		{ warning: undefined, cookies: true, history: 2 },
+		{ warning: undefined, cookies: false, history: 2 },
+	] as const)("reports zero cookies with warning=$warning, cookies=$cookies and history=$history", async ({ warning, cookies, history }) => {
+		aoBridge.browserProfiles = {
+			...originalBridge,
+			discoverImportSources: vi.fn(async () => ({ sources: [source] })),
+			import: vi.fn(async () => ({ sourceName: source.name, entries: [{
+				destinationProfile: importedProfile, sourceProfileNames: ["Default"], importedCookies: 0,
+				importedHistoryEntries: history, skippedCookies: warning ? 1 : 0,
+				warnings: warning ? [{ code: warning, count: 1 }] : [],
+			}] })),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		await screen.findByRole("button", { name: "Start import" });
+		if (!cookies) await userEvent.click(screen.getByRole("checkbox", { name: /Cookies and site sign-ins/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
+		const title = history === 0 ? "Nothing was imported" : cookies ? "Import needs attention" : "Import complete";
+		await screen.findByRole("heading", { name: title });
+		if (cookies) {
+			expect(screen.getByRole("alert")).toHaveTextContent("No cookies were imported. Saved sign-ins were not transferred.");
+			if (warning) expect(screen.getByText(/^Import details/).closest("details")).not.toHaveAttribute("open");
+		} else {
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		}
 	});
 
 	it("only probes and warns about Safari after Safari is selected", async () => {
@@ -223,7 +335,7 @@ describe("BrowserImportDialog", () => {
 		expect(screen.queryByRole("heading", { name: "Import complete" })).not.toBeInTheDocument();
 	});
 
-	it("shows completion and a neutral cookie status when Safari only imports history", async () => {
+	it("shows a zero-cookie warning while keeping Safari's successful history import visible", async () => {
 		aoBridge.browserProfiles = {
 			...originalBridge,
 			discoverImportSources: vi.fn(async () => ({ sources: [safariSource] })),
@@ -238,7 +350,8 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Safari");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
+		expect(await screen.findByRole("heading", { name: "Import needs attention" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("No cookies were imported");
 		expect(screen.getByText("0 cookies · 1 history entries")).toBeInTheDocument();
 		const cookieRow = screen.getByText("Cookies and site sign-ins").parentElement!;
 		expect(within(cookieRow).getByText("Nothing was imported")).toHaveClass("sr-only");
@@ -250,7 +363,7 @@ describe("BrowserImportDialog", () => {
 		expect(historyRow.querySelector("svg:last-child")).toHaveClass("text-success");
 	});
 
-	it("does not warn when a requested cookie store is empty", async () => {
+	it("reports zero cookies even when the requested cookie store is empty", async () => {
 		aoBridge.browserProfiles = {
 			...originalBridge,
 			discoverImportSources: vi.fn(async () => ({ sources: [safariSource] })),
@@ -264,7 +377,8 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Safari");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
+		expect(await screen.findByRole("heading", { name: "Import needs attention" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("No cookies were imported");
 	});
 
 	it.each([

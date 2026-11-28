@@ -1,9 +1,10 @@
-import { createCipheriv, createHash } from "node:crypto";
+import { createCipheriv, createHash, pbkdf2Sync } from "node:crypto";
 import fs from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
+import type { CookiesSetDetails } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserHistoryStore } from "./browser-history-store";
 import { BrowserProfileImportService, decryptWindowsChromiumCookie, readMacChromiumPassword } from "./browser-profile-import";
@@ -45,12 +46,15 @@ async function fixtureRoot(): Promise<string> {
 	return directory;
 }
 
-async function createChromeFixture(root: string): Promise<{ localAppData: string; profileRoot: string }> {
+async function createChromeFixture(root: string, options: { appBoundEncryption?: boolean; v20Only?: boolean } = {}): Promise<{ localAppData: string; profileRoot: string }> {
 	const localAppData = path.join(root, "local");
 	const userData = path.join(localAppData, "Google", "Chrome", "User Data");
 	const profileRoot = path.join(userData, "Default");
 	await mkdir(path.join(profileRoot, "Network"), { recursive: true });
-	await writeFile(path.join(userData, "Local State"), JSON.stringify({ profile: { info_cache: { Default: { name: "Personal" } } } }));
+	await writeFile(path.join(userData, "Local State"), JSON.stringify({
+		profile: { info_cache: { Default: { name: "Personal" } } },
+		...(options.appBoundEncryption ? { os_crypt: { app_bound_encrypted_key: "DPAPI-wrapped" } } : {}),
+	}));
 
 	const cookies = new Database(path.join(profileRoot, "Network", "Cookies"));
 	cookies.exec(`
@@ -63,12 +67,18 @@ async function createChromeFixture(root: string): Promise<{ localAppData: string
 	const future = chromiumMicros("2030-01-01T00:00:00.000Z");
 	const past = chromiumMicros("2020-01-01T00:00:00.000Z");
 	const insertCookie = cookies.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-	insertCookie.run(".github.com", "session", "usable", Buffer.alloc(0), "/", future, 1, 1, 1, "", future, future);
-	insertCookie.run(".github.com", "empty", "", Buffer.alloc(0), "/", future, 1, 0, 1, "", future - 1, future - 1);
-	insertCookie.run(".github.com", "app-bound", "", Buffer.from("v20-unavailable"), "/", future, 1, 1, 1, "", future - 2, future - 2);
-	insertCookie.run(".github.com", "expired", "old", Buffer.alloc(0), "/", past, 1, 0, 1, "", past, past);
-	insertCookie.run(".example.com", "filtered", "nope", Buffer.alloc(0), "/", future, 1, 0, 1, "", future - 3, future - 3);
-	insertCookie.run(".isolated.example", "partitioned", "private", Buffer.alloc(0), "/", future, 1, 1, 1, "https://top.example", future + 1, future + 1);
+	if (options.v20Only) {
+		// Modern Chrome stores every cookie app-bound encrypted with no plaintext value.
+		insertCookie.run(".github.com", "app-bound-1", "", Buffer.from("v20-unavailable"), "/", future, 1, 1, 1, "", future, future);
+		insertCookie.run("github.com", "app-bound-2", "", Buffer.from("v20-unavailable"), "/", future, 1, 1, 1, "", future - 1, future - 1);
+	} else {
+		insertCookie.run(".github.com", "session", "usable", Buffer.alloc(0), "/", future, 1, 1, 1, "", future, future);
+		insertCookie.run(".github.com", "empty", "", Buffer.alloc(0), "/", future, 1, 0, 1, "", future - 1, future - 1);
+		insertCookie.run(".github.com", "app-bound", "", Buffer.from("v20-unavailable"), "/", future, 1, 1, 1, "", future - 2, future - 2);
+		insertCookie.run(".github.com", "expired", "old", Buffer.alloc(0), "/", past, 1, 0, 1, "", past, past);
+		insertCookie.run(".example.com", "filtered", "nope", Buffer.alloc(0), "/", future, 1, 0, 1, "", future - 3, future - 3);
+		insertCookie.run(".isolated.example", "partitioned", "private", Buffer.alloc(0), "/", future, 1, 1, 1, "https://top.example", future + 1, future + 1);
+	}
 	cookies.close();
 
 	const history = new Database(path.join(profileRoot, "History"));
@@ -116,6 +126,114 @@ async function addChromeProfile(
 	);
 	history.close();
 }
+
+const macPassword = Buffer.from("synthetic-safe-storage-password");
+
+function encryptMacCookie(plaintext: Buffer, password = macPassword): Buffer {
+	const key = pbkdf2Sync(password, "saltysalt", 1_003, 16, "sha1");
+	const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
+	return Buffer.concat([Buffer.from("v10"), cipher.update(plaintext), cipher.final()]);
+}
+
+async function createMacChromeFixture(root: string, version: number | null, rows: Array<{ host: string; name: string; encrypted: Buffer }>): Promise<void> {
+	const { profileRoot } = await createChromeFixture(root);
+	const userData = path.join(root, "Library", "Application Support", "Google", "Chrome");
+	await mkdir(path.dirname(userData), { recursive: true });
+	await fs.rename(path.dirname(profileRoot), userData);
+	const database = new Database(path.join(userData, "Default", "Network", "Cookies"));
+	try {
+		database.exec("DELETE FROM cookies");
+		if (version !== null) {
+			database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+			database.prepare("INSERT INTO meta VALUES ('version', ?)").run(String(version));
+		}
+		const future = chromiumMicros("2030-01-01T00:00:00.000Z");
+		const insert = database.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+		for (const row of rows) {
+			insert.run(row.host, row.name, "", row.encrypted, "/", future, 1, 1, 1, "", future, future);
+		}
+	} finally {
+		database.close();
+	}
+}
+
+describe("macOS encrypted Chrome imports", () => {
+	it.each([null, 23, 24, 25])("imports GitHub cookies from database version %s without changing explicit profile choices", async (version) => {
+		const root = await fixtureRoot();
+		const expected = [
+			{ host: "github.com", name: "__Host-user_session_same_site", value: "host-session" },
+			{ host: ".github.com", name: "user_session", value: "domain-session" },
+			{ host: ".github.com", name: "_gh_sess", value: "github-session" },
+			{ host: ".github.com", name: "empty", value: "" },
+		];
+		await createMacChromeFixture(root, version, expected.map((cookie) => ({
+			...cookie,
+			encrypted: encryptMacCookie(Buffer.concat([
+				...(version !== null && version >= 24 ? [createHash("sha256").update(cookie.host).digest()] : []),
+				Buffer.from(cookie.value),
+			])),
+		})));
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		const existing = await profileStore.createProfile("Existing");
+		await profileStore.bindSession("named-worker", existing.id);
+		await profileStore.bindSession("temporary-worker", null);
+		const setCookie = vi.fn(async (_cookie: CookiesSetDetails) => undefined);
+		const fromPartition = vi.fn(() => ({ cookies: { set: setCookie }, clearStorageData: async () => undefined, clearCache: async () => undefined }));
+		const readMacPassword = vi.fn(async () => macPassword);
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore, historyStore: new BrowserHistoryStore({ stateDir }), fromPartition,
+			platform: "darwin", homeDir: root, env: {}, readMacPassword,
+		});
+		const source = (await service.discover()).sources[0]!;
+		const result = await service.import({
+			requestId: "91919191-9191-4191-8191-919191919191", sourceId: source.id, profileIds: [source.profiles[0]!.id],
+			includeCookies: true, includeHistory: false, destination: { mode: "merge", name: "Imported Chrome" },
+		}, vi.fn());
+
+		expect(readMacPassword).toHaveBeenCalledWith(["Chrome", "Google Chrome"], expect.any(AbortSignal));
+		expect(result.entries[0]).toMatchObject({ importedCookies: 4, skippedCookies: 0, warnings: [] });
+		expect(fromPartition).toHaveBeenCalledWith(`persist:ao-browser-profile-${result.entries[0]!.destinationProfile.id}`);
+		expect(setCookie).toHaveBeenCalledTimes(4);
+		for (const cookie of expected) {
+			expect(setCookie).toHaveBeenCalledWith(expect.objectContaining({ name: cookie.name, value: cookie.value, path: "/", secure: true, httpOnly: true, sameSite: "lax" }));
+		}
+		const hostCookie = setCookie.mock.calls.find(([cookie]) => cookie.name === "__Host-user_session_same_site")![0];
+		expect(hostCookie).not.toHaveProperty("domain");
+		expect(setCookie).toHaveBeenCalledWith(expect.objectContaining({ name: "user_session", domain: ".github.com" }));
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getSessionProfileId("named-worker")).toBe(existing.id);
+		expect(reloaded.getSessionProfileId("temporary-worker")).toBeNull();
+		expect(reloaded.getSessionProfileId("unbound-worker")).toBeUndefined();
+	});
+
+	it.each([
+		{ label: "wrong host digest", encrypted: encryptMacCookie(Buffer.concat([createHash("sha256").update(".wrong.example").digest(), Buffer.from("session")])), warning: "encrypted-cookies-skipped" },
+		{ label: "missing digest", encrypted: encryptMacCookie(Buffer.alloc(48, 0x61)), warning: "encrypted-cookies-skipped" },
+		{ label: "short plaintext", encrypted: encryptMacCookie(Buffer.from("short")), warning: "encrypted-cookies-skipped" },
+		{ label: "wrong key", encrypted: encryptMacCookie(Buffer.alloc(48, 0x61), Buffer.from("wrong-password")), warning: "encrypted-cookies-skipped" },
+		{ label: "malformed ciphertext", encrypted: Buffer.from("v10-broken"), warning: "encrypted-cookies-skipped" },
+		{ label: "unsupported format", encrypted: Buffer.from("v20-unavailable"), warning: "cookie-encryption-unsupported" },
+	])("skips $label instead of writing a corrupt modern cookie", async ({ encrypted, warning }) => {
+		const root = await fixtureRoot();
+		await createMacChromeFixture(root, 24, [{ host: ".github.com", name: "user_session", encrypted }]);
+		const stateDir = path.join(root, "ao-state");
+		const setCookie = vi.fn(async () => undefined);
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			fromPartition: () => ({ cookies: { set: setCookie }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+			platform: "darwin", homeDir: root, env: {}, readMacPassword: async () => macPassword,
+		});
+		const source = (await service.discover()).sources[0]!;
+		const result = await service.import({
+			requestId: "92929292-9292-4292-8292-929292929292", sourceId: source.id, profileIds: [source.profiles[0]!.id],
+			includeCookies: true, includeHistory: true, destination: { mode: "merge", name: "Failed cookies" },
+		}, vi.fn());
+		expect(result.entries[0]).toMatchObject({ importedCookies: 0, skippedCookies: 1, importedHistoryEntries: 2, warnings: [{ code: warning, count: 1 }] });
+		expect(setCookie).not.toHaveBeenCalled();
+	});
+});
 
 async function createLiveFirefoxFixture(root: string): Promise<{
 	appData: string;
@@ -862,8 +980,9 @@ describe("BrowserProfileImportService", () => {
 		const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
 		const encrypted = Buffer.concat([Buffer.from("v10"), nonce, ciphertext, cipher.getAuthTag()]);
 
-		expect(decryptWindowsChromiumCookie(encrypted, key, host)).toBe("usable-cookie-value");
-		expect(decryptWindowsChromiumCookie(encrypted, key, ".wrong.example")).not.toBe("usable-cookie-value");
+		expect(decryptWindowsChromiumCookie(encrypted, key, host, 24)).toBe("usable-cookie-value");
+		expect(decryptWindowsChromiumCookie(encrypted, key, ".wrong.example", 24)).toBeNull();
+		expect(decryptWindowsChromiumCookie(encrypted, key, host, 23)).toBe(plaintext.toString("utf8"));
 	});
 
 	it("imports a transaction-consistent Firefox snapshot while the source databases are open", async () => {
@@ -1248,7 +1367,7 @@ describe("BrowserProfileImportService", () => {
 
 		expect(result.entries[0]).toMatchObject({ importedCookies: 3, skippedCookies: 3, importedHistoryEntries: 2 });
 		expect(result.entries[0]!.warnings).toEqual(expect.arrayContaining([
-			expect.objectContaining({ code: "encrypted-cookies-skipped", count: 1 }),
+			expect.objectContaining({ code: "cookie-encryption-unsupported", count: 1 }),
 			expect.objectContaining({ code: "expired-cookies-skipped", count: 1 }),
 			expect.objectContaining({ code: "isolated-cookies-skipped", count: 1 }),
 		]));
@@ -1269,6 +1388,85 @@ describe("BrowserProfileImportService", () => {
 			destination: { mode: "merge", name: "Imported Chrome" },
 		}, vi.fn())).rejects.toThrow("already exists");
 		expect(cleared).toEqual([]);
+	});
+
+	it("reports Chromium app-bound encryption as unsupported and says so after an import", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root, { appBoundEncryption: true, v20Only: true });
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const setCookie = vi.fn(async () => undefined);
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({
+				cookies: { set: setCookie },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		});
+
+		const source = (await service.discover()).sources[0]!;
+		expect(source).toMatchObject({ cookieSupport: "unsupported", cookieSupportReason: "chromium-app-bound-encryption" });
+
+		const result = await service.import({
+			requestId: "24242424-2424-4242-8424-242424242424",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: false,
+			destination: { mode: "merge", name: "App-Bound Chrome" },
+		}, vi.fn());
+
+		expect(result.entries[0]).toMatchObject({ importedCookies: 0 });
+		expect(result.entries[0]!.warnings).toContainEqual({ code: "cookie-encryption-unsupported", count: 2 });
+		expect(setCookie).not.toHaveBeenCalled();
+	});
+
+	it("keeps partial cookie support for app-bound Chromium profiles on macOS", async () => {
+		const root = await fixtureRoot();
+		const applicationSupport = path.join(root, "Library", "Application Support");
+		const userData = path.join(applicationSupport, "Google", "Chrome");
+		const profileRoot = path.join(userData, "Default");
+		await mkdir(path.join(profileRoot, "Network"), { recursive: true });
+		await writeFile(path.join(userData, "Local State"), JSON.stringify({
+			profile: { info_cache: { Default: { name: "Personal" } } },
+			os_crypt: { app_bound_encrypted_key: "wrapped" },
+		}));
+		const future = chromiumMicros("2030-01-01T00:00:00.000Z");
+		const cookies = new Database(path.join(profileRoot, "Network", "Cookies"));
+		cookies.exec(`
+			CREATE TABLE cookies (
+				host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, path TEXT,
+				expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER, samesite INTEGER,
+				top_frame_site_key TEXT, last_access_utc INTEGER, creation_utc INTEGER
+			)
+		`);
+		cookies.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+			".github.com", "session", "usable", Buffer.alloc(0), "/", future, 1, 1, 1, "", future, future,
+		);
+		cookies.close();
+
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "darwin",
+			homeDir: root,
+			env: {},
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+
+		const source = (await service.discover()).sources[0]!;
+		expect(source).toMatchObject({ cookieSupport: "partial", cookieSupportReason: "chromium-encryption-partial" });
 	});
 
 	it("uses selected-profile order for cookie conflicts and newest metadata for merged history", async () => {
