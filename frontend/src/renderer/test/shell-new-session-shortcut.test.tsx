@@ -1742,11 +1742,11 @@ function emitSessionDeepLink(rawUrl: string) {
 describe("shell session deep links", () => {
 	// The startup gate needs the confirmed startup fetch: a ready daemon plus
 	// its resolved re-fetch marks the first workspace page trustworthy.
-	function useReadyDaemon() {
+	function markDaemonReady() {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4266, pid: 1234 };
 	}
 	async function renderShellWithReadyDaemon() {
-		useReadyDaemon();
+		markDaemonReady();
 		const view = await renderShell();
 		await act(async () => {
 			await Promise.resolve();
@@ -1785,7 +1785,7 @@ describe("shell session deep links", () => {
 		// The daemon becomes ready and the confirmed startup fetch lands.
 		shellMocks.state.workspaces = workspaces;
 		shellMocks.state.workspaceQuery = { data: workspaces, dataUpdatedAt: 0, isError: false, isSuccess: true };
-		useReadyDaemon();
+		markDaemonReady();
 		await act(async () => {
 			view.rerender(
 				<Suspense fallback={null}>
@@ -1816,7 +1816,7 @@ describe("shell session deep links", () => {
 		// The confirmed startup fetch lands with real data.
 		shellMocks.state.workspaces = workspaces;
 		shellMocks.state.workspaceQuery = { data: workspaces, dataUpdatedAt: 0, isError: false, isSuccess: true };
-		useReadyDaemon();
+		markDaemonReady();
 		await act(async () => {
 			view.rerender(
 				<Suspense fallback={null}>
