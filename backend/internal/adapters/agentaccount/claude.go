@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,7 +56,8 @@ type Claude struct {
 	// DeviceEnv returns the credential AO adds to sessions that run on the
 	// computer's own login (a setup token saved through AO's login menu), so
 	// checks of that account see what its sessions use. Nil adds nothing.
-	DeviceEnv func(context.Context) map[string]string
+	DeviceEnv  func(context.Context) map[string]string
+	HTTPClient *http.Client
 }
 
 var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
@@ -245,12 +247,18 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 	if err := cmd.Start(); err != nil {
 		return domain.AgentAccountLimits{}, fmt.Errorf("start claude: %w", err)
 	}
-	defer func() {
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
 		_ = stdin.Close()
 		// The whole group: whatever the CLI started for the probe goes with it.
 		_ = cmd.Cancel()
 		_ = cmd.Wait()
-	}()
+	}
+	defer stop()
 	if _, err := stdin.Write([]byte(request)); err != nil {
 		return domain.AgentAccountLimits{}, err
 	}
@@ -274,6 +282,10 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 		}
 		body := line.Response.Response
 		if body.RateLimitsAvailable && body.RateLimits == nil {
+			stop()
+			if c.loginRejected(ctx, home) {
+				return domain.AgentAccountLimits{}, fmt.Errorf("claude get_usage: %w", ports.ErrAgentAuthRequired)
+			}
 			return domain.AgentAccountLimits{}, errors.New("claude could not fetch its usage limits")
 		}
 		return body.limits(time.Now().UTC()), nil
@@ -282,6 +294,29 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 		return domain.AgentAccountLimits{}, err
 	}
 	return domain.AgentAccountLimits{}, errors.New("claude ended without answering get_usage")
+}
+
+func (c *Claude) loginRejected(ctx context.Context, home string) bool {
+	overlay := c.launchOverlay(ctx, home)
+	launchEnv := func(key string) string {
+		if value, ok := overlay[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
+	}
+	opts := (agentcreds.ResolveOptions{Env: launchEnv, ConfigDir: home, WorkingDir: os.TempDir(), AllowKeychain: true}).WithClaudeSettings(ctx)
+	provider, ok := agentcreds.ResolveProvider("", opts)
+	if !ok || provider != agentcreds.ProviderFirstParty {
+		return false
+	}
+	cred, found := agentcreds.ResolveLocal(ctx, provider, opts)
+	if !found || cred.ExpiredButRenewable(time.Now()) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+	defer cancel()
+	rejected := agentcreds.New(c.HTTPClient).ValidateResolvedLocal(ctx, provider, cred, found, opts).State == agentcreds.StateInvalid
+	return rejected && !cred.ExpiredButRenewable(time.Now())
 }
 
 type claudeUsageWindow struct {
@@ -578,17 +613,19 @@ func (c *Claude) command(ctx context.Context, bin, home string, args ...string) 
 	// A timeout or kill stops the CLI's whole process tree, not only its leader.
 	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.Env = os.Environ()
-	for key, value := range c.LaunchEnv(home) {
+	for key, value := range c.launchOverlay(ctx, home) {
 		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-	if home == "" && c.DeviceEnv != nil {
-		for key, value := range c.DeviceEnv(ctx) {
-			cmd.Env = append(cmd.Env, key+"="+value)
-		}
 	}
 	// A throwaway cwd keeps a project's own Claude settings out of the probe.
 	cmd.Dir = os.TempDir()
 	return cmd
+}
+
+func (c *Claude) launchOverlay(ctx context.Context, home string) map[string]string {
+	if home == "" && c.DeviceEnv != nil {
+		return c.DeviceEnv(ctx)
+	}
+	return c.LaunchEnv(home)
 }
 
 func (c *Claude) run(ctx context.Context, bin, home string, stdin []byte, args ...string) ([]byte, error) {
