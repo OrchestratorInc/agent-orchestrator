@@ -1707,7 +1707,10 @@ describe("Sidebar", () => {
 			"group-hover/session-row:pr-sidebar-project-actions",
 			"focus-visible-in-session-row:pr-sidebar-project-actions",
 		);
-		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
+		// The text rides a track inside the title box, which fades (not ellipsizes) its cut edge.
+		expect(label).toHaveClass("session-title-track");
+		expect(label.parentElement).toHaveClass("session-title", "min-w-0", "flex-1");
+		expect(label.parentElement).not.toHaveClass("truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
 		expect(actionButtons).toHaveClass(
 			"absolute",

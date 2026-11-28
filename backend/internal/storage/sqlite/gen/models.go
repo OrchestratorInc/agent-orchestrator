@@ -193,6 +193,7 @@ type AppSetting struct {
 	AccountHandoff       bool
 	LimitHistory         bool
 	CommitAttribution    bool
+	SkillSharing         bool
 }
 
 type Automation struct {

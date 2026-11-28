@@ -625,6 +625,9 @@ type Manager struct {
 	// commitAttribution reports the Orchestrator attribution beta; nil is off.
 	commitAttributionMu sync.Mutex
 	commitAttribution   func(context.Context) bool
+	// skillSharing reports the skill sharing setting; nil is off.
+	skillSharingMu sync.Mutex
+	skillSharing   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -5222,7 +5225,25 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	if workers > len(live) {
 		workers = len(live)
 	}
-	jobs := make(chan domain.SessionRecord)
+	var pendingMu sync.Mutex
+	pending := make(map[domain.SessionID]int, len(live))
+	for i, rec := range live {
+		pending[rec.ID] = i
+	}
+	next := 0
+	take := func() (domain.SessionRecord, bool) {
+		pendingMu.Lock()
+		defer pendingMu.Unlock()
+		i, ok := m.openStartupCheck(pending)
+		for ; !ok && next < len(live); next++ {
+			i, ok = pending[live[next].ID]
+		}
+		if !ok {
+			return domain.SessionRecord{}, false
+		}
+		delete(pending, live[i].ID)
+		return live[i], true
+	}
 	var wg sync.WaitGroup
 	var retryMu sync.Mutex
 	var retryChats []domain.SessionID
@@ -5230,7 +5251,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	for range workers {
 		go func() {
 			defer wg.Done()
-			for rec := range jobs {
+			for rec, ok := take(); ok; rec, ok = take() {
 				m.beginStatusRecovery(rec.ID)
 				err := func() error {
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
@@ -5258,14 +5279,27 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 			}
 		}()
 	}
-	for _, rec := range live {
-		jobs <- rec
-	}
-	close(jobs)
 	wg.Wait()
 	if len(retryChats) > 0 && ctx.Err() == nil {
 		go m.retryStartupChatChecks(ctx, retryChats)
 	}
+}
+
+type openChats interface {
+	OpenChats() []domain.SessionID
+}
+
+func (m *Manager) openStartupCheck(pending map[domain.SessionID]int) (int, bool) {
+	chats, ok := m.chat.(openChats)
+	if !ok {
+		return 0, false
+	}
+	for _, id := range chats.OpenChats() {
+		if i, ok := pending[id]; ok {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // RestoreAll relaunches every terminated session that was saved by the last
@@ -7232,6 +7266,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
+	if skills := m.skillIndexPrompt(ctx, sessionID, chat); skills != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, skills)
+	}
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
 	}
@@ -7474,6 +7511,7 @@ func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	if err := os.RemoveAll(dir); err != nil {
 		m.logger.Warn("system prompt cleanup failed", "session", id, "path", dir, "err", err)
 	}
+	m.removeSkills(id)
 }
 
 func workspaceOrchestratorPrompt(repos []domain.WorkspaceRepoRecord) string {
@@ -8123,6 +8161,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 			return fmt.Errorf("pre-launch: %w", err)
 		}
 	}
+	m.syncSkills(ctx, agent, id, workspacePath, env)
 	return nil
 }
 

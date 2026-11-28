@@ -464,6 +464,8 @@ export interface ChatWorkspaceProps {
 	sessionRole?: SessionKind;
 	/** Host-specific proxy origin for images and staged attachments. */
 	assetBaseUrl?: string;
+	/** Session ID used to load staged attachment previews when different from snapshot.sessionId (e.g. a prepared worktree). */
+	assetSessionId?: string;
 	/** Selected remote host, even while its connection has no proxy origin. */
 	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
@@ -880,6 +882,7 @@ function ChatWorkspaceContent({
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
+	assetSessionId,
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
@@ -2383,7 +2386,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={assetSessionId ?? snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -2651,7 +2654,7 @@ function ChatWorkspaceContent({
 										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
 										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
-										assetSessionId={snapshot.sessionId}
+										assetSessionId={assetSessionId ?? snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}

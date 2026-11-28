@@ -629,6 +629,10 @@ func (m *Manager) resumeChatController(
 			}
 		}
 	}
+	// An imported chat's workspace preparation above already shared the skills.
+	if agent, ok := m.agents.Agent(rec.Harness); ok && !reconnectOnly && !rec.NeedsImportResume() {
+		m.syncSkills(ctx, agent, rec.ID, launchPath, env)
+	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
 	if len(awakeTargets) > 0 {

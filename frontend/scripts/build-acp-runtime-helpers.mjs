@@ -375,6 +375,7 @@ function aoObserveBackgroundTasks(session, message) {
 	} else {
 		const record = known.get(message.task_id);
 		if (!record?.wasBackground || (message.run_id && record.runId && message.run_id !== record.runId)) return;
+		if (message.subtype === "task_notification" && record.kind === "shell") aoNoteBackgroundOutputFile(session, record.id, message.output_file);
 		const status = message.subtype === "task_notification" ? message.status : message.patch?.status;
 		if (["completed", "failed", "killed", "stopped"].includes(status)) {
 			live.delete(record.id);
@@ -393,28 +394,80 @@ function aoObserveBackgroundTasks(session, message) {
 
 // Claude Code names a background shell's live output file only in the text of
 // the result that launched it ("Output is being written to: <path>."), and its
-// command only in that call's input. Record both by task id before the adapter
-// drops the call from its tool-use cache.
+// command only in that call's input. A Monitor's result names no file: it
+// writes to its task id's file in the same tasks folder, which is named only
+// for the session's other tasks or in the Monitor's own end notice. Record each
+// launch by task id before the adapter drops the call from its tool-use cache.
 function aoObserveBackgroundLaunch(session, message) {
-	const taskId = message.type === "user" ? message.tool_use_result?.backgroundTaskId : undefined;
-	if (typeof taskId !== "string" || !taskId || !Array.isArray(message.message?.content)) return;
+	if (message.type !== "user" || !Array.isArray(message.message?.content)) return;
 	const results = message.message.content.filter(block => block?.type === "tool_result");
-	const fileName = `${taskId}.output`;
+	const shellId = message.tool_use_result?.backgroundTaskId;
+	const monitorId = message.tool_use_result?.taskId;
+	let taskId;
 	let launch;
-	for (const block of results) {
-		const text = typeof block.content === "string" ? block.content
-			: Array.isArray(block.content) ? block.content.map(part => typeof part?.text === "string" ? part.text : "").join("\n") : "";
-		const outputPath = aoBackgroundOutputPath(text, fileName);
-		if (!outputPath && results.length > 1) continue;
-		const command = session.toolUseCache?.[block.tool_use_id]?.input?.command;
-		launch = { command: typeof command === "string" ? command : undefined, outputPath };
-		break;
+	if (typeof shellId === "string" && shellId) {
+		taskId = shellId;
+		const fileName = `${taskId}.output`;
+		for (const block of results) {
+			const text = typeof block.content === "string" ? block.content
+				: Array.isArray(block.content) ? block.content.map(part => typeof part?.text === "string" ? part.text : "").join("\n") : "";
+			const outputPath = aoBackgroundOutputPath(text, fileName);
+			if (!outputPath && results.length > 1) continue;
+			if (outputPath) aoNoteBackgroundTaskDir(session, outputPath, fileName);
+			const command = session.toolUseCache?.[block.tool_use_id]?.input?.command;
+			launch = { command: typeof command === "string" ? command : undefined, outputPath };
+			break;
+		}
+	} else if (typeof monitorId === "string" && monitorId) {
+		// Other tools report a taskId too; only a Monitor call starts a watched command.
+		const calls = results.map(block => session.toolUseCache?.[block.tool_use_id]).filter(call => call?.name === "Monitor");
+		if (calls.length !== 1) return;
+		const command = calls[0].input?.command;
+		taskId = monitorId;
+		launch = { command: typeof command === "string" ? command : undefined, monitor: true };
 	}
 	if (!launch) return;
 	const launches = session.aoBackgroundLaunches ??= new Map();
+	// A Monitor that ends at once can send its end notice, with its file, first.
+	const outputPath = launch.outputPath ?? launches.get(taskId)?.outputPath;
 	launches.delete(taskId);
-	launches.set(taskId, launch);
+	launches.set(taskId, { ...launch, outputPath });
 	while (launches.size > 128) launches.delete(launches.keys().next().value);
+}
+
+// Keeps the folder of a file Claude Code named for one of the session's tasks,
+// when the path ends with that task's own file name. True when it does.
+function aoNoteBackgroundTaskDir(session, path, fileName) {
+	if (typeof path !== "string" || !path.endsWith(fileName)) return false;
+	const dir = path.slice(0, -fileName.length);
+	if (!/[\\/]$/.test(dir)) return false;
+	session.aoBackgroundTaskDir = dir;
+	return true;
+}
+
+// A shell task's end notice names its output file. Keep it for the task (a
+// Monitor's launch named none) and its folder for the session's other monitors.
+function aoNoteBackgroundOutputFile(session, taskId, path) {
+	if (!aoNoteBackgroundTaskDir(session, path, `${taskId}.output`)) return;
+	const launches = session.aoBackgroundLaunches ??= new Map();
+	const launch = launches.get(taskId);
+	if (launch) {
+		launch.outputPath ??= path;
+		return;
+	}
+	launches.set(taskId, { outputPath: path });
+	while (launches.size > 128) launches.delete(launches.keys().next().value);
+}
+
+// The file to read for a task: the one Claude Code named for it, or, for a
+// running Monitor, its task id's file in the folder Claude Code named for this
+// session's tasks. Never a path from the request.
+function aoBackgroundOutputFor(session, taskId) {
+	const launch = typeof taskId === "string" ? session.aoBackgroundLaunches?.get(taskId) : undefined;
+	if (!launch) return undefined;
+	if (launch.outputPath) return launch.outputPath;
+	if (launch.monitor && session.aoBackgroundTaskDir && /^[A-Za-z0-9_-]+$/.test(taskId)) return `${session.aoBackgroundTaskDir}${taskId}.output`;
+	return undefined;
 }
 
 // The output file a launch result names, which ends with the task's file name.
@@ -518,8 +571,8 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             const taskId = ctx.params?.taskId;
             const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
             if (!session || session.queryClosed) throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
-            // Only the file Claude Code named for this task, never a path from the request.
-            const path = typeof taskId === "string" ? session.aoBackgroundLaunches?.get(taskId)?.outputPath : undefined;
+            // Only a file Claude Code named for this session's tasks, never a path from the request.
+            const path = aoBackgroundOutputFor(session, taskId);
             if (!path) throw RequestError.invalidParams(undefined, "This background task has no output file.");
             const maxBytes = Math.min(Math.max(Number(ctx.params?.maxBytes) || 65536, 1024), 1048576);
             const tail = await aoReadBackgroundOutput(path, maxBytes);
@@ -550,7 +603,10 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             return {};
         })
         `;
-	const helpers = [aoObserveBackgroundTasks, aoObserveBackgroundLaunch, aoBackgroundOutputPath, aoReadBackgroundOutput].map(String).join("\n");
+	const helpers = [
+		aoObserveBackgroundTasks, aoObserveBackgroundLaunch, aoNoteBackgroundTaskDir, aoNoteBackgroundOutputFile,
+		aoBackgroundOutputFor, aoBackgroundOutputPath, aoReadBackgroundOutput,
+	].map(String).join("\n");
 	writeFileSync(adapterPath, `${helpers}\n${source.replace(marker, registration + marker)}`);
 	return true;
 }
