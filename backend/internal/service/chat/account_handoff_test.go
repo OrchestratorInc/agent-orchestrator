@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 const (
@@ -510,6 +511,262 @@ func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 	}
 	if notes, _ := handoffNotes(t, h, source.ID); notes != 1 {
 		t.Fatalf("handoff notes after retry = %d", notes)
+	}
+}
+
+func failUsageLimitedTurnBehindQueue(t *testing.T, h *harness, queued string) domain.ConversationTurn {
+	t.Helper()
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "finish this task", ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: queued, ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginAutomation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failed, _ := turnByID(failedTurnSnapshot(t, h, turn.ID), turn.ID)
+	return failed
+}
+
+func TestAccountHandoffMoveKeepsTheHeldQueueOffTheLimitedAccount(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+	if err := hh.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got := hh.conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("provider received %v, want only the limited prompt", got)
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+}
+
+func TestAccountHandoffMoveDrainsAQueueNothingHolds(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i, text := range []string{"finish this task", "note 1", "note 2"} {
+		if _, err := hh.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: text, ClientMessageID: fmt.Sprintf("c%d", i), Origin: domain.MessageOriginHuman}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := hh.mover.StartAccountTransition(ctx, testSession, handoffTarget, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatal(err)
+	}
+	prepared := make(chan error, 1)
+	go func() {
+		prepared <- hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
+	}()
+	for _, text := range []string{"finish this task", "note 1", "note 2"} {
+		var running string
+		hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			running = ""
+			for _, turn := range s.Turns {
+				if turn.State == domain.TurnStateRunning {
+					running = turn.ProviderTurnID
+				}
+			}
+			return running != "" && turnStateByText(t, s)[text] == domain.TurnStateRunning
+		})
+		hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running,
+			TurnState: domain.TurnStateFailed, Err: errors.New("API Error: 529 overloaded")})
+	}
+	if err := <-prepared; err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+}
+
+func TestAccountHandoffRollbackKeepsTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+	if err := hh.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	hh.mover.finish(t, domain.SessionInterfaceTransitionTargetStarting)
+
+	for _, agent := range []string{"new account's agent", "restored agent"} {
+		provider := newFakeConversation()
+		svc := chatsvc.New(chatsvc.Options{
+			Store: hh.st, Reader: fullSnapshotReader(hh.st), PageReader: boundedSnapshotReader(hh.st), Sessions: hh.st,
+			Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, NewID: uuid.NewString, Now: hh.now,
+		})
+		if _, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject,
+			Harness: domain.HarnessClaudeCode, WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1"}); err != nil {
+			t.Fatalf("start the %s: %v", agent, err)
+		}
+		if err := svc.Stop(ctx, testSession); err != nil {
+			t.Fatalf("stop the %s: %v", agent, err)
+		}
+		assertTurnStaysQueued(t, hh.harness, "queued note")
+		if got := provider.sentTexts(); len(got) != 0 {
+			t.Fatalf("the %s received %v", agent, got)
+		}
+	}
+}
+
+func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	if err := hh.svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	hh.tick(t)
+
+	if got := hh.conv.sentTexts(); len(got) != 2 || got[1] != "finish this task" {
+		t.Fatalf("provider received %v, want the limited prompt again before the queue", got)
+	}
+	if _, retry := handoffNotes(t, hh.harness, source.ID); retry != "sent" {
+		t.Fatalf("handoff note retry = %q", retry)
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID, hh.now()); err != nil || !held {
+		t.Fatalf("queue held = %v, %v while the retry runs", held, err)
+	}
+
+	retryID, found, err := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID)
+	if err != nil || !found {
+		t.Fatalf("retry link: %v %v", found, err)
+	}
+	retry, err := hh.st.TurnByID(ctx, retryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	hh.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return len(hh.conv.sentTexts()) == 3 })
+	if got := hh.conv.sentTexts(); got[2] != "queued note" {
+		t.Fatalf("provider received %v, want the queue after the retry", got)
+	}
+}
+
+type failingHoldReleaseStore struct {
+	*store.Store
+	failures atomic.Int32
+}
+
+func (s *failingHoldReleaseStore) ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error {
+	if s.failures.Add(-1) >= 0 {
+		return errors.New("database is locked")
+	}
+	return s.Store.ReleaseConversationQueueHeldBy(ctx, conversationID, turnID)
+}
+
+func TestAccountHandoffSkippedRetryReleasesTheHeldQueue(t *testing.T) {
+	failing := &failingHoldReleaseStore{}
+	failing.failures.Store(1)
+	hh := handoffHarnessFor(t, newHarnessWithConversationAndStoreForHarness(t, nil, func(st *store.Store) chatsvc.Store {
+		failing.Store = st
+		return failing
+	}, domain.HarnessClaudeCode), domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	if err := hh.st.BindSessionAgentAccount(ctx, testSession, hh.provider, "acct-c", hh.now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := hh.svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if err := hh.svc.HandoffUsageLimitedTurns(ctx); err == nil {
+		t.Fatal("handoff finished although its queue release failed")
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if err := hh.st.BindSessionAgentAccount(ctx, testSession, hh.provider, handoffTarget, hh.now().Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	hh.advance(16 * time.Second)
+	hh.tick(t)
+
+	if _, found, _ := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID); found {
+		t.Fatal("retried a prompt the handoff had already skipped")
+	}
+	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
+}
+
+func TestAccountHandoffGivingUpTheRetryReleasesTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	if err := hh.st.EnqueueSessionInterfaceTransitionMessage(ctx, hh.mover.moves()[0].ID, "client-during-move", "sent during the move",
+		hh.now(), ports.MessageDeliveryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hh.svc.HandoffUsageLimitedTurns(ctx); err == nil {
+		t.Fatal("retried while a message sent during the move was still pending")
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+
+	hh.advance(11 * time.Minute)
+	hh.tick(t)
+	if _, retry := handoffNotes(t, hh.harness, source.ID); retry != "skipped" {
+		t.Fatalf("handoff note retry = %q", retry)
+	}
+	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
+}
+
+func TestAccountHandoffSkippedRetryKeepsAHoldItDoesNotOwn(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	retry, err := hh.svc.RetryTurn(ctx, testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, hh.harness, retry.ID)
+	hh.tick(t)
+
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID, hh.now()); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after the handoff skipped its retry", held, err)
+	}
+}
+
+func TestAccountHandoffCancelledMoveKeepsTheQueueHeld(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCancelled)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("prepare handoff after the move was cancelled = %v", err)
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if got := hh.conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("provider received %v, want nothing more on the limited account", got)
 	}
 }
 

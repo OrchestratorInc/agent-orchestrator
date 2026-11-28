@@ -342,7 +342,7 @@ func TestUsageLimitAutoResumeStopsAfterNewerCompletedTurn(t *testing.T) {
 	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	newer, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "continue differently", ClientMessageID: "new", Origin: domain.MessageOriginAutomation})
+	newer, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "continue differently", ClientMessageID: "new", Origin: domain.MessageOriginHuman})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,6 +1035,7 @@ func TestUsageLimitAutoResumeStaysOnTheLatestTurn(t *testing.T) {
 func TestUsageLimitContinueQuotesTheUsersRefusedMessage(t *testing.T) {
 	h := newHarness(t)
 	human := failUsageLimitedTurn(t, h, timedUsageLimit)
+	h.advance(time.Minute)
 	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
 	if _, err := h.svc.RetryTurn(context.Background(), testSession, event.ID); err != nil {
 		t.Fatal(err)
@@ -1062,6 +1063,7 @@ func TestUsageLimitContinueKeepsEarlierAttachments(t *testing.T) {
 			TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
 		failedTurnSnapshot(t, h, human.ID)
 	}
+	h.advance(time.Minute)
 	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
 	if _, err := h.svc.RetryTurn(ctx, testSession, event.ID); err != nil {
 		t.Fatal(err)
@@ -1086,6 +1088,7 @@ func TestUsageLimitContinueQuotesTheUsersRefusedContinue(t *testing.T) {
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: continued.ProviderTurnID,
 		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
 	failedTurnSnapshot(t, h, continued.ID)
+	h.advance(time.Minute)
 	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
 	if _, err := h.svc.RetryTurn(ctx, testSession, event.ID); err != nil {
 		t.Fatal(err)
@@ -1195,6 +1198,9 @@ func TestUsageLimitAutoResumeConsentDoesNotSpread(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if err := h.st.ReleaseConversationQueue(ctx, older.ConversationID); err != nil {
+				t.Fatal(err)
+			}
 			newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", tc.message)
 			if newer.UsageLimit != nil && newer.UsageLimit.AutoResume {
 				t.Fatal("newer event was armed")
@@ -1219,6 +1225,7 @@ func TestUsageLimitAutoResumeDoesNotMoveToAHumanMessage(t *testing.T) {
 	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, false); err != nil {
 		t.Fatal(err)
 	}
+	h.advance(time.Minute)
 	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
 	if err := h.svc.SetTurnAutoResume(ctx, testSession, event.ID, true); err != nil {
 		t.Fatal(err)

@@ -318,9 +318,10 @@ type Controller struct {
 	// queue that interrupt cancels. Zero means nothing is being cancelled.
 	cancelQueuedAt time.Time
 	// handoff closes source-controller intake while ownership is being changed.
-	// Interface drain keeps dispatching accepted rows; interface interrupt and an
-	// idle branch mutation stop dispatch entirely. The target controller is not
-	// started until this controller reports quiescent and is closed.
+	// Interface drain keeps dispatching accepted rows, except a held queue during
+	// an account move; interface interrupt and an idle branch mutation stop
+	// dispatch entirely. The target controller is not started until this
+	// controller reports quiescent and is closed.
 	handoff controllerHandoff
 	// handoffInterrupted is the provider turn an interrupt-policy handoff
 	// stopped, so the move can say on that exact turn why it ended.
@@ -1726,6 +1727,11 @@ func (c *Controller) sendLocked(
 		} else if !errors.Is(err, domain.ErrNoQueuedTurn) {
 			return domain.ConversationTurn{}, err
 		}
+		if !queuedAhead && !domain.UserSentMessage(normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser) {
+			if queuedAhead, err = c.queueHeld(ctx); err != nil {
+				return domain.ConversationTurn{}, err
+			}
+		}
 	}
 	shouldQueue := queueWhenBusy && (c.busy() || queuedAhead)
 	markedSending := false
@@ -2182,8 +2188,13 @@ func (c *Controller) dispatch(
 		// provider id, so looking one up by the empty string would hit whichever
 		// undispatched turn the database returned first.
 		completedAt := c.now()
-		if settleErr := c.store.SettleTurnByID(
-			ctx, turnID, domain.TurnStateFailed, err.Error(), completedAt); settleErr != nil {
+		var settleErr error
+		if holds, ok := c.store.(queueHoldStore); ok {
+			settleErr = holds.SettleRefusedBatchLead(ctx, turnID, followers, err.Error(), completedAt)
+		} else {
+			settleErr = c.store.SettleTurnByID(ctx, turnID, domain.TurnStateFailed, err.Error(), completedAt)
+		}
+		if settleErr != nil {
 			c.log.Error("failed to settle turn after send error", "error", settleErr)
 		}
 		return domain.ConversationTurn{
@@ -2444,6 +2455,9 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	if !allowDispatch {
 		return nil
 	}
+	if held, err := c.queueHeld(ctx); err != nil || held {
+		return err
+	}
 
 	take := limit
 	for {
@@ -2603,7 +2617,23 @@ func (c *Controller) BeginHandoff(
 				c.AbortHandoff()
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
-				if err := c.drainLocked(ctx, true); err != nil {
+				held, err := c.queueHeld(ctx)
+				if err == nil && held {
+					var transition domain.SessionInterfaceTransition
+					var active bool
+					transition, active, err = activeTransition(ctx, c.store, c.sessionID)
+					if err == nil && transition.AccountMove() {
+						c.sendMu.Unlock()
+						return nil
+					}
+					if err == nil && active {
+						err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
+					}
+				}
+				if err == nil {
+					err = c.drainLocked(ctx, true)
+				}
+				if err != nil {
 					c.sendMu.Unlock()
 					c.AbortHandoff()
 					return fmt.Errorf("drain queued turns during handoff: %w", err)
@@ -3735,6 +3765,12 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if err := c.store.SettleTurnWithFailureCode(
 			ctx, c.conversation.ID, event.ProviderTurnID, state, message, failureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
+		}
+		if holds, ok := c.store.(queueHoldStore); ok && (state == domain.TurnStateCompleted || errors.Is(event.Err, ports.ErrChatPromptStalled)) &&
+			(event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
+			if err := holds.ReleaseConversationQueueAfterTurn(ctx, c.conversation.ID, event.ProviderTurnID); err != nil {
+				return err
+			}
 		}
 		if event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID() {
 			// Best effort: a turn that ends without its artifact list still ended.

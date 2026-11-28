@@ -43,8 +43,8 @@ function useNowUntil(deadline: number | undefined): number {
 
 /**
  * A turn the provider refused for a usage limit. The actionable one offers
- * Resume once the limit resets and, before that, auto-resume at the reset,
- * which the daemon carries out whether or not the phone is open.
+ * auto-resume at the reset, which the daemon carries out whether or not the
+ * phone is open, or Resume when the reset time is unknown.
  */
 export function UsageLimitNotice({ turn }: { turn: ConversationTurn & { usageLimit: NonNullable<ConversationTurn["usageLimit"]> } }) {
 	const t = useTheme();

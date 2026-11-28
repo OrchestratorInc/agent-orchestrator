@@ -54,10 +54,11 @@ type accountHandoff struct {
 	conversationID string
 	sessionID      domain.SessionID
 
-	busy    bool
-	done    bool
-	retryAt time.Time
-	moved   atomic.Bool
+	busy      bool
+	done      bool
+	releasing bool
+	retryAt   time.Time
+	moved     atomic.Bool
 
 	targetAccount string
 	transitionID  string
@@ -206,6 +207,8 @@ func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoff
 
 func (s *Service) stepAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
 	switch {
+	case h.releasing:
+		return s.releaseAccountHandoffQueue(ctx, h)
 	case h.transitionID == "":
 		return s.selectAccountHandoff(ctx, store, deps, h)
 	case !h.moved.Load():
@@ -295,6 +298,9 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 		return true, nil
 	}
 	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil || !on {
+		if err == nil {
+			return s.releaseAccountHandoffQueue(ctx, h)
+		}
 		return err == nil, err
 	}
 	if err := s.noteAccountHandoff(ctx, h, ""); err != nil {
@@ -343,12 +349,25 @@ func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHando
 	}
 }
 
+func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHandoff) (bool, error) {
+	h.releasing = true
+	if holds, ok := s.store.(queueHoldStore); ok {
+		if err := holds.ReleaseConversationQueueHeldBy(ctx, h.conversationID, h.turnID); err != nil {
+			return false, err
+		}
+	}
+	if err := s.DrainQueued(ctx, h.sessionID); err != nil && !errors.Is(err, ErrNoController) {
+		s.log.Warn("account handoff: queued messages not drained", "session", h.sessionID, "turn", h.turnID, "error", err)
+	}
+	return true, nil
+}
+
 func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
 	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil {
 		return false, err
 	} else if !on {
 		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySkipped)
-		return true, nil
+		return s.releaseAccountHandoffQueue(ctx, h)
 	}
 	if pending, err := store.ListPendingSessionInterfaceTransitionMessages(ctx, h.transitionID); err != nil {
 		return false, err
@@ -368,7 +387,7 @@ func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffS
 	if permanentUsageLimitResumeError(err) {
 		s.log.Info("account handoff: retry withdrawn", "session", h.sessionID, "turn", h.turnID, "error", err)
 		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySkipped)
-		return true, nil
+		return s.releaseAccountHandoffQueue(ctx, h)
 	}
 	return s.giveUpRetry(ctx, h, err)
 }
@@ -377,6 +396,7 @@ func (s *Service) giveUpRetry(ctx context.Context, h *accountHandoff, cause erro
 	done, err := s.giveUpAfter(h, cause)
 	if done {
 		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySkipped)
+		return s.releaseAccountHandoffQueue(ctx, h)
 	}
 	return done, err
 }

@@ -142,8 +142,11 @@ LIMIT 1;
 SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
 
 -- name: BindProjectConversationSession :exec
-UPDATE conversations SET current_session_id = ?, updated_at = ?
-WHERE id = ? AND scope = 'project';
+UPDATE conversations
+SET queue_held_turn_id = CASE WHEN current_session_id IS sqlc.arg(current_session_id) THEN queue_held_turn_id END,
+    current_session_id = sqlc.arg(current_session_id),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND scope = 'project';
 
 -- name: SelectConversationByID :one
 SELECT * FROM conversations WHERE id = ? LIMIT 1;
@@ -829,6 +832,22 @@ SET state = 'failed',
     completed_at = ?
 WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 
+-- name: SettleStoppedControllerTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = sqlc.arg(completed_at)
+WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
+  AND (state = 'running' OR (state = 'queued' AND NOT EXISTS (
+      SELECT 1 FROM conversations
+      JOIN session_interface_transitions AS move
+        ON move.session_id = conversation_turns.handled_by_session_id
+      WHERE conversations.id = conversation_turns.conversation_id
+        AND conversations.queue_held_turn_id IS NOT NULL
+        AND move.target_account_id <> ''
+        AND move.policy = 'drain'
+        AND move.phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required'))));
+
 -- Reviewer Chat has its own controller generation on review, separate from
 -- the worker session. Settle only turns owned by that review conversation.
 -- name: FailOrphanedReviewActivities :exec
@@ -1166,6 +1185,66 @@ WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.promotion_started_at IS NULL
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 LIMIT 1;
+
+-- name: HoldConversationQueueForTurn :exec
+UPDATE conversations
+SET queue_held_turn_id = sqlc.arg(turn_id)
+WHERE conversations.id = sqlc.arg(conversation_id)
+  AND EXISTS (
+      SELECT 1 FROM conversation_messages
+      JOIN conversation_turns AS member ON member.id = conversation_messages.turn_id
+      JOIN conversation_turns AS turn ON turn.id = sqlc.arg(turn_id)
+      WHERE (member.id = turn.id OR member.promoted_to_turn_id = turn.id OR member.id IN (sqlc.slice('follower_ids')))
+        AND conversation_messages.role = 'user'
+        AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
+        AND (conversations.scope <> 'project' OR turn.handled_by_session_id = conversations.current_session_id)
+  );
+
+-- name: ReleaseConversationQueue :exec
+UPDATE conversations SET queue_held_turn_id = NULL
+WHERE id = ? AND queue_held_turn_id IS NOT NULL;
+
+-- name: ReleaseConversationQueueHeldByTurn :exec
+UPDATE conversations SET queue_held_turn_id = NULL
+WHERE id = sqlc.arg(conversation_id) AND queue_held_turn_id = sqlc.arg(turn_id);
+
+-- name: ReleaseConversationQueueAfterTurn :exec
+UPDATE conversations SET queue_held_turn_id = NULL
+WHERE conversations.id = sqlc.arg(conversation_id)
+  AND conversations.queue_held_turn_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS held, conversation_turns AS settled
+      WHERE held.id = conversations.queue_held_turn_id
+        AND settled.id = sqlc.arg(turn_id)
+        AND held.requested_at > settled.requested_at
+  );
+
+-- name: SelectConversationQueueHoldTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.* FROM conversation_turns
+JOIN conversations ON conversations.queue_held_turn_id = conversation_turns.id
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversations.id = sqlc.arg(conversation_id)
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+  ));
 
 -- name: SelectQueuedConversationBatch :many
 SELECT conversation_turns.id,

@@ -184,9 +184,9 @@ describe("TurnOutcome", () => {
 		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute("href", "https://example.com/billing");
 	});
 
-	it("resumes an eligible limited prompt after its reset", () => {
+	it("resumes an eligible limited prompt when its reset is unknown", () => {
 		const onRetry = vi.fn();
-		render(<TurnOutcome state="failed" usageLimit={{ resetsAt: "2020-01-01T00:00:00Z", autoResume: false }} retry={{ onRetry }} />);
+		render(<TurnOutcome state="failed" usageLimit={{ autoResume: false }} retry={{ onRetry }} />);
 
 		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 
@@ -194,7 +194,7 @@ describe("TurnOutcome", () => {
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 	});
 
-	it("waits for a limited prompt's reset before exposing manual recovery", () => {
+	it("offers no manual recovery before or after a known reset", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-10-14T15:00:00Z"));
 		const onRetry = vi.fn();
@@ -203,8 +203,7 @@ describe("TurnOutcome", () => {
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 		act(() => vi.advanceTimersByTime(60_000));
 
-		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
-		expect(onRetry).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 
 	it.each([{ pending: true }, { disabled: true }])("keeps limited-prompt retry errors visible while recovery is unavailable: %j", (control) => {

@@ -68,6 +68,190 @@ func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
 	}
 }
 
+func TestUsageLimitHoldIsNotRestoredByAReplay(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-limited", "provider-limited", testNow))
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, testNow))
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after a usage-limit failure", held, err)
+	}
+	mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, "", testNow.Add(time.Minute)))
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || held {
+		t.Fatalf("queue held = %v, %v after replaying the released failure", held, err)
+	}
+}
+
+func TestOnlyAUsageLimitFailureHoldsTheQueue(t *testing.T) {
+	ctx := context.Background()
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	for _, tc := range []struct {
+		name    string
+		state   domain.TurnState
+		message string
+		held    bool
+	}{
+		{"usage limit", domain.TurnStateFailed, refusal, true},
+		{"another failure", domain.TurnStateFailed, "API Error: 529 overloaded", false},
+		{"interrupted", domain.TurnStateInterrupted, refusal, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, session, conversation := seededChatConversation(t)
+			appendBranchPrompt(t, s, session, conversation, "generation-root", "prompt", "finish this task")
+			mustNoError(t, s.BindTurnToProvider(ctx, "turn-prompt", "provider-prompt", testNow))
+			mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-prompt", tc.state, tc.message, testNow))
+			if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || held != tc.held {
+				t.Fatalf("queue held = %v, %v, want %v", held, err, tc.held)
+			}
+		})
+	}
+}
+
+func TestCleanupKeepsOnlyAHeldQueueThatIsMovingAccounts(t *testing.T) {
+	ctx := context.Background()
+	const drain, interrupt = domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionInterrupt
+	for _, tc := range []struct {
+		name         string
+		target       string
+		mode         domain.SessionMode
+		policy       domain.SessionInterfaceTransitionPolicy
+		phase        domain.SessionInterfaceTransitionPhase
+		released     bool
+		otherSession bool
+		want         domain.TurnState
+	}{
+		{"account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionDraining, false, false, domain.TurnStateQueued},
+		{"account move starting the new agent", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionActivating, false, false, domain.TurnStateQueued},
+		{"account move, hold released", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionDraining, true, false, domain.TurnStateFailed},
+		{"another session's account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionDraining, false, true, domain.TurnStateFailed},
+		{"account move that stops the turn", "acct-b", domain.SessionModeChat, interrupt, domain.SessionInterfaceTransitionDraining, false, false, domain.TurnStateFailed},
+		{"cancelled account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionCancelled, false, false, domain.TurnStateFailed},
+		{"completed account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionCompleted, false, false, domain.TurnStateFailed},
+		{"failed account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionFailed, false, false, domain.TurnStateFailed},
+		{"account move that needs recovery", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionRecovery, false, false, domain.TurnStateFailed},
+		{"terminal switch", "", domain.SessionModeTUI, drain, domain.SessionInterfaceTransitionDraining, false, false, domain.TurnStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, session, conversation := seededChatConversation(t)
+			other, err := s.CreateConversation(ctx, "conversation-other", domain.ConversationScopeProject, "branches", session.ID, testNow)
+			mustNoError(t, err)
+			appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+			const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+			mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
+			for queued, id := range map[string]string{"held": conversation.ID, "running": conversation.ID, "elsewhere": other.ID} {
+				if _, err := s.AppendUserMessage(ctx, id, session.ID, "generation-root", domain.ConversationMessage{
+					ID: "message-" + queued, Origin: domain.MessageOriginAutomation, Text: queued, ClientMessageID: "client-" + queued,
+				}, "turn-"+queued, testNow); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mustNoError(t, s.BindTurnToProvider(ctx, "turn-running", "provider-running", testNow))
+			if tc.released {
+				mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
+			}
+			moving := session
+			if tc.otherSession {
+				rec := sampleRecord("branches")
+				rec.Mode = domain.SessionModeChat
+				moving, err = s.CreateSession(ctx, rec)
+				mustNoError(t, err)
+			}
+			_, created, err := s.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
+				ID: "move", SessionID: moving.ID, SourceMode: domain.SessionModeChat, TargetMode: tc.mode, Policy: tc.policy,
+				HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict, Phase: domain.SessionInterfaceTransitionRequested,
+				TargetAccountID: tc.target, CreatedAt: testNow, UpdatedAt: testNow,
+			})
+			if err != nil || !created {
+				t.Fatalf("transition: created=%v err=%v", created, err)
+			}
+			if ok, err := s.AdvanceSessionInterfaceTransition(ctx, "move", domain.SessionInterfaceTransitionRequested, tc.phase, "", "", "", testNow); err != nil || !ok {
+				t.Fatalf("advance transition: %v, %v", ok, err)
+			}
+
+			if owned, err := s.CleanupOwnedControllerWork(ctx, session.ID, conversation.ID, "generation-root", testNow); err != nil || !owned {
+				t.Fatalf("cleanup = %v, %v", owned, err)
+			}
+			for id, want := range map[string]domain.TurnState{
+				"turn-held": tc.want, "turn-elsewhere": domain.TurnStateFailed, "turn-running": domain.TurnStateFailed,
+			} {
+				if turn, err := s.TurnByID(ctx, id); err != nil || turn.State != want {
+					t.Fatalf("%s = %q, %v, want %q", id, turn.State, err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestQueueHoldCountsOnlyWhileItsTurnIsVisible(t *testing.T) {
+	ctx := context.Background()
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	s, session, conversation := seededChatConversation(t)
+	held := func(want bool, step string) {
+		t.Helper()
+		if got, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || got != want {
+			t.Fatalf("queue held = %v, %v after %s, want %v", got, err, step, want)
+		}
+	}
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "a", "A")
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
+	held(true, "the usage limit")
+
+	sibling := domain.ConversationBranch{
+		ID: "sibling", ConversationID: conversation.ID, SessionID: session.ID,
+		ProviderConversationID: "thread-sibling", ParentBranchID: conversation.ActiveBranchID,
+		ForkAfterTurnID: "turn-a", ReplacedTurnID: "turn-limited", ForkAfterSequence: 1,
+	}
+	mustNoError(t, s.CreateConversationBranch(ctx, sibling, testNow))
+	activateTestBranch(t, s, session, conversation, sibling.ID, sibling.ProviderConversationID, "generation-sibling")
+	held(false, "switching to a sibling branch")
+	activateTestBranch(t, s, session, conversation, conversation.ActiveBranchID, "thread-root", "generation-root")
+	held(true, "switching back")
+
+	_, err := s.RollbackTurns(ctx, conversation.ID, "turn-limited", testNow)
+	mustNoError(t, err)
+	held(false, "undoing the limited turn")
+}
+
+func TestQueueHoldFollowsTheTurnThatOwnsIt(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	for i, name := range []string{"older", "limited", "later", "newest"} {
+		created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+			ID: "message-" + name, Origin: domain.MessageOriginHuman, Text: name, ClientMessageID: "client-" + name,
+		}, "turn-"+name, testNow.Add(time.Duration(i)*time.Minute))
+		if err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", name, created, err)
+		}
+		mustNoError(t, s.BindTurnToProvider(ctx, "turn-"+name, "provider-"+name, testNow))
+	}
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	held := func(want bool, step string) {
+		t.Helper()
+		if got, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || got != want {
+			t.Fatalf("queue held = %v, %v after %s, want %v", got, err, step, want)
+		}
+	}
+	later := testNow.Add(time.Hour)
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, later))
+	held(true, "the usage limit")
+	mustNoError(t, s.ReleaseConversationQueueAfterTurn(ctx, conversation.ID, "provider-older"))
+	held(true, "an older turn completed")
+	mustNoError(t, s.ReleaseConversationQueueAfterTurn(ctx, conversation.ID, "provider-later"))
+	held(false, "a later turn completed")
+
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-newest", domain.TurnStateFailed, refusal, later))
+	mustNoError(t, s.ReleaseConversationQueueAfterTurn(ctx, conversation.ID, "provider-later"))
+	held(true, "a replayed completion")
+	mustNoError(t, s.ReleaseConversationQueueHeldBy(ctx, conversation.ID, "turn-limited"))
+	held(true, "releasing another turn's hold")
+	mustNoError(t, s.ReleaseConversationQueueHeldBy(ctx, conversation.ID, "turn-newest"))
+	held(false, "releasing its own hold")
+}
+
 // A resumed Codex thread replays a turn the dead controller left in progress as
 // interrupted, with no error. Nobody interrupted it, so the failure must stay.
 func TestSettleTurnInterruptedReplayKeepsStoredFailure(t *testing.T) {

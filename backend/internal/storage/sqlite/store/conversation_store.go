@@ -1466,6 +1466,11 @@ func (s *Store) appendUserMessage(
 		}); err != nil {
 			return err
 		}
+		if retryOfTurnID == "" && domain.UserSentMessage(msg.Origin, msg.SenderSessionID, msg.AuthoredByUser) {
+			if err := q.ReleaseConversationQueue(ctx, conversationID); err != nil {
+				return fmt.Errorf("release held queue: %w", err)
+			}
+		}
 		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
 			if err := q.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, usageMessageChat, now)); err != nil {
@@ -1771,6 +1776,9 @@ func (s *Store) SettleTurnWithFailureCode(
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}
+	if err := holdQueueBehindUsageLimit(ctx, q, turn, nil, state, errMessage, now); err != nil {
+		return err
+	}
 	if err := q.SettleStreamingConversationMessagesForTurn(ctx,
 		gen.SettleStreamingConversationMessagesForTurnParams{
 			UpdatedAt:      now,
@@ -2034,8 +2042,8 @@ func cleanupOwnedControllerWork(
 		}); err != nil {
 		return false, fmt.Errorf("settle orphaned activities for %s: %w", session, err)
 	}
-	if err := q.SettleOrphanedConversationTurns(ctx,
-		gen.SettleOrphanedConversationTurnsParams{
+	if err := q.SettleStoppedControllerTurns(ctx,
+		gen.SettleStoppedControllerTurnsParams{
 			CompletedAt:        sql.NullTime{Time: now, Valid: true},
 			HandledBySessionID: session,
 		}); err != nil {
@@ -2740,6 +2748,63 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 	}, nil
 }
 
+// ConversationQueueHeld reports whether a usage limit that has not reset holds the conversation's queue.
+func (s *Store) ConversationQueueHeld(ctx context.Context, conversationID string, now time.Time) (bool, error) {
+	row, err := s.conversationReader(ctx).SelectConversationQueueHoldTurn(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read queue hold of %s: %w", conversationID, err)
+	}
+	limit := turnToDomain(row).UsageLimit
+	reset := limit != nil && !limit.AutoResume && limit.ResetsAt != nil && !limit.ResetsAt.After(now)
+	return !reset, nil
+}
+
+// ReleaseConversationQueue lets the conversation's queued turns dispatch again.
+func (s *Store) ReleaseConversationQueue(ctx context.Context, conversationID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.ReleaseConversationQueue(ctx, conversationID); err != nil {
+		return fmt.Errorf("release queue of %s: %w", conversationID, err)
+	}
+	return nil
+}
+
+// ReleaseConversationQueueAfterTurn releases the conversation's queue when a provider turn completes, unless a newer turn holds it.
+func (s *Store) ReleaseConversationQueueAfterTurn(ctx context.Context, conversationID, providerTurnID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	turn, err := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+		ConversationID: conversationID, ProviderTurnID: providerTurnID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select turn %s: %w", providerTurnID, err)
+	}
+	if err := q.ReleaseConversationQueueAfterTurn(ctx, gen.ReleaseConversationQueueAfterTurnParams{
+		ConversationID: conversationID, TurnID: turn.ID,
+	}); err != nil {
+		return fmt.Errorf("release queue of %s after turn %s: %w", conversationID, turn.ID, err)
+	}
+	return nil
+}
+
+// ReleaseConversationQueueHeldBy releases the conversation's queue only while turnID holds it.
+func (s *Store) ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.ReleaseConversationQueueHeldByTurn(ctx, gen.ReleaseConversationQueueHeldByTurnParams{
+		ConversationID: conversationID, TurnID: sql.NullString{String: turnID, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("release queue of %s held by %s: %w", conversationID, turnID, err)
+	}
+	return nil
+}
+
 // ListQueuedBatch previews the current queue without reserving any message.
 func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error) {
 	rows, err := s.qr.SelectQueuedConversationBatch(ctx, conversationID)
@@ -3210,16 +3275,50 @@ func (s *Store) SettleTurnByID(
 	errMessage string,
 	now time.Time,
 ) error {
+	return s.settleTurnByID(ctx, turnID, nil, state, errMessage, now)
+}
+
+// SettleRefusedBatchLead fails a batch lead the provider refused at send, so a
+// usage limit holds the queue when any claimed follower is the user's prompt.
+func (s *Store) SettleRefusedBatchLead(ctx context.Context, turnID string, followers []string, errMessage string, now time.Time) error {
+	return s.settleTurnByID(ctx, turnID, followers, domain.TurnStateFailed, errMessage, now)
+}
+
+func (s *Store) settleTurnByID(ctx context.Context, turnID string, followers []string, state domain.TurnState, errMessage string, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
-		State:        state,
-		ErrorMessage: errMessage,
-		FailureCode:  "",
-		CompletedAt:  sql.NullTime{Time: now, Valid: true},
-		ID:           turnID,
+	return s.inTx(ctx, "settle turn "+turnID, func(q *gen.Queries) error {
+		turn, err := q.SelectConversationTurnByID(ctx, turnID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("select turn %s: %w", turnID, err)
+		}
+		if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+			State:        state,
+			ErrorMessage: errMessage,
+			FailureCode:  "",
+			CompletedAt:  sql.NullTime{Time: now, Valid: true},
+			ID:           turnID,
+		}); err != nil {
+			return fmt.Errorf("settle turn %s: %w", turnID, err)
+		}
+		if turn.ID == "" {
+			return nil
+		}
+		return holdQueueBehindUsageLimit(ctx, q, turn, followers, state, errMessage, now)
+	})
+}
+
+func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.ConversationTurn, followers []string, state domain.TurnState, errMessage string, now time.Time) error {
+	if state != domain.TurnStateFailed || turn.State == domain.TurnStateFailed ||
+		domain.ParseConversationUsageLimit(errMessage, &now) == nil {
+		return nil
+	}
+	if err := q.HoldConversationQueueForTurn(ctx, gen.HoldConversationQueueForTurnParams{
+		ConversationID: turn.ConversationID,
+		TurnID:         sql.NullString{String: turn.ID, Valid: true},
+		FollowerIds:    followers,
 	}); err != nil {
-		return fmt.Errorf("settle turn %s: %w", turnID, err)
+		return fmt.Errorf("hold queue behind turn %s: %w", turn.ID, err)
 	}
 	return nil
 }

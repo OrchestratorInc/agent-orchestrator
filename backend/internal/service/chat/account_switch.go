@@ -17,12 +17,16 @@ type activeTransitionReader interface {
 	GetActiveSessionInterfaceTransition(context.Context, domain.SessionID) (domain.SessionInterfaceTransition, bool, error)
 }
 
-func (s *Service) accountMoveAwaitingTarget(ctx context.Context, id domain.SessionID) bool {
-	reader, ok := s.store.(activeTransitionReader)
+func activeTransition(ctx context.Context, store Store, id domain.SessionID) (domain.SessionInterfaceTransition, bool, error) {
+	reader, ok := store.(activeTransitionReader)
 	if !ok {
-		return false
+		return domain.SessionInterfaceTransition{}, false, nil
 	}
-	move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, id)
+	return reader.GetActiveSessionInterfaceTransition(ctx, id)
+}
+
+func (s *Service) accountMoveAwaitingTarget(ctx context.Context, id domain.SessionID) bool {
+	move, active, err := activeTransition(ctx, s.store, id)
 	if err != nil {
 		s.log.Warn("chat: read account move", "session", id, "error", err)
 		return false
