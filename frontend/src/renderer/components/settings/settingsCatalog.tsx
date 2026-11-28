@@ -1,3 +1,4 @@
+import { BrowserApprovalsSection } from "./BrowserApprovalsSection";
 import { BrowserIcon, type AppIcon } from "../icons";
 import { Activity, Bell, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
@@ -6,6 +7,7 @@ import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../sto
 import { BillingSection } from "./BillingSection";
 import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
+import { BrowserPasswordsSection } from "./BrowserPasswordsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 import { ComputerUseSection } from "./ComputerUseSection";
@@ -136,8 +138,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden) => (
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
+				<BrowserPasswordsSection />
 				<BrowserDownloadsSection />
 				<BrowserChromeSection />
+				<BrowserApprovalsSection />
 			</>
 		),
 	},

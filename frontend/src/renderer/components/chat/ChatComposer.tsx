@@ -1011,13 +1011,14 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (stripConcealed || (sentFiles && (optimisticSend || nextDraftHasChanged)) ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+		const previewSessionId = assetSessionId ?? boundarySessionId ?? "";
 		// A cloud file's reference is no daemon path: it previews from its bytes
 		// while they are in memory, else as a file.
-		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
-			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
+		const preview = file.dataUrl ?? (path && previewSessionId && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+			? attachmentURL(assetOrigin, previewSessionId, path) : undefined);
 		// Videos, PDFs and text files preview from the staged copy once the picked file is gone.
-		const mediaUrl = path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && attachmentPreviewKind(path)
-			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined;
+		const mediaUrl = path && previewSessionId && !isCloudAttachmentReference(path) && assetOrigin !== undefined && attachmentPreviewKind(path)
+			? attachmentURL(assetOrigin, previewSessionId, path) : undefined;
 		return { file, path, preview, mediaUrl };
 	});
 	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
@@ -2108,8 +2109,10 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 					if (!attachment.stagedPath) throw new Error("Missing staged attachment");
 					const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+					const previewSessionId = assetSessionId ?? attachmentScope.sessionId;
 					if (assetOrigin === undefined) throw new Error("Remote host disconnected");
-					const response = await fetch(attachmentURL(assetOrigin, assetSessionId ?? attachmentScope.sessionId, attachment.stagedPath));
+					if (!previewSessionId) throw new Error("Missing staged attachment");
+					const response = await fetch(attachmentURL(assetOrigin, previewSessionId, attachment.stagedPath));
 					if (!response.ok) throw new Error("Could not read staged attachment");
 					const blob = await response.blob();
 					const data = await new Promise<string>((resolve, reject) => {

@@ -182,15 +182,21 @@ import {
 	piggybackedUpdates,
 	senderOf,
 	FromAgent,
+	indexWorkerUpdates,
 	isTaskTitleUpdate,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	relayedVia,
 	renamedTitle,
+	EndedSpawnsContext,
 	SpawnedAgents,
+	spawnedBy,
 	spawnedSessionIds,
+	spawnedWorker,
 	TaskNamedLine,
+	terminatedBy,
+	useEndedSpawns,
 	useWorkerUpdateIndex,
+	waitingSpawns,
 	WorkerUpdateIndexContext,
 	BatchedReportsContext,
 	type BatchedReports,
@@ -201,7 +207,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -223,7 +229,7 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { aoActionName, isOrdinaryActivity } from "./activity-action";
+import { aoActionName, isFailedSpawn, isOrdinaryActivity, mergeFailedSpawns } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -449,6 +455,8 @@ export interface ChatWorkspaceProps {
 	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
+	/** Drawn after the last turn, above the prompt spacer: the session's pending browser approval. */
+	timelineEnd?: ReactNode;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -459,6 +467,8 @@ export interface ChatWorkspaceProps {
 	sessionRole?: SessionKind;
 	/** Host-specific proxy origin for images and staged attachments. */
 	assetBaseUrl?: string;
+	/** Session ID used to load staged attachment previews when different from snapshot.sessionId (e.g. a prepared worktree). */
+	assetSessionId?: string;
 	/** Selected remote host, even while its connection has no proxy origin. */
 	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
@@ -888,9 +898,11 @@ function ChatWorkspaceContent({
 	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
+	timelineEnd,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
+	assetSessionId,
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
@@ -2405,13 +2417,14 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={assetSessionId ?? snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
+									timelineEnd={timelineEnd}
 							onAddToSideChat={onAddToSideChat}
 									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
@@ -2676,7 +2689,7 @@ function ChatWorkspaceContent({
 										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
 										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
-										assetSessionId={snapshot.sessionId}
+										assetSessionId={assetSessionId ?? snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
@@ -3461,6 +3474,7 @@ function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
  * this behavior while keeping its own composer.
  */
 export function Timeline({
+	timelineEnd,
 	onAddToSideChat,
 	subagentPanel,
 	checkingSideChatAvailability,
@@ -3518,6 +3532,7 @@ export function Timeline({
 	findRequest,
 	onFindRequestHandled,
 }: {
+	timelineEnd?: ReactNode;
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
 	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
@@ -3703,6 +3718,9 @@ export function Timeline({
 	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
 	const skipRelatchFollow = useRef(false);
 	const reducedMotion = useReducedMotion();
 	const reducedMotionRef = useRef(reducedMotion);
@@ -4626,7 +4644,9 @@ export function Timeline({
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	const endedSpawns = useEndedSpawns(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
+	const developerMode = useUiStore((state) => state.developerMode);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4637,8 +4657,9 @@ export function Timeline({
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
-		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
-			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+		const visible = groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId));
+		// The user's own queued prompts sit in the dock, so feedback queued around one still merges.
+		const groups = (developerMode ? mergeQueuedPullRequestFeedback(visible, queuedTurnIds(snapshot)) : visible)
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group)
@@ -4647,14 +4668,26 @@ export function Timeline({
 				: group);
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
-		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
-		const cleaned = spawnedIds.size === 0 ? placed : placed
-			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+		// A worker this chat spawned is drawn by its spawn tree row and then by its reports,
+		// so the daemon's records of it would only repeat them: its termination while the row
+		// is still up, and its spawn once it has answered and the row is gone. Dropped here,
+		// before they can leave an empty group behind. One that ended without answering loses
+		// its row at the next turn, and both records then stand for it.
+		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
+		const answered = (workerUpdateIndex ?? indexWorkerUpdates(snapshot.items)).latest;
+		const repeats = (item: ConversationItem) => {
+			const started = spawnedBy(item);
+			if (started) return answered.has(started);
+			const ended = terminatedBy(item);
+			return ended !== undefined && spawned.has(ended) && !answered.has(ended) && !endedSpawns.has(ended);
+		};
+		const cleaned = spawned.size === 0 || !placed.some((group) => group.items.some(repeats)) ? placed : placed
+			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.live || group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
+		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -5376,9 +5409,14 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
-			// A reload that settles the turn can also re-page the history above it, which
-			// the history anchor just moved the view by (it runs first in the commit).
-			const top = Math.min(settle.scrollTop + historyShift.current, end);
+			const readerHeld = performance.now() - readerIntentAt.current < READER_INTENT_HOLD_MS;
+			// When the turn grew past what the prompt spacer can absorb (a long reply
+			// that already scrolled the view), advance scrollTop to the new end before
+			// paint instead of leaving it short for followEnd to glide against the FLIP
+			// slide. Honor an active reader-intent hold (upward wheel/key/touch before
+			// its scroll event clears pinnedRef) so settling never pulls the reader back.
+			if (!readerHeld) cancelScrollFollow();
+			const top = readerHeld ? Math.min(settle.scrollTop + historyShift.current, end) : end;
 			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
@@ -5429,7 +5467,7 @@ export function Timeline({
 			}
 			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
 		});
-	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, cancelScrollFollow, markWritten, updateScrollbar, releaseSettleHold]);
 
 	// Rows above the view come and go: an older page loads in, or a reload re-reads the
 	// chat's pages from its new newest row and drops the oldest ones (every send does
@@ -5693,9 +5731,6 @@ export function Timeline({
 	// open something to read. Only the reader's own scrolling arms it, so streamed
 	// growth while unpinned (which moves nothing) never does.
 	const relatchTimer = useRef<number | undefined>(undefined);
-	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
-	// marker or a prompt moves the view without it, and must not be pulled back.
-	const readerIntentAt = useRef(0);
 	const noteReaderIntent = useCallback(() => {
 		readerIntentAt.current = performance.now();
 	}, []);
@@ -5791,6 +5826,12 @@ export function Timeline({
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
+		// A disclosure opened from the keyboard, as onViewportPointerDown does for a pointer.
+		if ((event.key === "Enter" || (event.key === " " && !event.shiftKey)) && target.closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
+			releaseFollow();
+			return;
+		}
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
@@ -6102,6 +6143,7 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<EndedSpawnsContext.Provider value={endedSpawns}>
 								<BatchedReportsContext.Provider value={batchedReports}>
 								<LatestForkTurnContext.Provider value={latestForkTurnId}>
 								{group.folded ? (
@@ -6114,6 +6156,7 @@ export function Timeline({
 								) : renderTurn(group)}
 								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
+								</EndedSpawnsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -6160,6 +6203,7 @@ export function Timeline({
 							/>
 						</div>
 					) : null}
+					{timelineEnd}
 					{/* Pushes the latest prompt toward the top of the viewport when following,
 					    then shrinks as the reply fills the space below it. */}
 					<div
@@ -6511,16 +6555,27 @@ const TurnGroup = memo(function TurnGroup({
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
 	const updateIndex = useContext(WorkerUpdateIndexContext);
+	const endedSpawns = useContext(EndedSpawnsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
-		() => runsOf(turnFlowItems(group)),
+		() =>
+			runsOf(
+				// A worker the turn spawned draws under the turn as its own row, not as a step,
+				// until it has ended without answering and the row is gone.
+				workerUpdates ? turnFlowItems(group).filter((item) => endedSpawns.has(spawnedBy(item) ?? "") || !spawnedBy(item)) : turnFlowItems(group),
+			),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
-		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error, workerUpdates, endedSpawns],
 	);
-	// A review round arrives as one message per comment; it draws as one event.
-	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
+	// A review round arrives as one message per comment; it draws as one event, or in
+	// Developer Mode, a PR's comments and failing CI draw as one line.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const bursts = useMemo(() => {
+		const singles = runs.map((run) => (run.kind === "single" ? run.items[0] : undefined));
+		return developerMode ? pullRequestBursts(singles) : reviewBursts(singles);
+	}, [developerMode, runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6535,7 +6590,21 @@ const TurnGroup = memo(function TurnGroup({
 	// hands its copy and undo down to the outcome's action row: one row per turn.
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A compaction that could not run says why on its own row ("Couldn't compact
+	// conversation · reason"), so the turn does not tell the same failure again.
+	const compactionToldFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error?.trim()) &&
+		group.items.some((item) =>
+			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
+			item.detail?.error?.trim() === group.outcome?.error?.trim());
+	// So does a stopped /compact ("Couldn't compact conversation · Stopped"), when
+	// compacting was all the turn did.
+	const compactionToldStop = group.outcome?.state === "interrupted" &&
+		group.items.some((item) => item.kind === "activity" && isCompaction(item) && item.status === "cancelled") &&
+		group.items.every((item) => (item.kind === "activity" && isCompaction(item)) || (item.kind === "message" && item.role === "user"));
+	const compactionToldOutcome = compactionToldFailure || compactionToldStop;
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldOutcome);
+	// Only the failure is told once: the turn can still be retried.
+	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6599,13 +6668,25 @@ const TurnGroup = memo(function TurnGroup({
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
-						item.detail?.event !== "provider.failure",
+						item.detail?.event !== "provider.failure" &&
+						!isCompaction(item),
 				)
+		: undefined;
+	// Setup and a provider retry say so on the live row before anything else.
+	const liveRowTaken = Boolean(startup || group.liveStartupLabel || group.liveProviderFailure);
+	// A compaction under way takes over the live row ("Compacting conversation 1m")
+	// instead of drawing a row of its own; its row joins the turn when it settles.
+	// While the live row says something else, it keeps its own running row.
+	const liveCompaction = group.live && !liveRowTaken
+		? [...group.items]
+				.reverse()
+				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
+	// is done and has had its moment on the live row. While a compaction holds the
+	// live row, the step keeps its own row.
+	const liveStep = useLiveRowStep(group, liveRowTaken || Boolean(liveCompaction));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
@@ -6624,6 +6705,7 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			);
 		}
+		if (run.kind === "single" && liveCompaction && run.items[0]?.id === liveCompaction.id) return null;
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -6639,11 +6721,11 @@ const TurnGroup = memo(function TurnGroup({
 			/>
 		);
 	};
-	const renderSingleRun = (run: TimelineRun) => (
+	const renderSingleRun = (run: TimelineRun, beforeActions?: ReactNode) => (
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
-			reviewBurst={bursts.get(run.items[0]!.id)}
+			pullRequestBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6678,10 +6760,12 @@ const TurnGroup = memo(function TurnGroup({
 					: undefined
 			}
 			rollbackDisabled={rollbackDisabled}
+			retry={run.items[0]?.id === copyableMessageId ? compactionRetry : undefined}
 			onSelectAnnotation={onSelectAnnotation}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
 				: undefined}
+			beforeActions={beforeActions}
 		/>
 	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -6698,8 +6782,6 @@ const TurnGroup = memo(function TurnGroup({
 			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
 		/>
 	);
-	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
-	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
@@ -6710,7 +6792,6 @@ const TurnGroup = memo(function TurnGroup({
 			// Reports a worker's steer carried in travel with it, as their own line.
 			const carried = batched?.under.get(item.id) ?? [];
 			if (carried.length === 0) return rows;
-			drewReportsUnder = true;
 			return [rows, reportsLine(`${run.key}:reports`, carried)];
 		}
 		if (updates.length > 0) return reportsLine(run.key, updates);
@@ -6721,14 +6802,11 @@ const TurnGroup = memo(function TurnGroup({
 			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
 			: [];
 		if (waiting.length === 0) return renderRun(run);
-		drewReportsUnder = true;
 		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
-	// The reports line under the prompt takes the prompt's action row itself.
-	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -6746,6 +6824,7 @@ const TurnGroup = memo(function TurnGroup({
 				// writing, so both keep the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveStep}
+				compaction={liveCompaction}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -6754,34 +6833,28 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = group.outcome;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
-	// nothing to open, so it is the same words without the chevron. As the turn
-	// settles it fades in where the turn reserved its row, and the reply slides up
-	// into the room its steps left (restoreSettle), so the work reads as collapsing
-	// into its summary. A settled turn loaded from history mounts it without the fade.
+	// nothing to open, so it is the same words without the chevron. No blank row is
+	// reserved for it while the turn runs: as the turn settles it fades in and
+	// restoreSettle FLIP-animates the rows below into their new positions on the
+	// compositor thread, so the space opens smoothly without layout thrashing. A
+	// settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
-	// Agents the turn spawned are part of its work, so they fold with its steps.
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
-	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
-	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
+	// Each worker the turn spawned is a row in the spawn tree under it, from the moment
+	// the daemon records the spawn until the worker answers, so it stays out of the fold.
+	// One that ended without answering keeps its row only until the next turn.
+	// `ao spawn` output still names the workers a daemon too old to record the spawn started.
+	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedWorker(item) ?? []) : [];
+	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	// The tree goes with its last waiting worker, so the reply keeps no empty space for it.
+	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex, endedSpawns);
+	const spawnTree = waitingWorkers.length > 0 ? <SpawnedAgents key="spawned" spawns={waitingWorkers} /> : null;
+	const hasFoldedWork = foldedRuns.length > 0;
+	const foldedWork = (): ReactNode[] => foldedRuns.flatMap(renderWorkerRun);
 	const showsWorked = Boolean(
 		// A message refused for its login did no work, so it gets no "Worked for".
 		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
 	);
-	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
-	// "Worked for" fills that row; without it, an empty row of the same height keeps
-	// them off the reply. A branch navigator already reserves the row in the flow.
-	const promptBubble = group.items.some(
-		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
-	);
-	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
-	// The empty row is exactly as tall as "Worked for", which takes its place as the
-	// turn settles, so the handover moves nothing. Only one of the two is ever in the
-	// DOM, so the turn's row gap is never counted twice.
-	if (!showsWorked && reservesActionRow) {
-		body.push(<div key="turn-worked-gap" aria-hidden="true" className="h-7 shrink-0" data-turn-worked-gap="" />);
-	}
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
 			{outcome && showsWorked ? (
@@ -6812,7 +6885,11 @@ const TurnGroup = memo(function TurnGroup({
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	// Settled steers still carry the reports they delivered.
 	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
-	if (finalRun) body.push(renderRun(finalRun));
+	// Under the reply, so the reply streams in above the tree, and above the reply's
+	// copy and undo row, which belongs to the whole turn.
+	const finalReply = finalRun?.kind === "single" && finalRun.items[0]?.kind === "message" && finalRun.items[0].role === "assistant";
+	if (finalRun) body.push(finalReply && spawnTree ? renderSingleRun(finalRun, spawnTree) : renderRun(finalRun));
+	if (spawnTree && !finalReply) body.push(spawnTree);
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
@@ -6858,14 +6935,17 @@ const TurnGroup = memo(function TurnGroup({
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
-			    it on its outcome's row instead. */}
-			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+			    it on its outcome's row instead. One whose compaction row already said
+			    why it failed has no outcome, so its Retry is here too, or on its
+			    answer's row when it has one. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
-					onRollback={() => onRollback(group.turnId as string)}
+					retry={compactionRetry}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldOutcome ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -6928,9 +7008,11 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	retry,
 	onSelectAnnotation,
 	status,
-	reviewBurst,
+	beforeActions,
+	pullRequestBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6970,11 +7052,15 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn from the answer that owns its action row. */
+	retry?: TurnOutcomeRetryControl;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
-	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
-	reviewBurst?: readonly ConversationMessage[] | null;
+	/** What an answer introduced, between its prose and its action row. */
+	beforeActions?: ReactNode;
+	/** This message's PR feedback burst (see `pullRequestBursts` and `reviewBursts`): the messages it draws for, or null when another draws it. */
+	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6986,6 +7072,8 @@ function TimelineItem({
 						live={live}
 						onRollback={onRollback}
 						rollbackDisabled={rollbackDisabled}
+						beforeActions={beforeActions}
+						retry={retry}
 					/>
 				</CommentTarget>
 			);
@@ -7041,11 +7129,11 @@ function TimelineItem({
 				</CommentTarget>
 			);
 		}
-		// An earlier message of its review burst draws this one.
-		if (reviewBurst === null) return null;
+		// An earlier message of its PR feedback burst draws this one.
+		if (pullRequestBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={pullRequestBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
@@ -7285,7 +7373,7 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	return last && isAccountFailure(last) ? last : undefined;
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, endedSpawns: ReadonlySet<string>, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	const held: TimelineGroup[] = [];
@@ -7318,7 +7406,12 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
-		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome, index, carried) : "yours";
+		// A turn stays in view while a worker it spawned has not answered, as one does while
+		// a subagent it launched works: the worker's line is under the reply until then. One
+		// that ended before it answered keeps it until the next turn, since that line is where
+		// the chat says so, and then lets the turn go.
+		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index, endedSpawns).length > 0;
+		const standing = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
@@ -8041,6 +8134,36 @@ function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: b
 }
 
 /**
+ * In Developer Mode, queued turns that hold only one PR's review comments or
+ * failing CI, back to back, as one group. The daemon queues each comment that
+ * arrives while the agent works as its own turn, so a review round stacked one
+ * row per comment under the working row; as one group its messages draw as one
+ * line, and the count grows in place as more arrive. The group keeps the first
+ * turn's key and id, so the line stays where it is.
+ */
+function mergeQueuedPullRequestFeedback(groups: TimelineGroup[], queued: ReadonlySet<string>): TimelineGroup[] {
+	const pullRequestOf = (group: TimelineGroup) => {
+		if (!group.turnId || !queued.has(group.turnId) || group.items.length === 0) return undefined;
+		const numbers = new Set(group.items.map((item) => pullRequestFeedbackNumber(item)));
+		const [number] = numbers;
+		return numbers.size === 1 ? number : undefined;
+	};
+	const merged: TimelineGroup[] = [];
+	let runPullRequest: number | undefined;
+	for (const group of groups) {
+		const pullRequest = pullRequestOf(group);
+		const previous = merged.at(-1);
+		if (pullRequest !== undefined && pullRequest === runPullRequest && previous) {
+			merged[merged.length - 1] = { ...previous, items: [...previous.items, ...group.items] };
+			continue;
+		}
+		merged.push(group);
+		runPullRequest = pullRequest;
+	}
+	return merged.length === groups.length ? groups : merged;
+}
+
+/**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
  *
@@ -8373,16 +8496,22 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.items.some(isNoticeItem);
+	// Read as the run draws them: a failed spawn's call carries the daemon's reason once merged.
+	const items: readonly ConversationItem[] = run.items;
+	return mergeFailedSpawns(items.filter((item) => item.kind === "activity")).some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
-	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
+	// A spawn that failed folds into Worked for with the rest of the work: its step
+	// says why there, and the reply above the fold already tells the reader. One the
+	// daemon gave no reason for stays out like any failed call.
+	if (isOrdinaryActivity(item) && isFailedCall(item) && !isFailedSpawn(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	// A compaction stays too: it is where the agent's earlier history was summarized.
+	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
