@@ -7,7 +7,7 @@ import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../
 import { cloudWorkspaceReviewSummaryQueryOptions, useCloudWorkspaceReviewEvents } from "../../hooks/useCloudWorkspaceReview";
 import { refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
 import { joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath, withWorkspaceRepository, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
-import { cloudStartupProblem, resumeCloudSession } from "../../lib/cloud-lifecycle";
+import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, retryCloudSessionStartup } from "../../lib/cloud-lifecycle";
 import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { PanelMessage, RetryButton, type FileAnnotationModel } from "../WorkspaceDiffView";
@@ -58,12 +58,17 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		(session.isTerminated === true || startupProblem?.phase === "failed" || startupProblem?.phase === "unavailable");
 	const queryClient = useQueryClient();
 	const [restartError, setRestartError] = useState<string>();
-	// One start at a time: Retry waits while this session's resume is in flight.
+	// One start at a time: Retry waits while this session's resume or retry is in flight.
 	const restarting = useCloudSessionStartRequestInFlight(orgId, session.id);
+	// A failed startup is retried, as the session's own failure card does: a
+	// resume leaves a session AO parked after a failed start parked. A worker
+	// that could not prepare its workspace is woken instead, and prepares it
+	// again as it starts.
+	const retryStartup = startupProblem?.phase === "failed" && !isWorkspaceStartupError(startupProblem.code);
 	const restart = () => {
 		if (!orgId || restarting) return;
 		setRestartError(undefined);
-		void resumeCloudSession(client, orgId, session.id)
+		void (retryStartup ? retryCloudSessionStartup(client, orgId, session.id) : resumeCloudSession(client, orgId, session.id))
 			.then(() => refreshCloudSessionLifecycle(queryClient))
 			.catch((error: unknown) => setRestartError(error instanceof Error ? error.message : String(error)));
 	};
