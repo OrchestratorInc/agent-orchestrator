@@ -1,6 +1,7 @@
 package browserruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,6 +98,55 @@ func TestBrokerExecuteRoundTrip(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for result")
+	}
+}
+
+func TestBrokerExecuteLogsTimingWhenEnabled(t *testing.T) {
+	t.Setenv(TimingEnv, "1")
+	var logs bytes.Buffer
+	broker := New(slog.New(slog.NewTextHandler(&logs, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = broker.Serve(ctx, ln) }()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+	handshake(t, enc, dec, "")
+	waitConnected(t, broker)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := broker.Execute(context.Background(), "session-1", "snapshot", nil)
+		done <- err
+	}()
+	var command wireMessage
+	if err := dec.Decode(&command); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Encode(wireMessage{Type: "result", RequestID: command.RequestID, OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for result")
+	}
+	line := logs.String()
+	for _, want := range []string{"browser command timing", "action=snapshot", "session=session-1", "totalMs=", "connectMs=", "roundTripMs=", "ok=true"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("timing log missing %q:\n%s", want, line)
+		}
 	}
 }
 

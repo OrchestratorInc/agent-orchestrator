@@ -1,6 +1,7 @@
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { HANDSHAKE_CLOSED_BEFORE_ACCEPT } from "../shared/daemon-takeover";
+import { browserTimingEnabled, elapsedMs } from "./browser-timing";
 import type { BrowserRuntimeState } from "./browser-view-host";
 
 // v3 answers broker liveness pings. Unlike the supervisor link — where the
@@ -86,6 +87,7 @@ export function connectBrowserRuntime(
 	options: BrowserRuntimeLinkOptions,
 ): BrowserRuntimeLinkHandle {
 	const log = options.log ?? (() => undefined);
+	const timing = browserTimingEnabled();
 	let disposed = false;
 	let state = CONNECTING;
 	let unansweredStreak = 0;
@@ -199,13 +201,17 @@ export function connectBrowserRuntime(
 		target: net.Socket,
 		epoch: number,
 		controller: AbortController,
+		receivedAt: number,
 	) => {
+		const startedAt = performance.now();
+		let outcome = "ok";
 		try {
 			controller.signal.throwIfAborted();
 			const result = await options.execute(command, controller.signal);
 			controller.signal.throwIfAborted();
 			await send({ type: "result", requestId: command.requestId, ok: true, result }, target, epoch);
 		} catch (error) {
+			outcome = controller.signal.aborted ? "cancelled" : "error";
 			if (controller.signal.aborted) {
 				// Daemon-initiated cancel frames abort one controller without clearing
 				// activeCommands; connection teardown clears the map before aborting.
@@ -222,6 +228,13 @@ export function connectBrowserRuntime(
 				target.destroy();
 			}
 		} finally {
+			if (timing) {
+				// queuedMs is time spent behind earlier commands for the same session.
+				log(
+					`browser-timing: action=${command.action} session=${command.sessionId} ` +
+						`queuedMs=${Math.round(startedAt - receivedAt)} execMs=${elapsedMs(startedAt)} outcome=${outcome}`,
+				);
+			}
 			activeCommands.delete(command.requestId);
 			if (commandControllers.get(command.requestId) === controller) {
 				commandControllers.delete(command.requestId);
@@ -274,11 +287,12 @@ export function connectBrowserRuntime(
 		) {
 			return;
 		}
+		const receivedAt = performance.now();
 		const controller = new AbortController();
 		commandControllers.set(command.requestId, controller);
 		activeCommands.set(command.requestId, { command, target, epoch });
 		const previous = commandChains.get(command.sessionId) ?? Promise.resolve();
-		const next = previous.then(() => respond(command, target, epoch, controller));
+		const next = previous.then(() => respond(command, target, epoch, controller, receivedAt));
 		commandChains.set(command.sessionId, next);
 		void next.finally(() => {
 			if (commandChains.get(command.sessionId) === next) commandChains.delete(command.sessionId);

@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AgentBrowserCDPBridge, type AgentBrowserTargetProvider } from "./agent-browser-cdp-bridge";
+import { browserTimingEnabled, elapsedMs } from "./browser-timing";
 
 const MAX_ARGUMENTS = 100;
 const MAX_ARGUMENT_CHARS = 16_384;
@@ -186,19 +187,33 @@ export class AgentBrowserRuntime {
 		timeoutMs = COMMAND_TIMEOUT_MS,
 	): Promise<AgentBrowserRunResult> {
 		if (this.disposed) throw runtimeError("AGENT_BROWSER_RUNTIME_CLOSED", "Browser automation runtime is closed");
+		const stages: Record<string, number> | undefined = browserTimingEnabled() ? {} : undefined;
+		let mark = performance.now();
+		const lap = (stage: string) => {
+			if (!stages) return;
+			stages[stage] = elapsedMs(mark);
+			mark = performance.now();
+		};
 		await this.assertBinary();
 		validateAgentBrowserArguments(args);
 		const runtime = await this.ensureSession(sessionId, provider);
+		lap("setupMs");
 		await this.touchRuntimeRoot();
 		const environment = this.environment(runtime);
 		runtime.bridge.reconcileTargets();
 		await runtime.bridge.beginCommand();
+		lap("bridgeBeginMs");
 		try {
-			return await this.runCommand(args, environment, signal, timeoutMs);
+			return await this.runCommand(args, environment, signal, timeoutMs, lap);
 		} finally {
 			await runtime.bridge.endCommand().catch((error: unknown) => {
 				this.log(`agent-browser bridge quiet failed: ${String(error)}`);
 			});
+			lap("bridgeEndMs");
+			if (stages) {
+				const parts = Object.entries(stages).map(([stage, ms]) => `${stage}=${ms}`).join(" ");
+				this.log(`browser-timing: native=${args[0] ?? ""} session=${sessionId} ${parts}`);
+			}
 		}
 	}
 
@@ -207,6 +222,7 @@ export class AgentBrowserRuntime {
 		environment: NodeJS.ProcessEnv,
 		signal: AbortSignal | undefined,
 		timeoutMs: number,
+		lap: (stage: string) => void = () => undefined,
 	): Promise<AgentBrowserRunResult> {
 		// The native daemon can expire and be recreated independently while this
 		// AO session runtime remains alive. Its replacement starts streaming by
@@ -219,6 +235,7 @@ export class AgentBrowserRuntime {
 			environment,
 			signal,
 		);
+		lap("streamDisableMs");
 		if (disabled.exitCode !== 0 && !streamAlreadyDisabled(disabled)) {
 			throw runtimeError(
 				"AGENT_BROWSER_START_FAILED",
@@ -226,6 +243,7 @@ export class AgentBrowserRuntime {
 			);
 		}
 		const result = await this.processRunner(this.options.binaryPath, args, environment, signal, timeoutMs);
+		lap("nativeCommandMs");
 		if (result.exitCode !== 0) {
 			throw runtimeError(
 				"AGENT_BROWSER_COMMAND_FAILED",
