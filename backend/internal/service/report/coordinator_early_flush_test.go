@@ -227,8 +227,11 @@ func TestCoordinatorEarlyFlushWithoutOrchestratorKeepsDeadline(t *testing.T) {
 		t.Fatalf("state = %s, want pending", h.store.reports[0].DeliveryState)
 	}
 	h.now = start.Add(domain.ReportSettlementWindow)
-	if delay, err := h.c.RunDue(context.Background()); err == nil || delay != time.Second {
-		t.Fatalf("due without orchestrator delay = %v, err = %v; want today's retry", delay, err)
+	if delay, err := h.c.RunDue(context.Background()); err != nil || delay != OrchestratorBusyRetry {
+		t.Fatalf("due without orchestrator delay = %v, err = %v; want deferred retry", delay, err)
+	}
+	if len(h.delivery.submitted()) != 0 || h.store.reports[0].DeliveryAttempts != 0 {
+		t.Fatal("deferring without a recipient counted a delivery")
 	}
 }
 

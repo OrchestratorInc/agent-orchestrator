@@ -185,7 +185,7 @@ func TestReportStoreDurableBatchIdentityExcludesLaterReportsOnRetry(t *testing.T
 	}
 	create("first")
 	create("second")
-	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now)
+	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now, true)
 	if err != nil || len(claimed) != 2 || claimed[0].DeliveryBatchID == "" || claimed[0].DeliveryBatchID != claimed[1].DeliveryBatchID {
 		t.Fatalf("claimed = %+v, err = %v", claimed, err)
 	}
@@ -194,14 +194,14 @@ func TestReportStoreDurableBatchIdentityExcludesLaterReportsOnRetry(t *testing.T
 		t.Fatal(err)
 	}
 	create("later")
-	retried, err := s.ClaimPendingReportBatch(ctx, "ao", "token-2", now)
+	retried, err := s.ClaimPendingReportBatch(ctx, "ao", "token-2", now, true)
 	if err != nil || len(retried) != 2 || retried[0].DeliveryBatchID != batchID {
 		t.Fatalf("retried = %+v, err = %v", retried, err)
 	}
 	if _, err := s.AcknowledgeReportBatch(ctx, "ao", "token-2", now); err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.ClaimPendingReportBatch(ctx, "ao", "token-3", now)
+	next, err := s.ClaimPendingReportBatch(ctx, "ao", "token-3", now, true)
 	if err != nil || len(next) != 1 || next[0].ID != "later" || next[0].DeliveryBatchID == batchID {
 		t.Fatalf("next = %+v, err = %v", next, err)
 	}
@@ -261,7 +261,7 @@ func TestReportStoreDeferredBatchYieldsScheduleToOtherProjects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now); err != nil || len(claimed) != 1 {
+	if claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now, true); err != nil || len(claimed) != 1 {
 		t.Fatalf("claimed = %+v, err = %v", claimed, err)
 	}
 	if _, err := s.DeferReportBatch(ctx, "ao", "token-1", now.Add(5*time.Second), "composer is not empty"); err != nil {
@@ -312,7 +312,7 @@ func TestReportStoreListsPendingReportsOfDoneProjects(t *testing.T) {
 	if err != nil || len(done) != 2 || done[0].ID != "rpt_done" || done[1].ID != "rpt_checkpoint" || done[0].SessionID != sess.ID {
 		t.Fatalf("pending reports of done projects=%+v err=%v", done, err)
 	}
-	if _, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "token", now); err != nil {
+	if _, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "token", now, true); err != nil {
 		t.Fatal(err)
 	}
 	if done, err = s.ListPendingReportsOfDoneProjects(ctx); err != nil || len(done) != 0 {
@@ -336,7 +336,7 @@ func TestReportStoreFailBatchTransitionsToTerminalFailed(t *testing.T) {
 	if _, err := s.CreateReport(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-fail", now)
+	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-fail", now, true)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim = %+v err = %v", claimed, err)
 	}
@@ -461,3 +461,68 @@ func (d *retryBudgetDelivery) Submit(context.Context, domain.SessionID, string, 
 	return d.err
 }
 func (*retryBudgetDelivery) Interrupt(context.Context, domain.SessionID) error { return nil }
+
+func TestReportStoreCoordinatorDeliversPastArchivedProject(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, project := range []string{"retired", "active"} {
+		seedProject(t, s, project)
+		worker, err := s.CreateSession(ctx, sampleRecord(project))
+		if err != nil {
+			t.Fatal(err)
+		}
+		due := now
+		if project == "retired" {
+			due = now.Add(-time.Hour)
+		}
+		if _, err := s.CreateReport(ctx, domain.ReportRecord{
+			ID: "rpt_" + project, SessionID: worker.ID, ProjectID: worker.ProjectID,
+			State: domain.ReportDone, Note: "finished", CreatedAt: due.Add(-domain.ReportSettlementWindow),
+			AvailableAt: due, SettlementDeadline: due, DeliveryState: domain.ReportPending, RepeatCount: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := s.ArchiveProject(ctx, "retired", now); err != nil || !ok {
+		t.Fatalf("archive: ok=%v err=%v", ok, err)
+	}
+	manager := sampleRecord("active")
+	manager.Kind, manager.Mode, manager.Activity.State = domain.KindOrchestrator, domain.SessionModeChat, domain.ActivityIdle
+	manager, err := s.CreateSession(ctx, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := &scheduledReportDelivery{}
+	c := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: s, Delivery: delivery, Now: func() time.Time { return now }})
+	for range 2 {
+		if delay, err := c.RunDue(ctx); err != nil || delay != reportsvc.OrchestratorBusyRetry {
+			t.Fatalf("run due: delay=%v err=%v", delay, err)
+		}
+	}
+	if len(delivery.targets) != 1 || delivery.targets[0] != manager.ID {
+		t.Fatalf("delivery targets = %v, want one wake for %s", delivery.targets, manager.ID)
+	}
+	acked, ok, err := s.GetReport(ctx, "rpt_active")
+	if err != nil || !ok || acked.DeliveryState != domain.ReportAcknowledged || !acked.AcknowledgedAt.Equal(now) || acked.DeliveryAttempts != 1 {
+		t.Fatalf("active report = %+v, found=%v err=%v", acked, ok, err)
+	}
+	retained, ok, err := s.GetReport(ctx, "rpt_retired")
+	if err != nil || !ok || retained.DeliveryState != domain.ReportPending || retained.DeliveryAttempts != 0 || !retained.AcknowledgedAt.IsZero() ||
+		!retained.AvailableAt.Equal(now.Add(reportsvc.OrchestratorBusyRetry)) {
+		t.Fatalf("retired report = %+v, found=%v err=%v", retained, ok, err)
+	}
+}
+
+type scheduledReportDelivery struct {
+	targets []domain.SessionID
+}
+
+func (d *scheduledReportDelivery) Submit(_ context.Context, target domain.SessionID, _, _ string) error {
+	d.targets = append(d.targets, target)
+	return nil
+}
+
+func (*scheduledReportDelivery) Interrupt(context.Context, domain.SessionID) error {
+	return nil
+}

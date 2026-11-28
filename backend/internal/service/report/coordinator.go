@@ -20,8 +20,8 @@ import (
 // ReportInterruptWindow is the durable per-worker urgent interruption limit.
 const ReportInterruptWindow = 3 * time.Minute
 
-// OrchestratorBusyRetry is how long a batch refused with ErrOrchestratorBusy
-// waits before its next delivery attempt.
+// OrchestratorBusyRetry is how long a batch waits when its orchestrator is
+// unavailable or cannot accept a report.
 const OrchestratorBusyRetry = 30 * time.Second
 
 // DefaultMaxDeliveryAttempts is the upper bound on delivery attempts for a
@@ -57,7 +57,7 @@ type DeliveryStore interface {
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
 	ListPendingReportsOfDoneProjects(context.Context) ([]domain.ReportRecord, error)
-	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time) ([]domain.ReportRecord, error)
+	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time, bool) ([]domain.ReportRecord, error)
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	DeferReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
@@ -359,11 +359,14 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
-	}
-	batch, err := c.claim(ctx, projectID)
+	batch, err := c.claim(ctx, projectID, ok)
 	if err != nil || len(batch.Reports) == 0 {
+		return err
+	}
+	if !ok {
+		// Leave the batch pending without holding up reports from other projects.
+		reason := fmt.Sprintf("project %s has no active orchestrator", projectID)
+		_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), reason)
 		return err
 	}
 	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
@@ -450,9 +453,9 @@ type PreparedBatch struct {
 	FailureCheckpoint  int
 }
 
-func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (PreparedBatch, error) {
+func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID, countAttempt bool) (PreparedBatch, error) {
 	token := c.newToken()
-	reports, err := c.store.ClaimPendingReportBatch(ctx, projectID, token, c.now().UTC())
+	reports, err := c.store.ClaimPendingReportBatch(ctx, projectID, token, c.now().UTC(), countAttempt)
 	for i := range reports {
 		session, found, lookupErr := c.store.GetSession(ctx, reports[i].SessionID)
 		if lookupErr == nil && found {
@@ -508,7 +511,7 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.claim(ctx, rec.ProjectID)
+	return c.claim(ctx, rec.ProjectID, true)
 }
 
 // AcceptPiggyback acknowledges reports after the combined user turn is accepted.

@@ -52,7 +52,7 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	store.add(reportAt("need", "worker", now, now, "decision"))
 	delivery := &coordinatorDelivery{}
 	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
-	if delay, err := c.RunDue(context.Background()); err == nil || delay != time.Second {
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != OrchestratorBusyRetry {
 		t.Fatalf("no orchestrator delay = %v, err = %v", delay, err)
 	}
 	if store.reports[0].DeliveryState != domain.ReportPending {
@@ -62,6 +62,7 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
 	}
+	now = now.Add(OrchestratorBusyRetry)
 	if _, err := c.RunDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -972,7 +973,7 @@ func (s *coordinatorStore) ListPendingReportsOfDoneProjects(context.Context) ([]
 	sortReports(pending)
 	return pending, nil
 }
-func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time, countAttempt bool) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Like the store: the project's earliest scheduled report names the batch,
@@ -998,7 +999,9 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 				continue
 			}
 			s.reports[i].DeliveryBatchID = batchID
-			s.reports[i].DeliveryAttempts++
+			if countAttempt {
+				s.reports[i].DeliveryAttempts++
+			}
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
 			claimed = append(claimed, s.reports[i])
 		}

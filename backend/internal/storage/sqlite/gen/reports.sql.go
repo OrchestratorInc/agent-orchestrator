@@ -126,24 +126,27 @@ func (q *Queries) AssignPendingReportsToBatch(ctx context.Context, arg AssignPen
 const claimPendingReportsByBatch = `-- name: ClaimPendingReportsByBatch :many
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = ?1,
-    claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
+    claimed_at = ?2,
+    delivery_attempts = delivery_attempts + CAST(?3 AS INTEGER),
     last_error = ''
-WHERE project_id = ?3 AND delivery_state = 'pending'
-  AND delivery_batch_id = ?4
+WHERE project_id = ?4 AND delivery_state = 'pending'
+  AND delivery_batch_id = ?5
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, unacknowledged_attempts
 `
 
 type ClaimPendingReportsByBatchParams struct {
-	ClaimToken      string
-	ClaimedAt       sql.NullTime
-	ProjectID       string
-	DeliveryBatchID string
+	ClaimToken       string
+	ClaimedAt        sql.NullTime
+	AttemptIncrement int64
+	ProjectID        string
+	DeliveryBatchID  string
 }
 
 func (q *Queries) ClaimPendingReportsByBatch(ctx context.Context, arg ClaimPendingReportsByBatchParams) ([]Report, error) {
 	rows, err := q.db.QueryContext(ctx, claimPendingReportsByBatch,
 		arg.ClaimToken,
 		arg.ClaimedAt,
+		arg.AttemptIncrement,
 		arg.ProjectID,
 		arg.DeliveryBatchID,
 	)

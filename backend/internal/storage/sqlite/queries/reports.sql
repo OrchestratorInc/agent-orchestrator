@@ -56,7 +56,8 @@ WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
 -- name: ClaimPendingReportsByBatch :many
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = sqlc.arg(claim_token),
-    claimed_at = sqlc.arg(claimed_at), delivery_attempts = delivery_attempts + 1,
+    claimed_at = sqlc.arg(claimed_at),
+    delivery_attempts = delivery_attempts + CAST(sqlc.arg(attempt_increment) AS INTEGER),
     last_error = ''
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
   AND delivery_batch_id = sqlc.arg(delivery_batch_id)
