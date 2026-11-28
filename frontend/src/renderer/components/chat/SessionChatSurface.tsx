@@ -1014,10 +1014,10 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === held.id);
 	const cached = () => listed() ?? (hostId ? undefined : queryClient.getQueryData<WorkspaceSession>(directKey));
 	const gone = () => {
-		if (queryClient.getQueryState(workspacesKey)?.status !== "success" || listed()) return false;
-		if (hostId) return true;
-		const direct = queryClient.getQueryState(directKey);
-		return direct?.data === undefined || apiErrorCode(direct.error) === "SESSION_NOT_FOUND";
+		if (listed()) return false;
+		const direct = hostId ? undefined : queryClient.getQueryState(directKey);
+		if (apiErrorCode(direct?.error) === "SESSION_NOT_FOUND") return true;
+		return queryClient.getQueryState(workspacesKey)?.status === "success" && direct?.data === undefined;
 	};
 	const refusal = () => {
 		const hostError = hostId ? queryClient.getQueryState(workspacesKey)?.error : undefined;

@@ -620,9 +620,13 @@ describe("SessionChatSurface startup check", () => {
 		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
 	});
 
-	it("hands the message back when the session's own lookup finds it gone", async () => {
+	it("hands the message back when the session's own lookup finds it gone while the list is failing", async () => {
 		const { client, whenReady } = await sendDuringCheck(checking, { ...session, id: "another" }, (seeded) => seeded.setQueryData(["session", session.id], checking));
 		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => {
+			await client.prefetchQuery({ queryKey: ["workspaces"], retry: false, queryFn: () => Promise.reject({ code: "PROJECTS_FAILED" }) });
+		});
+		expect(client.getQueryState(["workspaces"])?.status).toBe("error");
 		await act(async () => {
 			await client.prefetchQuery({ queryKey: ["session", session.id], retry: false, queryFn: () => Promise.reject({ code: "SESSION_NOT_FOUND" }) });
 		});
