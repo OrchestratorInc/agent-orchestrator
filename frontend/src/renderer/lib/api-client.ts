@@ -106,6 +106,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/readiness",
 	"/api/v1/agents/readiness/ensure",
 	"/api/v1/agents/{agent}/auth",
+	"/api/v1/agents/{agent}/endpoint",
 	"/api/v1/agents/{agent}/auth/operations",
 	"/api/v1/agents/{agent}/auth/operations/{operationId}",
 	"/api/v1/agents/{agent}/auth/operations/{operationId}/code",

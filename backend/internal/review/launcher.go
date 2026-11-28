@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -458,37 +459,60 @@ func truncateReviewHistoryBody(body string) string {
 	return strings.TrimSpace(body[:maxBody]) + "..."
 }
 
+// endpointEnv resolves the custom endpoint a reviewer of spec's harness runs
+// on, with the project's env, before anything is started or replaced: a
+// project gateway with no key of its own, or an endpoint that cannot be read,
+// stops the launch. No endpoint at all returns nil.
+func (l *agentLauncher) endpointEnv(spec LaunchSpec) (map[string]string, error) {
+	if strings.TrimSpace(l.dataDir) == "" {
+		return nil, nil
+	}
+	env, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, runtime.GOOS == "windows")
+	if err != nil {
+		return nil, fmt.Errorf("load custom endpoint for %s reviewer: %w", spec.Harness, err)
+	}
+	return env, nil
+}
+
 func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	endpointEnv, err := l.endpointEnv(spec)
+	if err != nil {
+		return LaunchResult{}, err
+	}
 	inv, err := l.prepareInvocation(ctx, spec)
 	if err != nil {
 		return LaunchResult{}, err
 	}
 	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
 		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
-			return l.startReviewerChat(ctx, spec, inv, profile, false)
+			return l.startReviewerChat(ctx, spec, inv, profile, false, endpointEnv)
 		}
 	}
 	// A retained native id means this stable reviewer has provider-owned
 	// history even though its terminal process is gone. Recreate the pane by
 	// resuming that conversation; a first launch has no id and still pins the
 	// adapter's deterministic fresh identity through ReviewCommand.
-	return l.launchReviewerTerminalWithMode(ctx, spec, inv, strings.TrimSpace(spec.AgentSessionID) != "")
+	return l.launchReviewerTerminalWithMode(ctx, spec, inv, strings.TrimSpace(spec.AgentSessionID) != "", endpointEnv)
 }
 
 func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	endpointEnv, err := l.endpointEnv(spec)
+	if err != nil {
+		return LaunchResult{}, err
+	}
 	inv, err := l.prepareIdleInvocation(spec)
 	if err != nil {
 		return LaunchResult{}, err
 	}
 	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
 		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
-			return l.startReviewerChat(ctx, spec, inv, profile, true)
+			return l.startReviewerChat(ctx, spec, inv, profile, true, endpointEnv)
 		}
 	}
-	return l.launchReviewerTerminalWithMode(ctx, spec, inv, true)
+	return l.launchReviewerTerminalWithMode(ctx, spec, inv, true, endpointEnv)
 }
 
-func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, profile ports.ReviewerChatProfile, restore bool) (LaunchResult, error) {
+func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, profile ports.ReviewerChatProfile, restore bool, endpointEnv map[string]string) (LaunchResult, error) {
 	systemPrompt, err := os.ReadFile(inv.SystemPromptFile)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("read reviewer system prompt: %w", err)
@@ -501,7 +525,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if spec.DeferInitialMessage {
 		prompt = ""
 	}
-	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil, endpointEnv), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -513,7 +537,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	return LaunchResult{HandleID: reviewerChatHandlePrefix + spec.ReviewSessionID, LaunchID: strings.TrimSpace(spec.LaunchID), AgentSessionID: providerID}, nil
 }
 
-func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, restoring bool) (LaunchResult, error) {
+func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, restoring bool, endpointEnv map[string]string) (LaunchResult, error) {
 	reviewer, ok := l.reviewers.Reviewer(spec.Harness)
 	if !ok {
 		return LaunchResult{}, fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
@@ -566,7 +590,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if workingDirectory == "" {
 		workingDirectory = spec.WorkspacePath
 	}
-	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env)
+	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env, endpointEnv)
 	argv := cmd.Argv
 	if strings.TrimSpace(spec.LaunchID) != "" {
 		executable, resolveErr := l.executable()
@@ -665,7 +689,7 @@ func outputContainsAny(output string, patterns []string) bool {
 	return false
 }
 
-func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base map[string]string) map[string]string {
+func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base, endpointEnv map[string]string) map[string]string {
 	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
 	delete(env, sessionmanager.EnvSessionID)
 	env["AO_REVIEW_SESSION_ID"] = spec.ReviewSessionID
@@ -685,6 +709,20 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 				env[key] = value
 			}
 		}
+	}
+	// The endpoint Spawn or RestoreTerminal resolved before starting, with
+	// the project's endpoint values already folded in and validated. It goes
+	// on last, as resolved, so no inherited credential rides along to it and
+	// the variables it clears stay blank even when the project sets them.
+	for key, value := range endpointEnv {
+		if runtime.GOOS == "windows" {
+			for existing := range env {
+				if existing != key && strings.EqualFold(existing, key) {
+					delete(env, existing)
+				}
+			}
+		}
+		env[key] = value
 	}
 	if strings.TrimSpace(l.runFile) != "" {
 		env[EnvRunFile] = l.runFile

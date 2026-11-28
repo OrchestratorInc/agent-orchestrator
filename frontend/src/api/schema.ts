@@ -175,6 +175,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/endpoint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Store a custom API base URL and key for one agent */
+        put: operations["setAgentEndpoint"];
+        post?: never;
+        /** Remove the custom API endpoint for one agent */
+        delete: operations["clearAgentEndpoint"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/install": {
         parameters: {
             query?: never;
@@ -6055,6 +6073,7 @@ export interface components {
             action: string;
             agentId: string;
             available: boolean;
+            customEndpoint?: components["schemas"]["AgentEndpointStatus"];
             displayCommand?: string;
             documentationUrl: string;
             guidance?: string;
@@ -6084,6 +6103,22 @@ export interface components {
             model?: string;
             permissions?: string;
             terminateOnPrMerge?: null | boolean;
+        };
+        AgentEndpointResponse: {
+            endpoint: components["schemas"]["AgentEndpointStatus"];
+        };
+        AgentEndpointStatus: {
+            /** @enum {string} */
+            authStyle?: "bearer" | "api-key";
+            authStyles: string[];
+            baseUrl?: string;
+            configured: boolean;
+            /** @enum {string} */
+            defaultAuthStyle: "bearer" | "api-key";
+            error?: string;
+            hasApiKey: boolean;
+            model?: string;
+            supportsModel: boolean;
         };
         AgentInfo: {
             /**
@@ -9928,6 +9963,19 @@ export interface components {
             sessionId: string;
             state: string;
         };
+        SetAgentEndpointRequest: {
+            /** @description API key; omit to keep the stored key. */
+            apiKey?: string;
+            /**
+             * @description Credential form; defaults per harness.
+             * @enum {string}
+             */
+            authStyle?: "bearer" | "api-key";
+            /** @description Absolute http(s) provider endpoint URL. */
+            baseUrl: string;
+            /** @description Default model. Omit it to keep the saved model or use the first model the endpoint lists. */
+            model?: string;
+        };
         SetBrowserRemoteAccessRequest: {
             enabled: boolean;
         };
@@ -11638,6 +11686,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrewarmChatAgentResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAgentEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAgentEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentEndpointResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearAgentEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentEndpointResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */

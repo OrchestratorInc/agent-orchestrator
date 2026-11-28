@@ -76,6 +76,7 @@ type Service struct {
 	loginConfirmed func(domain.AgentAccount, time.Time)
 	keyCheck       KeyCheck
 	uiLogin        UILogin
+	customEndpoint func(domain.AgentAccountProvider) bool
 
 	// keyMu serializes changes to an API key account's key with each other and
 	// with removing an account, apart from mu so a key check never holds it.
@@ -721,8 +722,9 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 	if err != nil {
 		return domain.AgentAccount{}, err
 	}
-	// A custom Codex model provider does not use the account's sign-in.
-	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+	// A custom Codex model provider, or a custom endpoint set for the
+	// provider's harness, does not use the account's sign-in.
+	if (p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider()) || s.usesCustomEndpoint(p) {
 		return account, nil
 	}
 	r := s.cachedReading(account.ID)
