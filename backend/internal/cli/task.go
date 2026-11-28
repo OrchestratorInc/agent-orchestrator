@@ -356,17 +356,23 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		workerAgent = strings.TrimSpace(project.Config.Worker.Agent)
 	}
 	probed := map[string]bool{}
-	unsupportedFix := fmt.Sprintf("pick a supported agent from `ao agent ls` and set it with `ao project set-config %s --worker-agent <agent>` (or `--orchestrator-agent <agent>`)", project.ID)
-	if opts.worker {
-		unsupportedFix = "pick a supported agent from `ao agent ls` and pass it with `--worker --agent <agent>`"
+	// The fix for an unsupported agent names where that agent came from: the
+	// --agent flag (worker path only) or the project setting that supplied it.
+	settingFix := func(flag string) string {
+		return fmt.Sprintf("pick a supported agent from `ao agent ls` and set it with `ao project set-config %s %s <agent>`", project.ID, flag)
 	}
-	preflight := func(agent string) *taskResult {
+	workerFix := settingFix("--worker-agent")
+	if opts.worker && strings.TrimSpace(opts.agent) != "" {
+		workerFix = "pick a supported agent from `ao agent ls` and pass it with `--worker --agent <agent>`"
+	}
+	probe := func(agent, unsupportedFix string) *taskResult {
 		if agent == "" || probed[agent] {
 			return nil
 		}
 		probed[agent] = true
 		return c.preflightTaskAgent(ctx, agent, unsupportedFix)
 	}
+	preflight := func(agent string) *taskResult { return probe(agent, workerFix) }
 
 	if opts.worker {
 		if res := preflight(workerAgent); res != nil {
@@ -438,7 +444,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 	if err != nil {
 		return failedTask("", sessions, err.Error(), "")
 	}
-	if res := preflight(sess.Harness); res != nil {
+	if res := probe(sess.Harness, settingFix("--orchestrator-agent")); res != nil {
 		res.SessionIDs = sessions
 		return *res
 	}
@@ -1438,6 +1444,11 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 				phase = final.phase
 			}
 		}
+	}
+	// A cancel that landed after the last poll is an interruption too, not a
+	// timeout of whatever phase was read last.
+	if err := ctx.Err(); err != nil {
+		return interruptedTask(id, last)
 	}
 	// Every timeout here is a task that was submitted but not confirmed. It
 	// is never reported as a failure to retry: exit 4, do not start it again.

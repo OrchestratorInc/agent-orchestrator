@@ -675,9 +675,10 @@ func TestTaskStartRetriesALostReplyWithTheSameMessageID(t *testing.T) {
 		var msg map[string]string
 		d.mu.Lock()
 		_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/conversation/messages"]), &msg)
-		d.mu.Unlock()
 		ids = append(ids, msg["clientMessageId"])
-		if len(ids) == 1 {
+		n := len(ids)
+		d.mu.Unlock()
+		if n == 1 {
 			return -1, "" // drop the connection
 		}
 		return 202, `{"turnId":"t2","state":"running","duplicate":true}`
@@ -690,8 +691,11 @@ func TestTaskStartRetriesALostReplyWithTheSameMessageID(t *testing.T) {
 	if res := decodeTaskResult(t, out); res["taskId"] != "repo-orchestrator:t2" {
 		t.Fatalf("result = %v", res)
 	}
-	if len(ids) != 2 || ids[0] != ids[1] || ids[0] == "" {
-		t.Fatalf("client message ids = %v; want the retry to reuse the first id", ids)
+	d.mu.Lock()
+	got := append([]string(nil), ids...)
+	d.mu.Unlock()
+	if len(got) != 2 || got[0] != got[1] || got[0] == "" {
+		t.Fatalf("client message ids = %v; want the retry to reuse the first id", got)
 	}
 }
 
@@ -840,9 +844,10 @@ func TestTaskStartWorkerRetriesALostReplyWithTheSameRequestID(t *testing.T) {
 		var req map[string]string
 		d.mu.Lock()
 		_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/orchestrators/delegate"]), &req)
-		d.mu.Unlock()
 		ids = append(ids, req["clientRequestId"])
-		if len(ids) == 1 {
+		n := len(ids)
+		d.mu.Unlock()
+		if n == 1 {
 			return -1, ""
 		}
 		return 202, `{"ok":true,"workerId":"repo-1"}`
@@ -855,8 +860,11 @@ func TestTaskStartWorkerRetriesALostReplyWithTheSameRequestID(t *testing.T) {
 	if res := decodeTaskResult(t, out); res["taskId"] != "repo-1" {
 		t.Fatalf("result = %v", res)
 	}
-	if len(ids) != 2 || ids[0] != ids[1] || !strings.HasPrefix(ids[0], "ao-task-") {
-		t.Fatalf("client request ids = %v; want the retry to reuse the first id", ids)
+	d.mu.Lock()
+	got := append([]string(nil), ids...)
+	d.mu.Unlock()
+	if len(got) != 2 || got[0] != got[1] || !strings.HasPrefix(got[0], "ao-task-") {
+		t.Fatalf("client request ids = %v; want the retry to reuse the first id", got)
 	}
 }
 
@@ -1636,13 +1644,31 @@ func TestTaskInterruptedWaitExitsFour(t *testing.T) {
 func TestTaskUnsupportedAgentFixMatchesThePath(t *testing.T) {
 	d := newTaskDaemon(t)
 	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code"},"supported":false,"installed":false}`)
+	// Orchestrator path, project worker agent unsupported: name that setting.
 	out, _, _ := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
-	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "ao project set-config repo --worker-agent") || strings.Contains(fix, "pass --agent") {
+	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "ao project set-config repo --worker-agent <agent>") {
 		t.Fatalf("orchestrator path fix = %q", fix)
 	}
-	out, _, _ = executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--json")
+	// Worker path with --agent: fix the flag.
+	out, _, _ = executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--agent", "claude-code", "--json")
 	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "--worker --agent <agent>") {
-		t.Fatalf("worker path fix = %q", fix)
+		t.Fatalf("worker --agent fix = %q", fix)
+	}
+	// Worker path without --agent: the agent came from the project setting.
+	out, _, _ = executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--json")
+	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "set-config repo --worker-agent <agent>") {
+		t.Fatalf("worker setting fix = %q", fix)
+	}
+
+	// Orchestrator path, the running orchestrator's agent unsupported: name
+	// the orchestrator setting.
+	d.set("GET /api/v1/projects/repo", 200, `{"project":{"id":"repo","path":"/tmp/repo","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"claude-code"}}}}`)
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"authorized"},"supported":true,"installed":true}`)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	out, _, _ = executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "set-config repo --orchestrator-agent <agent>") {
+		t.Fatalf("orchestrator agent fix = %q", fix)
 	}
 }
 
@@ -1861,5 +1887,26 @@ func TestTaskWaitTimeoutWithNoSuccessfulReadSaysUnknown(t *testing.T) {
 	}
 	if res := decodeTaskResult(t, out); !strings.Contains(res["reason"].(string), "state could not be confirmed") || strings.Contains(res["reason"].(string), "has not started") {
 		t.Fatalf("result = %v", res)
+	}
+}
+
+// A cancel that lands after the last poll is an interrupted wait, not a
+// workspace-setup timeout.
+func TestTaskWaitCancelAfterTheLastPollIsInterrupted(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := deps.Now()
+	d.setFunc("GET /api/v1/sessions/repo-1", func() (int, string) {
+		if deps.Now().Sub(start) >= 4*time.Second {
+			cancel() // during the final read, after which the deadline is reached
+		}
+		return 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"provisioning"}}`
+	})
+	c := &commandContext{deps: deps.withDefaults()}
+	res := c.waitTask(ctx, taskResult{TaskID: "repo-1"}, 5*time.Second)
+	if !res.waitInterrupted || strings.Contains(res.Reason, "workspace setup had not finished") {
+		t.Fatalf("result = %+v; want an interrupted wait", res)
 	}
 }
