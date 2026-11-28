@@ -443,14 +443,19 @@ export function pullRequestLabel(session: DashboardSession): string | null {
  * The worker's live pull request as an icon-and-number pill, in its own
  * lifecycle's hue over the matching tint and glyph: open, draft, merged or
  * closed reads by colour and shape at a glance. The worker's state is the
- * lead mark's, so the two never disagree about the same thing.
+ * lead mark's, so the two never disagree about the same thing. The `+N` for
+ * its other pull requests takes their tone, not the lead's, so three merged
+ * ones beside an open lead read purple rather than green.
  */
 function PullRequestPill({ pr, t, styles }: { pr: WorkerRowPullRequest; t: Theme; styles: ReturnType<typeof makeStyles> }) {
 	const color = toneColor(t, pr.tone);
 	return (
 		<View testID="worker-pr-pill" style={[styles.pill, { backgroundColor: statusTint(t, color) }]}>
 			<Feather name={pr.glyph} size={iconSize.xs} color={color} />
-			<Text style={[styles.pillText, { color }]} numberOfLines={1}>{pr.label}</Text>
+			<Text style={[styles.pillText, { color }]} numberOfLines={1}>
+				{`#${pr.number}`}
+				{pr.more > 0 ? <Text style={pr.moreTone ? { color: toneColor(t, pr.moreTone) } : undefined}>{` +${pr.more}`}</Text> : null}
+			</Text>
 		</View>
 	);
 }

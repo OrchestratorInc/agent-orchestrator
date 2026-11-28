@@ -13,6 +13,7 @@
 import { LAUNCH_EVENT } from "./launchTiming";
 import { SURFACES } from "./surfaces";
 import { ERROR_KINDS, ERROR_PRESENTATIONS, SESSION_OPEN_SOURCES, UI_EVENTS } from "./uiUsage";
+import { perfPropertyNames } from "./uiPerformance";
 
 export const MOBILE_EVENTS = {
 	// Once per UTC day, the phone's counterpart of ao.app.active (desktop) and
@@ -45,6 +46,8 @@ export const MOBILE_EVENTS = {
 	usageSummary: UI_EVENTS.summary,
 	errorShown: UI_EVENTS.errorShown,
 	launchTimed: LAUNCH_EVENT,
+	// Responsiveness per usage window, the counterpart of ao.usage.ui_performance.
+	uiPerformance: UI_EVENTS.performance,
 } as const;
 
 export type MobileEventName = (typeof MOBILE_EVENTS)[keyof typeof MOBILE_EVENTS];
@@ -115,6 +118,12 @@ export const MOBILE_ALLOWLIST: Record<string, Readonly<Record<string, PropRule>>
 		presentation: { oneOf: ERROR_PRESENTATIONS },
 		error_kind: { oneOf: ERROR_KINDS },
 		surface: { oneOf: SURFACES },
+	},
+	[MOBILE_EVENTS.uiPerformance]: {
+		...Object.fromEntries(perfPropertyNames().map((name) => [name, COUNT])),
+		window_seconds: COUNT,
+		active_seconds: COUNT,
+		flush_reason: { oneOf: ["background", "startup"] },
 	},
 	[MOBILE_EVENTS.launchTimed]: {
 		launch_kind: { oneOf: ["first", "cold", "update"] },

@@ -805,7 +805,25 @@ describe("the pull request pill on a row", () => {
 		const renderer = render({ status: "needs_input", prs: [{ number: 12, state: "closed" }, { number: 15, state: "open" }] as never });
 		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
 		expect(pill.findByType("Feather" as never).props).toMatchObject({ name: "git-pull-request", color: "tone:success" });
-		expect(pill.findByType("Text" as never).props.children).toBe("#15 +1");
+		const [label, more] = pill.findAllByType("Text" as never);
+		expect(label.props.children[0]).toBe("#15");
+		expect(more.props).toMatchObject({ children: " +1", style: { color: "tone:error" } });
+		act(() => renderer.unmount());
+	});
+
+	// One open pull request and three merged ones: the +3 is purple, not the lead's green.
+	it("colours the +N by the pull requests it counts", () => {
+		const renderer = render({ prs: [{ number: 15, state: "open" }, { number: 12, state: "merged" }, { number: 11, state: "merged" }, { number: 10, state: "merged" }] as never });
+		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
+		const [label, more] = pill.findAllByType("Text" as never);
+		expect(label.props.style).toEqual(expect.arrayContaining([{ color: "tone:success" }]));
+		expect(more.props).toMatchObject({ children: " +3", style: { color: "tone:merged" } });
+		act(() => renderer.unmount());
+	});
+
+	it("draws no +N for a single pull request", () => {
+		const renderer = render({ prs: [{ number: 15, state: "open" }] as never });
+		expect(renderer.root.findByProps({ testID: "worker-pr-pill" }).findAllByType("Text" as never)).toHaveLength(1);
 		act(() => renderer.unmount());
 	});
 

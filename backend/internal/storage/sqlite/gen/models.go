@@ -1048,6 +1048,11 @@ type TelemetryLifetimeSession struct {
 	Count     int64
 }
 
+type TelemetryLifetimeWorkSession struct {
+	Singleton int64
+	Count     int64
+}
+
 type TimestampRepairControl struct {
 	ID     int64
 	Paused int64

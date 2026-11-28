@@ -3387,7 +3387,10 @@ type TelemetryIdentityResponse struct {
 	GitHubLogin      string `json:"githubLogin,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
-	DaemonVersion    string `json:"daemonVersion,omitempty"`
+	// LifetimeWorkSessions counts worker and standalone sessions ever started,
+	// orchestrators excluded. Absent when opted out or unreadable.
+	LifetimeWorkSessions *int64 `json:"lifetimeWorkSessions,omitempty"`
+	DaemonVersion        string `json:"daemonVersion,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.

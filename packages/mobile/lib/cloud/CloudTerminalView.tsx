@@ -27,6 +27,7 @@ import type { CloudClient } from "./client";
 import { connectCloudTerminal, type CloudTerminalConnection, type CloudTerminalStatus } from "./terminal";
 import { cloudTerminalDisplay, READ_ONLY_COPY } from "./terminalCopy";
 import { TERMINAL_ENHANCE_JS } from "../session/terminalEnhance";
+import { createPaintDetector } from "../session/terminalPaint";
 import type { CloudTerminalKind } from "./types";
 
 // The local terminal's size and glyphs (lib/session/TerminalSessionScreen).
@@ -71,6 +72,8 @@ export type CloudTerminalViewProps = {
 	 * through `ref`.
 	 */
 	headerMenu?: boolean;
+	/** Called once, when the terminal first draws output from the server. */
+	onOutputShown?: () => void;
 	ref?: Ref<CloudTerminalHandle>;
 };
 
@@ -86,7 +89,7 @@ export type CloudTerminalViewProps = {
  * It reserves the keyboard itself, so it expects to reach the bottom of the
  * screen. It does not inset itself under a clear glass bar: the page does.
  */
-export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch, onShowChat, headerMenu = false, ref }: CloudTerminalViewProps) {
+export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch, onShowChat, headerMenu = false, onOutputShown, ref }: CloudTerminalViewProps) {
 	const t = useTheme();
 	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
@@ -176,13 +179,32 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		};
 	}, []);
 
+	// Whether output that draws something (not only control sequences, such as
+	// hiding the cursor) has been written to a ready xterm. Watched on the write
+	// itself, so output held for the xterm and then discarded never counts. It is
+	// reported once nothing covers the grid (see the effect below the overlays).
+	const detectPaintRef = useRef(createPaintDetector());
+	const paintedRef = useRef(false);
+	const [painted, setPainted] = useState(false);
+	const outputShownRef = useRef(false);
+	const onOutputShownRef = useRef(onOutputShown);
+	useEffect(() => {
+		onOutputShownRef.current = onOutputShown;
+	}, [onOutputShown]);
+	const draw = useCallback((bytes: Uint8Array) => {
+		xtermRef.current?.write(bytes);
+		if (paintedRef.current || !detectPaintRef.current(bytes)) return;
+		paintedRef.current = true;
+		setPainted(true);
+	}, []);
+
 	const writeOutput = useCallback((bytes: Uint8Array) => {
 		if (!xtermReadyRef.current || !xtermRef.current) {
 			pendingOutputRef.current.push(bytes);
 			return;
 		}
-		xtermRef.current.write(bytes);
-	}, []);
+		draw(bytes);
+	}, [draw]);
 
 	useEffect(() => {
 		// Events from a connection this effect has closed (on the way out, or for
@@ -204,8 +226,14 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 				},
 				onReset: () => {
 					if (!current) return;
-					// Anything still queued is superseded by the replay.
+					// Anything still queued is superseded by the replay, which starts a fresh
+					// stream; a grid cleared before it was ever reported waits for the replay.
 					pendingOutputRef.current = [];
+					detectPaintRef.current = createPaintDetector();
+					if (!outputShownRef.current) {
+						paintedRef.current = false;
+						setPainted(false);
+					}
 					writeOutput(RESET_BYTES);
 				},
 				// Someone else holds a shared session's input.
@@ -273,14 +301,14 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		xtermReadyRef.current = true;
 		const queued = pendingOutputRef.current;
 		pendingOutputRef.current = [];
-		for (const bytes of queued) xtermRef.current?.write(bytes);
+		for (const bytes of queued) draw(bytes);
 		if (dimsRef.current) xtermRef.current?.resize(dimsRef.current);
 		// A replacement WebView (theme change, reload) starts blank. The server
 		// replays the whole screen on a fresh connection, so ask for one rather
 		// than leaving the grid empty until the next output.
 		if (initializedOnceRef.current) connectionRef.current?.reconnect();
 		initializedOnceRef.current = true;
-	}, []);
+	}, [draw]);
 
 	const send = useCallback(
 		(data: string) => {
@@ -329,6 +357,14 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		connectionRef.current?.reconnect();
 	}, [clearNotice]);
 	const reloadView = useCallback(() => setMount((n) => n + 1), []);
+
+	// Drawn output counts as shown only while no overlay (ended, failed, or a
+	// dead renderer) covers it, and is reported when the cover goes away.
+	useEffect(() => {
+		if (!painted || covered || viewGone || outputShownRef.current) return;
+		outputShownRef.current = true;
+		onOutputShownRef.current?.();
+	}, [covered, painted, viewGone]);
 
 	// Only the phone's CSS viewport changes; the grid and the PTY keep their size.
 	const zoom = useCallback((direction: -1 | 1) => {

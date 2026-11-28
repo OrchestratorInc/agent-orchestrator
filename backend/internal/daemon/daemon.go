@@ -1451,6 +1451,7 @@ func Run(buildVersion string) (retErr error) {
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
 		LifetimeSessions:   store.LifetimeSessions,
+		LifetimeWork:       store.LifetimeWorkSessions,
 		DaemonVersion:      cfg.Telemetry.AppVersion,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {

@@ -58,7 +58,8 @@ import {
 } from "./main/auto-updater";
 import { REMOTE_APP_UPDATE_ACTION, runRemoteAppUpdate } from "./main/remote-app-update";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
-import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
+import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture, setMainSentryPlan } from "./main/sentry-main";
+import { cloudPlan } from "./shared/cloud-plan";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
 import { TelemetryIdentityController } from "./main/telemetry-identity";
@@ -163,6 +164,7 @@ import {
 } from "./main/chat-draft-unload";
 import {
 	type DaemonProbe,
+	type DaemonProber,
 	expectedDaemonPort,
 	parseDaemonProbe,
 	resolveDaemonFromPort,
@@ -210,6 +212,8 @@ import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { clearFolderImports, isChosenFolder, registerCloudFolderPushIpc, rememberChosenFolder } from "./main/cloud-folder-push";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
+import { EXIT_FEEDBACK_EVENT_CHANNEL, EXIT_FEEDBACK_REQUEST_CHANNEL, EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, EXIT_FEEDBACK_STATE_CHANNEL, type ExitFeedbackRequest } from "./shared/exit-feedback";
+import { EXIT_FEEDBACK_MARKER, createExitFeedbackFacts, createExitFeedbackGate, createExitFeedbackSender, decideExitFeedback, parseExitFeedbackOverride } from "./main/exit-feedback";
 import { daemonSentryDsn } from "./shared/sentry-config";
 import { boundCloudUserId, buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
@@ -551,6 +555,9 @@ const desktopQuit = createDesktopQuitController({
 // there is nowhere to show the dialog, so the shortcut quits directly.
 const quitConfirm = createQuitConfirmController({
 	canConfirm: () => {
+		// The exit feedback dialog replaces "Quit AO?" for this quit, including a
+		// second ⌘Q while it is open.
+		if (exitFeedbackWouldShow()) return false;
 		const shell = getShellWebContents();
 		return Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed());
 	},
@@ -565,6 +572,72 @@ const quitConfirm = createQuitConfirmController({
 		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
 	},
 	quit: () => app.quit(),
+});
+// First-day exit feedback (docs/telemetry.md, "Exit feedback prompt"). The
+// facts are kept ready while the app runs; a quit only reads memory.
+const exitFeedbackLaunchedAtMs = Date.now();
+const exitFeedbackOverride = parseExitFeedbackOverride(process.env.AO_EXIT_FEEDBACK_FORCE);
+// Set when the OS is shutting down or logging out; such a quit is never held.
+let systemSessionEnding = false;
+const exitFeedbackFacts = createExitFeedbackFacts({
+	readInstallCreatedMs: async () => {
+		const mtime = (await stat(path.join(desktopDataDir, "telemetry_install_id"))).mtimeMs;
+		return mtime > 0 ? mtime : undefined;
+	},
+	markerExists: async () => existsSync(path.join(desktopDataDir, EXIT_FEEDBACK_MARKER)),
+	readDaemon: readExitFeedbackDaemonFacts,
+	now: () => Date.now(),
+	override: exitFeedbackOverride,
+	setInterval: (fn, ms) => setInterval(fn, ms),
+	clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+});
+const exitFeedbackSender = createExitFeedbackSender({
+	host: import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST,
+	projectKey: import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY,
+	fetch: (url, init) => fetch(url, init),
+	log: (message, error) => console.warn(`AO: ${message}`, error ?? ""),
+});
+/** Usage analytics on for the renderer: the same conditions that hand out its PostHog bootstrap. */
+function exitFeedbackAnalyticsOn(): boolean {
+	return telemetryPolicyController !== null && !telemetryIdentity.isOptedOut() && rendererTelemetryEnabled(process.env, app.isPackaged);
+}
+function decideExitFeedbackNow() {
+	if (systemSessionEnding || isUpdateRestartRequested() || browserQuitRequested) return null;
+	// Cached facts count only while the daemon that reported them is still up.
+	if (daemonStatus.state !== "ready") return null;
+	// Never pop a window up just to ask.
+	const shell = getShellWebContents();
+	if (!mainWindow || !mainWindow.isVisible() || mainWindow.isMinimized() || !shell || shell.isDestroyed() || shell.isCrashed()) return null;
+	return decideExitFeedback(exitFeedbackFacts.get(), { nowMs: Date.now(), launchedAtMs: exitFeedbackLaunchedAtMs, analyticsOn: exitFeedbackAnalyticsOn(), override: exitFeedbackOverride });
+}
+/** Whether a quit now belongs to the exit feedback gate: it is about to show, or already holds a quit. */
+function exitFeedbackWouldShow(): boolean {
+	try {
+		const phase = exitFeedbackGate.phase();
+		// A second ⌘Q while the dialog is up must reach the gate as second_close.
+		if (phase === "pending" || phase === "open" || phase === "closing") return true;
+		return phase === "idle" && decideExitFeedbackNow() !== null;
+	} catch {
+		return false;
+	}
+}
+const exitFeedbackGate = createExitFeedbackGate({
+	decide: decideExitFeedbackNow,
+	request: (version) => {
+		const shell = getShellWebContents();
+		if (!shell || shell.isDestroyed()) return false;
+		shell.send(EXIT_FEEDBACK_REQUEST_CHANNEL, { version } satisfies ExitFeedbackRequest);
+		return true;
+	},
+	markShown: () => {
+		exitFeedbackFacts.markShown();
+		writeFileSync(path.join(desktopDataDir, EXIT_FEEDBACK_MARKER), "", { mode: 0o600 });
+	},
+	notifySecondClose: () => getShellWebContents()?.send(EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL),
+	flush: (capMs) => exitFeedbackSender.flush(capMs),
+	setTimeout: (fn, ms) => setTimeout(fn, ms),
+	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+	log: (message, error) => console.warn(`AO: ${message}`, error ?? ""),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -1334,6 +1407,16 @@ async function createWindowInternal(): Promise<void> {
 			return;
 		}
 		if (chatDraftRisks.length > 0) chatDraftWindowCloseConfirmed = true;
+		// Windows and Linux: closing the last visible window quits, so it can ask
+		// for exit feedback first; hidden helper windows do not count. On macOS only a real quit asks (before-quit).
+		if (process.platform !== "darwin" && BaseWindow.getAllWindows().every((other) => other === mainWindow || !other.isVisible()) && exitFeedbackGate.intercept(() => mainWindow?.close())) {
+			event.preventDefault();
+		}
+	});
+	// Windows shutdown or log off: never hold it.
+	mainWindow.on("query-session-end", () => {
+		systemSessionEnding = true;
+		exitFeedbackGate.bypass();
 	});
 
 	// Application shortcuts are handled here so they fire no matter which web
@@ -1490,7 +1573,12 @@ async function createWindowInternal(): Promise<void> {
 		artifactZoomEngaged = false;
 		trayLifecycle.clear();
 	});
-	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
+	shellWebContents.on("render-process-gone", () => {
+		trayLifecycle.clear();
+		exitFeedbackGate.abort();
+	});
+	// A main-frame reload drops the dialog; did-navigate ignores artifact iframes.
+	shellWebContents.on("did-navigate", () => exitFeedbackGate.abort());
 
 	mainWindow.on("closed", () => {
 		lifecycleLog("main_window_closed");
@@ -1973,9 +2061,12 @@ function processAlive(pid: number): boolean {
 	}
 }
 
-async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Promise<DaemonProbe | null> {
+async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz", onTimeout?: () => void): Promise<DaemonProbe | null> {
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
+	const timer = setTimeout(() => {
+		onTimeout?.();
+		controller.abort();
+	}, DAEMON_PROBE_TIMEOUT_MS);
 	try {
 		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
 		const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, { signal: controller.signal });
@@ -2231,6 +2322,7 @@ function establishSupervisorLink(): void {
 
 async function inspectExistingDaemon(
 	launch: DaemonLaunchSpec,
+	probe: DaemonProber = readDaemonProbe,
 ): Promise<{ status: DaemonStatus; owner: string | undefined; appRunId: string | undefined } | null> {
 	const handshakePath = runFilePath();
 	let runFileContents: string | null = null;
@@ -2244,7 +2336,7 @@ async function inspectExistingDaemon(
 	const status = await resolveDaemonFromRunFile({
 		runFileContents,
 		isProcessAlive: processAlive,
-		probe: readDaemonProbe,
+		probe,
 		identityError: (probe) => daemonIdentityError(launch, probe),
 	});
 	if (!status) return null;
@@ -2437,12 +2529,42 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 
 	let replacementKeepAlive: boolean | undefined;
-	const existing = await inspectExistingDaemon(launch);
+	// On Windows a listener that accepts but never answers must not cost three
+	// serial 2s timeouts and then be mistaken for an absent daemon. Keep the
+	// timeout fact separate from a refused connection or invalid response. Only
+	// the port the new daemon would bind can block spawning; a stale run-file
+	// port may time out while the configured port is free.
+	let timedOutProbe: { port: number; endpoint: "healthz" | "readyz" } | null = null;
+	const timedOutEndpoints = new Set<string>();
+	const startupProbe: DaemonProber = process.platform === "win32"
+		? (port, endpoint) => {
+			const key = `${port}/${endpoint}`;
+			if (timedOutEndpoints.has(key)) return Promise.resolve(null);
+			return readDaemonProbe(port, endpoint, () => {
+				if (port === resolvedDaemonPort()) timedOutProbe ??= { port, endpoint };
+				timedOutEndpoints.add(key);
+			});
+		}
+		: readDaemonProbe;
+	const reportTimedOutProbe = (): boolean => {
+		if (!timedOutProbe) return false;
+		setDaemonStatus({
+			state: "error",
+			code: "not_ready",
+			message: `A process on port ${timedOutProbe.port} did not answer /${timedOutProbe.endpoint} within ${DAEMON_PROBE_TIMEOUT_MS / 1_000} seconds. Orchestrator cannot safely start another daemon until that port responds or is freed.`,
+		});
+		return true;
+	};
+	const existing = await inspectExistingDaemon(launch, startupProbe);
 	if (startCancelled()) {
 		return daemonStatus;
 	}
 	if (existing) {
 		if (autoRestartIntent) return daemonStatus;
+		if (timedOutProbe && existing.status.state === "error") {
+			setDaemonStatus(existing.status);
+			return daemonStatus;
+		}
 		const ownership = browserDaemonOwnershipDecision(appRunId, existing);
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			lifecycleLog("daemon_replace", {
@@ -2489,7 +2611,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// miss an AO_PORT override.
 	const directDaemon = await resolveDaemonFromPort({
 		expectedPort: resolvedDaemonPort(),
-		probe: readDaemonProbe,
+		probe: startupProbe,
 		identityError: (probe) => daemonIdentityError(launch, probe),
 	});
 	if (startCancelled()) {
@@ -2497,6 +2619,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 	if (directDaemon) {
 		if (autoRestartIntent) return daemonStatus;
+		if (timedOutProbe && directDaemon.state === "error") {
+			setDaemonStatus(directDaemon);
+			return daemonStatus;
+		}
 		let portAttachOwner: string | undefined;
 		let portAttachAppRunId: string | undefined;
 		// Re-link iff the daemon is app-owned. Read the run-file for the owner tag;
@@ -2531,6 +2657,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			});
 			try {
 				await gracefullyReplaceDaemonForBrowser(directDaemon);
+				// The confirmed port holder has been retired. A timeout on a stale
+				// run-file port must not abort this already-authorized replacement.
+				timedOutProbe = null;
+				timedOutEndpoints.clear();
 				replacementKeepAlive = keepAliveForReplacement({
 					ownership,
 					forceRequested: forceReplaceAdoptedRequested,
@@ -2549,6 +2679,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			return daemonStatus;
 		}
 	}
+	if (reportTimedOutProbe()) return daemonStatus;
 
 	// Every path from here spawns a daemon, which needs the login-shell env.
 	await shellEnvReady;
@@ -2572,7 +2703,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// the port is not replaced (out of scope). When no holder is identified, skip
 	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
 	// process that is left alone is logged below.
-	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
+	const configuredPort = resolvedDaemonPort();
+	const orphanProbe = await startupProbe(configuredPort, "healthz");
+	if (startCancelled()) return daemonStatus;
+	if (!orphanProbe && reportTimedOutProbe()) return daemonStatus;
 	const runFilePath_ = runFilePath();
 	let runFile: ReturnType<typeof parseRunFile> = null;
 	if (runFilePath_) {
@@ -2583,11 +2717,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 	if (startCancelled() || (autoRestartIntent && orphanProbe)) return daemonStatus;
-	const holder = autoRestartIntent ? { pid: null, reason: "automatic recovery never signals a port holder" } : await portHolderPidToReplace({
-		probe: orphanProbe,
-		runFile,
-		processStartMs: readProcessStartMs,
-	});
+	const holder = autoRestartIntent
+		? { pid: null, reason: "automatic recovery never signals a port holder" }
+		: process.platform === "win32" && !orphanProbe && runFile && runFile.port !== configuredPort
+			? { pid: null, reason: `running.json names port ${runFile.port}, not configured port ${configuredPort}` }
+			: await portHolderPidToReplace({
+				probe: orphanProbe,
+				runFile,
+				processStartMs: readProcessStartMs,
+			});
 	// Declining to signal is otherwise silent, so say why a live process named by
 	// running.json is left alone (a hung daemon that is not replaced shows up here).
 	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
@@ -3707,6 +3845,30 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return;
 	}
 });
+/** Work started and projects added, for the exit feedback prompt; empty while the daemon is unreachable. */
+async function readExitFeedbackDaemonFacts(): Promise<{ workSessions?: number; projectCount?: number }> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return {};
+	const base = `http://127.0.0.1:${daemonStatus.port}/api/v1`;
+	const readJson = async (route: string) => {
+		const response = await fetch(`${base}${route}`, { signal: AbortSignal.timeout(1500) });
+		return response.ok ? (await response.json() as Record<string, unknown>) : {};
+	};
+	const [identity, projects] = await Promise.all([readJson("/telemetry/identity").catch(() => ({})), readJson("/projects").catch(() => ({}))]);
+	const work = (identity as { lifetimeWorkSessions?: unknown }).lifetimeWorkSessions;
+	const list = (projects as { projects?: unknown }).projects;
+	return {
+		...(typeof work === "number" && Number.isSafeInteger(work) && work >= 0 ? { workSessions: work } : {}),
+		...(Array.isArray(list) ? { projectCount: list.length } : {}),
+	};
+}
+ipcMain.on(EXIT_FEEDBACK_STATE_CHANNEL, (event, state: unknown) => {
+	if (event.sender !== getShellWebContents()) return;
+	exitFeedbackGate.rendererState(state);
+});
+ipcMain.on(EXIT_FEEDBACK_EVENT_CHANNEL, (event, payload: unknown) => {
+	if (event.sender !== getShellWebContents() || !exitFeedbackGate.accepting() || !exitFeedbackAnalyticsOn()) return;
+	exitFeedbackSender.send(payload);
+});
 /** The daemon's durable lifetime session count, or null while it is unreachable. */
 async function daemonLifetimeSessions(): Promise<number | null> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) return null;
@@ -3772,8 +3934,21 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	if (trustedSender !== event.sender || (userId !== null && typeof userId !== "string")) throw new Error("invalid cloud user request");
 	return telemetryIdentity.setCloudUser(userId);
 });
+// The renderer's AO Cloud plan, from a fixed vocabulary: kept in memory for
+// Sentry tags and sampling here and in the daemon. Nothing is sent from here.
+ipcMain.handle("telemetry:setPlan", (event, plan: unknown) => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return false;
+	const safe = cloudPlan(plan);
+	setMainSentryPlan(safe);
+	void telemetryIdentity.setPlan(safe);
+	return true;
+});
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
-ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
+ipcMain.handle("telemetry:getLifetimeSessions", () => {
+	// Asked right after a session was created: work may have started.
+	void exitFeedbackFacts.refresh(true);
+	return daemonLifetimeSessions();
+});
 // Performance telemetry: the launch start (once per shell page) and the
 // resource use since the previous read. Neither carries an identifier.
 ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null => {
@@ -4242,6 +4417,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
+	exitFeedbackGate.bypass();
 	preserveAgentsOnQuit = true;
 	app.relaunch();
 	desktopQuit.quitCompletely();
@@ -4901,6 +5077,7 @@ app.whenReady().then(async () => {
 			const installed = installedBundlePath(bundlePath);
 			console.info(`newer install at ${installed}; handing off and quitting`);
 			await shell.openPath(installed);
+			exitFeedbackGate.bypass();
 			app.quit();
 			return;
 		}
@@ -4984,9 +5161,15 @@ app.whenReady().then(async () => {
 		});
 		app.once("will-quit", () => awakeTray.dispose());
 	}
+	// macOS and Linux shutdown, reboot or log out: never hold that quit.
+	powerMonitor.on("shutdown", () => {
+		systemSessionEnding = true;
+		exitFeedbackGate.bypass();
+	});
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
+	exitFeedbackFacts.start();
 	// Boot the daemon alongside the window, not after it: the board cannot show
 	// until the daemon answers. createWindow links the browser runtime itself
 	// when the daemon is already ready by the time the window exists. Windows
@@ -5002,6 +5185,7 @@ app.whenReady().then(async () => {
 			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
 					parent: () => mainWindow,
 					quit: () => {
+						exitFeedbackGate.bypass();
 						preserveAgentsOnQuit = true;
 						desktopQuit.quitCompletely();
 					},
@@ -5093,7 +5277,20 @@ setUpdateRestartFailureHandler(() => {
 
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
-	if (desktopQuit.handleBeforeQuit(event)) return;
+	// First-day exit feedback holds a user quit until the dialog is done; an
+	// update restart, a shutdown or a forced quit was bypassed before this. An
+	// unsafe chat draft asks first, so a cancelled quit never spends the prompt;
+	// once confirmed, the re-entered quit reaches the gate.
+	const chatDraftConfirmPending = chatDraftRisks.length > 0 && !chatDraftQuitConfirmed;
+	if (!chatDraftConfirmPending && exitFeedbackGate.intercept(() => app.quit())) {
+		event.preventDefault();
+		return;
+	}
+	if (desktopQuit.handleBeforeQuit(event)) {
+		// Hidden to the tray, not quit: a later quit may still ask.
+		exitFeedbackGate.reset();
+		return;
+	}
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -5107,6 +5304,7 @@ app.on("before-quit", (event) => {
 			preserveAgentsOnQuit = false;
 			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
+			exitFeedbackGate.reset();
 		}
 		return;
 	}
