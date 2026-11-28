@@ -25,7 +25,7 @@ import (
 // started. It is built only on existing daemon routes and leaves `ao spawn`,
 // `ao send` and the session states unchanged.
 //
-// Exit codes: 0 the task started (running or done), 1 it failed or timed out,
+// Exit codes: 0 the task started (running or done), 1 it failed,
 // 2 usage error only (the CLI-wide meaning), 3 it is waiting on the user, 4 a
 // wait ran out while the task was still queued (it will run; do not resend).
 // A task outcome never goes through usageError, so these are not counted as
@@ -116,7 +116,7 @@ func newTaskCommand(ctx *commandContext) *cobra.Command {
 			"By default the project's orchestrator receives the task, plans it, and starts workers.\n" +
 			"With --worker a single worker session takes it directly.\n\n" +
 			"Exit codes: 0 started (running or done) when the command waits; a one-shot read (status, or start\n" +
-			"without --wait) also exits 0 while starting or queued, so check status. 1 failed or timed out,\n" +
+			"without --wait) also exits 0 while starting or queued, so check status. 1 failed,\n" +
 			"2 usage error, 3 waiting on the user,\n" +
 			"4 the task was submitted but the wait ended before confirming it (timed out or interrupted); do not start it again.\n" +
 			"--wait and `ao task wait` confirm the task started; poll `ao task status` for completion.\n" +
@@ -245,10 +245,6 @@ const terminalTaskTurnPrefix = "tui-"
 // taskTerminalBootWait is how long a freshly started terminal orchestrator
 // is given to boot before a brief is typed into it.
 var taskTerminalBootWait = 15 * time.Second
-
-// terminalTaskSlack allows for the session recording the turn's time slightly
-// before the CLI noted the send.
-const terminalTaskSlack = 2 * time.Second
 
 func (id taskID) terminalSince() (time.Time, bool) {
 	ms, ok := strings.CutPrefix(id.turn, terminalTaskTurnPrefix)
@@ -859,9 +855,18 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	if conv == nil && sess.ProvisionState == "ready" {
 		// A terminal session has no chat turns, but harnesses that record
 		// turns (Claude Code) expose them as history; judge the task by them.
-		if hist := c.fetchTaskHistory(ctx, id); hist != nil {
+		hist, histErr := c.fetchTaskHistory(ctx, id)
+		switch {
+		case histErr != nil:
+			return taskObservation{
+				result:     failedTask(id.String(), sessions, fmt.Sprintf("read history of %s: %s", id.session, histErr.Error()), ""),
+				harness:    sess.Harness,
+				readFailed: true,
+				transient:  isTransientReadErr(histErr),
+			}
+		case hist != nil:
 			eval = evaluateTerminalHistory(sess, hist, id)
-		} else {
+		default:
 			eval = evaluateTaskTurn(sess, conv, "", id.latest)
 		}
 	} else {
@@ -1149,35 +1154,74 @@ func evaluateTerminalTask(sess taskSession) taskEvaluation {
 	return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task (terminal session)", phase: taskPhaseTerminalIdle}
 }
 
-// taskTerminalHistory is a terminal session's recorded turns, oldest first.
-// older reports that turns before the first one exist.
+// taskTerminalHistory is a terminal session's recorded turns, oldest first,
+// covering at least the task's turn.
 type taskTerminalHistory struct {
 	turns []domain.HandoffTurn
-	older bool
+	// unresolved: the task's turn could not be located in the history read.
+	unresolved bool
 }
 
 // fetchTaskHistory reads a terminal session's recorded turns. It returns nil
 // when the session's harness records none, or the history cannot be read, so
 // the caller falls back to the session's activity.
-func (c *commandContext) fetchTaskHistory(ctx context.Context, id taskID) *taskTerminalHistory {
+func (c *commandContext) fetchTaskHistory(ctx context.Context, id taskID) (*taskTerminalHistory, error) {
 	path := "sessions/" + url.PathEscape(id.session) + "/history"
 	var page sessionHistoryResponse
-	if err := c.getJSON(ctx, path+"?limit=50", &page); err != nil || len(page.Turns) == 0 {
-		return nil
+	if err := c.getJSON(ctx, path+"?limit=50", &page); err != nil {
+		// A harness that records no turns has no history to read: fall back to
+		// activity. A transient failure is a read failure the wait retries.
+		return nil, transientOnly(err)
 	}
-	hist := &taskTerminalHistory{older: page.Total > len(page.Turns)}
-	for i := len(page.Turns) - 1; i >= 0; i-- {
-		hist.turns = append(hist.turns, page.Turns[i])
+	if len(page.Turns) == 0 {
+		return nil, nil // nothing recorded yet: fall back to activity
 	}
-	_, terminalTask := id.terminalSince()
-	if hist.older && !id.latest && !terminalTask {
-		// A worker task is the session's first turn: read the oldest one.
-		var first sessionHistoryResponse
-		if err := c.getJSON(ctx, fmt.Sprintf("%s?offset=%d&limit=1", path, page.Total-1), &first); err == nil && len(first.Turns) == 1 {
-			hist.turns = append([]domain.HandoffTurn{first.Turns[0]}, hist.turns...)
+	// newest is newest-first, as the route pages it.
+	newest := page.Turns
+	since, terminalTask := id.terminalSince()
+	switch {
+	case terminalTask:
+		// Page back until a turn from before the send (the boundary) or the
+		// start of history is loaded, so the submitted turn is the first one
+		// at or after the send, never a later turn on a partial page.
+		for len(newest) < page.Total && !newest[len(newest)-1].At.Before(since) {
+			if len(newest) >= taskHistoryPageLimit*50 {
+				return &taskTerminalHistory{unresolved: true}, nil
+			}
+			var older sessionHistoryResponse
+			if err := c.getJSON(ctx, fmt.Sprintf("%s?offset=%d&limit=50", path, len(newest)), &older); err != nil {
+				return nil, err
+			}
+			if len(older.Turns) == 0 {
+				break
+			}
+			newest = append(newest, older.Turns...)
 		}
+	case !id.latest && page.Total > len(newest):
+		// A worker task is the session's first turn: read the oldest one, and
+		// never substitute a later turn if that read fails.
+		var first sessionHistoryResponse
+		if err := c.getJSON(ctx, fmt.Sprintf("%s?offset=%d&limit=1", path, page.Total-1), &first); err != nil {
+			return nil, err
+		}
+		if len(first.Turns) != 1 {
+			return &taskTerminalHistory{unresolved: true}, nil
+		}
+		newest = append(newest, first.Turns[0])
 	}
-	return hist
+	hist := &taskTerminalHistory{}
+	for k := len(newest) - 1; k >= 0; k-- {
+		hist.turns = append(hist.turns, newest[k])
+	}
+	return hist, nil
+}
+
+// transientOnly keeps err only when a later read could succeed.
+func transientOnly(err error) error {
+	if isTransientReadErr(err) {
+		return err
+	}
+	return nil
 }
 
 // evaluateTerminalHistory judges a terminal task by the session's recorded
@@ -1189,9 +1233,13 @@ func evaluateTerminalHistory(sess taskSession, hist *taskTerminalHistory, id tas
 	idx := -1
 	since, terminalTask := id.terminalSince()
 	switch {
+	case hist.unresolved:
+		return taskEvaluation{status: taskStatusStarting, reason: "the task's turn could not be located in the session's history yet", phase: taskPhaseAwaitingTurn}
 	case terminalTask:
+		// Only a turn recorded at or after the send can be this task: earlier
+		// work, however recent, is not.
 		for i, turn := range hist.turns {
-			if !turn.At.Before(since.Add(-terminalTaskSlack)) {
+			if !turn.At.Before(since) {
 				idx = i
 				break
 			}
@@ -1208,15 +1256,26 @@ func evaluateTerminalHistory(sess taskSession, hist *taskTerminalHistory, id tas
 	turn := hist.turns[idx]
 	latestTurn := idx == len(hist.turns)-1
 	replied := strings.TrimSpace(turn.AgentResponse) != ""
+	// A recorded reply (or a later turn) settles the turn; the session's
+	// current activity only matters for a turn that has not finished.
+	if replied || !latestTurn {
+		done := taskEvaluation{status: taskStatusDone, reason: "the agent finished its turn (terminal session history)"}
+		if terminalTask {
+			// Terminal history has no records of the workers the turn started,
+			// so this confirms the orchestrator's own turn only.
+			done.reason = "the orchestrator finished its turn (terminal session history); a terminal orchestrator does not report the workers it started, so check them with `ao session ls`"
+		}
+		return done
+	}
 	switch {
-	case latestTurn && !sess.IsTerminated && sess.Activity.State == "active":
-		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working on it (terminal session)", phase: taskPhaseTerminalActive}
-	case latestTurn && !sess.IsTerminated && sess.Activity.State == "blocked":
-		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
-	case replied || !latestTurn:
-		return taskEvaluation{status: taskStatusDone, reason: "the agent finished its turn (terminal session history)"}
 	case sess.IsTerminated:
 		return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("session %s was archived before the task finished", sess.ID)}
+	case sess.Activity.State == "exited":
+		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited before finishing the task (terminal session)"}
+	case sess.Activity.State == "blocked":
+		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
+	case sess.Activity.State == "active":
+		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working on it (terminal session)", phase: taskPhaseTerminalActive}
 	}
 	return taskEvaluation{status: taskStatusRunning, reason: "the agent took the task and has not replied yet (terminal session)", phase: taskPhaseTerminalActive}
 }
@@ -1260,6 +1319,9 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	last := res
 	harness, phase := "", ""
 	sawTerminalWork := res.phase == taskPhaseTerminalActive
+	// anyRead: a status read succeeded during this wait, or the start already
+	// read the task (a standalone wait begins with only the caller's id).
+	anyRead := res.Status != ""
 	var runningTurn string
 	var runningSince time.Time
 	for {
@@ -1301,6 +1363,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			harness = obs.harness
 		}
 		last, phase = obs.result, obs.phase
+		anyRead = true
 		now := c.deps.Now()
 		if obs.phase == taskPhaseTerminalActive {
 			sawTerminalWork = true
@@ -1399,6 +1462,9 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		out.Fix = follow + ", or check " + check + " (or open the session in the Orchestrator app)"
 	default:
 		out.Reason = fmt.Sprintf("timed out after %s: the task has not started yet; %s", timeout, notAgain)
+		if !anyRead {
+			out.Reason = fmt.Sprintf("timed out after %s: no status read succeeded, so the task's state could not be confirmed; %s", timeout, notAgain)
+		}
 		out.Fix = follow + ", or check " + check
 		if harness != "" {
 			out.Fix += "; if " + harness + " is not signed in, " + strings.TrimSuffix(c.signInFix(ctx, harness), ", then retry") + " first"

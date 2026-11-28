@@ -38,7 +38,7 @@ project's defaults with `ao project set-config <id> --worker-agent <agent>
 | Code | Meaning |
 |---|---|
 | `0` | With `--wait` or `ao task wait`: the task started (`running` or `done`). A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so read `status` before treating it as started. |
-| `1` | The task failed: the session could not start, the agent's turn failed, or a status read failed outside a wait. A failed status read does not mean the task failed or never started: if `taskId` is set, check that id with `ao task status <task-id>` before submitting again. |
+| `1` | The task failed: the session could not start, or the agent's turn failed. Also a lookup that cannot succeed (for example a 404 for the session, during `ao task wait` too), or a status read that failed outside a wait; the output keeps the `taskId`. A transient read error (5xx, daemon briefly unreachable) does not end a wait: it polls again within `--timeout`. A failed status read does not mean the task failed or never started: check the id with `ao task status <task-id>` before submitting again. |
 | `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
 | `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
 | `4` | The task was submitted but the wait ended before it was confirmed: `--timeout` ran out (still queued, still starting, workspace setup unfinished, or running for under 5 seconds), or the wait was interrupted (Ctrl-C, SIGTERM, a calling agent's tool timeout). The JSON still has the `taskId`. Do not start it again; follow it with `ao task wait <task-id>`. |
@@ -63,6 +63,9 @@ history <id>` shows them). There a task reads `done` once its turn is recorded
 with a reply, even if it finished between two polls. A terminal session whose
 agent records no turns only shows idle or working; check it with `ao session
 get <id>`.
+
+For a terminal orchestrator, `done` confirms its own turn only: its history
+has no records of the workers it started, so check those with `ao session ls`.
 
 A terminal orchestrator that was just started gets about 15 seconds to boot
 before the brief is typed into it. If the brief still lands in its terminal

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1682,16 +1683,142 @@ func TestTaskStatusFoldsATerminalWorkersHistory(t *testing.T) {
 	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
 	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"completed"}],"activities":[
 		{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}}]}`)
+	// The worker sits at its prompt so activity cannot decide the result:
+	// only which turn is read can.
 	d.set("GET /api/v1/sessions/repo-3", 200, `{"session":{"id":"repo-3","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
-	d.set("GET /api/v1/sessions/repo-3/history", 200, `{"total":2,"offset":0,"turns":[
-		{"userRequest":"follow-up","agentResponse":"fixed","at":"`+fakeNowRFC3339(0)+`"},
-		{"userRequest":"write tests","agentResponse":"wrote them","at":"`+fakeNowRFC3339(-time.Minute)+`"}]}`)
-
-	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
-	if err != nil {
-		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	history := func(latestReply string) string {
+		return `{"total":2,"offset":0,"turns":[
+		{"userRequest":"follow-up","agentResponse":"` + latestReply + `","at":"` + fakeNowRFC3339(0) + `"},
+		{"userRequest":"write tests","agentResponse":"wrote them","at":"` + fakeNowRFC3339(-time.Minute) + `"}]}`
 	}
-	if res := decodeTaskResult(t, out); res["status"] != "done" {
+	d.set("GET /api/v1/sessions/repo-3/history", 200, history(""))
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] != "running" {
+		t.Fatalf("latest turn without a reply: err = %v, out = %s (the first turn's reply must not decide)", err, out)
+	}
+
+	d.set("GET /api/v1/sessions/repo-3/history", 200, history("fixed"))
+	out, _, err = executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] != "done" {
+		t.Fatalf("latest turn replied: err = %v, out = %s", err, out)
+	}
+}
+
+func terminalTaskID() string {
+	return fmt.Sprintf("repo-1:tui-%d", time.Unix(1_800_000_000, 0).UnixMilli())
+}
+
+// Earlier work recorded just before the send (inside any skew window) is not
+// the task's turn.
+func TestTaskStatusTerminalTaskIgnoresWorkJustBeforeTheSend(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-1/history", 200, `{"total":1,"offset":0,"turns":[
+		{"userRequest":"earlier work","agentResponse":"done earlier","at":"`+fakeNowRFC3339(-time.Second)+`"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", terminalTaskID(), "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] == "done" {
+		t.Fatalf("err = %v, out = %s; work from 1 s before the send must not confirm the task", err, out)
+	}
+}
+
+// A terminal task whose turn is older than the newest history page is found by
+// paging back to the send boundary, not by taking the oldest loaded turn.
+func TestTaskStatusTerminalTaskPagesBackToTheSendBoundary(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"active"}}}`)
+	var newest []string
+	for k := 0; k < 50; k++ { // 50 later turns, all after the task's turn
+		newest = append(newest, `{"userRequest":"later `+strconv.Itoa(k)+`","agentResponse":"","at":"`+fakeNowRFC3339(time.Duration(100-k)*time.Second)+`"}`)
+	}
+	d.setFunc("GET /api/v1/sessions/repo-1/history", func() (int, string) {
+		d.mu.Lock()
+		query := d.lastQuery
+		d.mu.Unlock()
+		if query == "offset=50&limit=50" {
+			return 200, `{"total":52,"offset":50,"turns":[
+				{"userRequest":"the task","agentResponse":"finished","at":"` + fakeNowRFC3339(time.Second) + `"},
+				{"userRequest":"before","agentResponse":"old","at":"` + fakeNowRFC3339(-time.Hour) + `"}]}`
+		}
+		return 200, `{"total":52,"offset":0,"turns":[` + strings.Join(newest, ",") + `]}`
+	})
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", terminalTaskID(), "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] != "done" {
+		t.Fatalf("err = %v, out = %s; want the task's own (finished) turn, found by paging back", err, out)
+	}
+}
+
+// A failed read of a worker's oldest turn is a read failure, never a
+// substitution of a later turn.
+func TestTaskStatusTerminalWorkerOldestTurnReadFailure(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-2", 200, `{"session":{"id":"repo-2","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-2/history", func() (int, string) {
+		d.mu.Lock()
+		query := d.lastQuery
+		d.mu.Unlock()
+		if query == "offset=50&limit=1" {
+			return 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`
+		}
+		return 200, `{"total":51,"offset":0,"turns":[{"userRequest":"later","agentResponse":"done later","at":"` + fakeNowRFC3339(0) + `"}]}`
+	})
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-2", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); !strings.Contains(res["reason"].(string), "read history of repo-2") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// A recorded reply settles the turn whatever the session does next; without a
+// reply, blocked is needs_input and exited is a failure.
+func TestTaskStatusTerminalReplyAndActivityPrecedence(t *testing.T) {
+	cases := []struct {
+		activity, reply, want string
+	}{
+		{"blocked", "finished", "done"},
+		{"active", "finished", "done"},
+		{"blocked", "", "needs_input"},
+		{"exited", "", "failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.activity+"/"+tc.want, func(t *testing.T) {
+			d := newTaskDaemon(t)
+			d.set("GET /api/v1/sessions/repo-2", 200, `{"session":{"id":"repo-2","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"`+tc.activity+`"}}}`)
+			d.set("GET /api/v1/sessions/repo-2/history", 200, `{"total":1,"offset":0,"turns":[{"userRequest":"task","agentResponse":"`+tc.reply+`","at":"`+fakeNowRFC3339(0)+`"}]}`)
+			out, _, _ := executeCLI(t, fakeClockDeps(), "task", "status", "repo-2", "--json")
+			if res := decodeTaskResult(t, out); res["status"] != tc.want {
+				t.Fatalf("result = %v, want %s", res, tc.want)
+			}
+		})
+	}
+}
+
+// A terminal orchestrator's done names its limit: the workers it started are
+// not in its history.
+func TestTaskStatusTerminalOrchestratorDoneMentionsWorkers(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-1/history", 200, `{"total":1,"offset":0,"turns":[{"userRequest":"task","agentResponse":"spawned a worker","at":"`+fakeNowRFC3339(time.Second)+`"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", terminalTaskID(), "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v)", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "done" || !strings.Contains(res["reason"].(string), "does not report the workers it started") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// A wait in which no status read ever succeeded says the state is unknown,
+// not that the task has not started.
+func TestTaskWaitTimeoutWithNoSuccessfulReadSaysUnknown(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", "repo-1", "--timeout", "5s", "--json")
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4", got, err)
+	}
+	if res := decodeTaskResult(t, out); !strings.Contains(res["reason"].(string), "state could not be confirmed") || strings.Contains(res["reason"].(string), "has not started") {
 		t.Fatalf("result = %v", res)
 	}
 }
