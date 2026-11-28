@@ -718,6 +718,17 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin does not filter child sessions (%q missing):\n%s", marker, body)
 		}
 	}
+	// Tool executions must be reported as tool-use events with the upstream
+	// identity: the lifecycle only tracks flights and steps for these event
+	// names. Tool arguments must never reach AO.
+	for _, marker := range []string{`callHookSync("pre-tool-use"`, `callHookSync("post-tool-use"`, "tool_name:", "tool_use_id:", "input.callID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin missing tool-event wiring %q:\n%s", marker, body)
+		}
+	}
+	if strings.Contains(body, "args") {
+		t.Fatalf("installed plugin forwards tool arguments:\n%s", body)
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)
