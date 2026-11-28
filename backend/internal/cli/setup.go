@@ -1365,6 +1365,8 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 	}
 
 	if reused {
+		// Registered already: report it even if reconciling its agents fails.
+		res.Project = setupProjectFrom(project, true)
 		agentStep, changed := c.setupReconcileAgents(ctx, opts, res, &project)
 		if agentStep != nil {
 			return *agentStep

@@ -2069,8 +2069,17 @@ func TestSetupReportsSavedRolesWhenSavingAgentsFails(t *testing.T) {
 	if got := ExitCode(err); got != setupExitFailed {
 		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
 	}
-	if res := decodeSetup(t, out); res.Agent == nil || res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
+	res := decodeSetup(t, out)
+	if res.Agent == nil || res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
 		t.Fatalf("agent = %+v, want the saved roles", res.Agent)
+	}
+	// The project is registered: it is reported, and first-run is not
+	// waiting for a registration.
+	if res.Project == nil || res.Project.ID != "calc" || !res.Project.Reused {
+		t.Fatalf("project = %+v, want the registered project", res.Project)
+	}
+	if first := stepNamed(t, res, "first-run"); first.Status != setupOK {
+		t.Fatalf("first-run = %+v", first)
 	}
 }
 
