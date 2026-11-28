@@ -86,6 +86,22 @@ func addAllTempIndexArgs(worktree string) []string {
 	return []string{"-C", worktree, "add", "-A"}
 }
 
+// forceAddTempIndexArgs stages the given paths into the temp index even when
+// ignore rules exclude them. GIT_INDEX_FILE must be set in the command's
+// environment before calling.
+func forceAddTempIndexArgs(worktree string, paths ...string) []string {
+	return append([]string{"-C", worktree, "add", "-f", "--"}, paths...)
+}
+
+// ignoredAgentProfilesArgs lists untracked files under .github/agents/ that
+// exclude rules hide, NUL-separated. User negations in .gitignore are
+// honored, so a profile the user force-included never appears here. The
+// pathspec is case-insensitive because under core.ignoreCase AO's glob also
+// hides a mixed-case directory such as .GitHub/Agents/.
+func ignoredAgentProfilesArgs(worktree string) []string {
+	return []string{"-C", worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ":(icase).github/agents/"}
+}
+
 // writeTreeArgs flushes the temp index into a tree object and prints the SHA.
 // GIT_INDEX_FILE must be set in the command's environment.
 func writeTreeArgs(worktree string) []string {
