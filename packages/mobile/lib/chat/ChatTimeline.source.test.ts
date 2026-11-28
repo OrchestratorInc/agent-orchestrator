@@ -170,6 +170,14 @@ describe("jump to latest", () => {
 		expect(source).toContain("if (!followsTail.current || dragging.current) return;");
 		expect(source).toContain("if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);");
 	});
+	// iOS anchored a long chat's opening follow to the spacer below its tall
+	// replies and scrolled back up by the spacer's offset when it was recycled.
+	it("anchors what is on screen only while the person reads above the end", () => {
+		expect(source).toContain("maintainVisibleContentPosition={visibleContentAnchor(Platform.OS, following)}");
+		expect(source).not.toContain("maintainVisibleContentPosition={{");
+		expect(source).toContain("followsTail.current = next;\n\t\tsetFollowing(next);");
+		expect(source.match(/followsTail\.current = /g)).toHaveLength(1);
+	});
 	it("follows again only once the person comes to rest right at the end", () => {
 		expect(source).toContain("const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
 	});
@@ -178,9 +186,9 @@ describe("jump to latest", () => {
 	// followed. It must not count against coming to rest at the end, and a
 	// follow that resumes catches up on it.
 	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; setFollowsTail(false); releasedAt.current = undefined; }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
-		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
+		expect(source).toContain("setFollowsTail(released ? resting : followsAfterRest(releasedAt.current, offset, resting));");
 		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
 		expect(source).not.toContain("grewWhileDragging");
 	});
@@ -190,7 +198,7 @@ describe("jump to latest", () => {
 	// scroll event.
 	it("offers the jump to the newest message whenever the list is not following", () => {
 		expect(source).toContain("const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);");
-		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
+		expect(source).toContain("if (!dragging.current && resting) setFollowsTail(true);");
 		expect(source).toContain("setShowJump(!followsTail.current && !resting);");
 		expect(source).toContain("releasedAt.current = released ? { offset, atEnd: resting } : undefined;\n\t\tsetShowJump(!followsTail.current);");
 	});
@@ -207,7 +215,7 @@ describe("jump to latest", () => {
 	});
 	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
 	it("floats the native control over the list", () => {
-		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
+		expect(source).toContain("const jumpToLatest = () => { setFollowsTail(true); setShowJump(false); scrollToLatest(true); };");
 		// Floating above what sits over the list's end, so it never moves the
 		// composer or the conversation, and fading rather than popping.
 		// It steps aside while the composer is open; only the jump re-renders for it.
@@ -417,10 +425,10 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; setFollowsTail(false); releasedAt.current = undefined; }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
-		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
+		expect(source).toContain("if (!dragging.current && resting) setFollowsTail(true);");
 		// A scroll event alone never turns the follow off: rows drawn above change
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
