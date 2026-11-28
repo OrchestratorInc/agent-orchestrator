@@ -181,13 +181,15 @@ only account IDs, falling back to the provider's default when none is saved.
 
 `account ls` (`GET /agents/accounts`) is not passive: it re-reads sign-in and limits for
 any account whose reading is due, which runs CLI or provider calls, and it returns
-account identity. Read it only for account symptoms, record the time, drop identity,
-and keep `signedIn`, `loggedIn`, `problem`, `problemKind`, and `limits` for the
-session's account. Don't use `--refresh`, `account switch`, or `account default`.
+every account's identity and limits. Read it only for account symptoms, record the
+time, and keep only the session's account and its diagnostic fields. Don't use
+`--refresh`, `account switch`, or `account default`.
 
 ```bash
-"$ao_bin" account ls --json \
-  | jq 'del(.accounts[].email, .accounts[].orgName, .accounts[].keyHint)'
+sid=<session-id>  # the reporter's session
+acct=$("$ao_bin" account show "$sid" --json | jq -r '.claude // empty')  # .codex for Codex
+"$ao_bin" account ls --json | jq --arg a "$acct" '.accounts[] | select(.id == $a)
+  | {id, provider, kind, default, signedIn, loggedIn, problem, problemKind, limits}'
 ```
 
 Don't call any non-GET `/agents/*` route just to collect evidence; they run native
