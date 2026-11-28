@@ -29,6 +29,12 @@ describe("splitByMentions", () => {
 		expect(splitByMentions("mail ana@Chen or @Chenna", [chenShort])).toEqual(["mail ana@Chen or @Chenna"]);
 	});
 
+	it("reads a whole character after a name, so a letter outside the basic plane continues it", () => {
+		const alex = { kind: "person" as const, id: "u-alex", name: "Alex" };
+		expect(splitByMentions("@Alex\u{10400} hi", [alex])).toEqual(["@Alex\u{10400} hi"]);
+		expect(splitByMentions("@Alex! hi", [alex])).toEqual([alex, "! hi"]);
+	});
+
 	it("gives each @Name the mention written there, in order, when a person and a team share a name", () => {
 		const person = { kind: "person" as const, id: "u-platform", name: "Platform" };
 		const team = { kind: "team" as const, id: "t-platform", name: "Platform" };

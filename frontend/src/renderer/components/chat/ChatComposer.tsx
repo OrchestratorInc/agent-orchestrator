@@ -919,7 +919,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const mentionCandidates = mentionSource?.candidates;
 	const mentionWorkspaceName = mentionSource?.workspaceName;
 	const mentionSelf = mentionSource?.selfUserId;
-	const mentionsOffered = Boolean(mentionSource);
+	// A queued message's edit carries its text and files only (the control plane's
+	// edit takes no mentions), so people and teams are not offered while editing one.
+	const mentionsOffered = Boolean(mentionSource) && !editingQueuedTurnId;
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
 		// An empty candidate list is the whole reason the sigil stays ordinary: with
@@ -952,7 +954,7 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (fileQuery !== undefined) onFileQuery?.(fileQuery);
 	}, [fileQuery, onFileQuery]);
-	const mentionQuery = fileQuery !== undefined && !isPathQuery(fileQuery) ? fileQuery : undefined;
+	const mentionQuery = mentionsOffered && fileQuery !== undefined && !isPathQuery(fileQuery) ? fileQuery : undefined;
 	const onMentionQuery = mentionSource?.onQuery;
 	useEffect(() => {
 		onMentionQuery?.(mentionQuery);

@@ -60,6 +60,18 @@ beforeEach(() => {
 });
 
 describe("the @ menu", () => {
+	it("offers files but no people or teams while editing a queued message, whose edit carries no mentions", async () => {
+		const source = mentions();
+		const { field } = renderComposer({ mentions: source, editingQueuedTurnId: "turn-queued", draftSeed: { id: "turn-queued:owner", text: "" } });
+		await typeInLexicalEditor(field, "check with @c");
+		const outline = menuOutline();
+		expect(outline.join("\n")).toContain("cart.ts");
+		expect(outline.join("\n")).not.toMatch(/Chen Wei|Checkout|Cara Diaz/);
+		expect(outline.filter((line) => line.startsWith("# "))).not.toContain("# In this session");
+		// Nor does it ask the control plane for people.
+		expect(source.onQuery).not.toHaveBeenCalledWith("c");
+	});
+
 	it("lists the session's people, teams, the workspace's people, then files, in that order", async () => {
 		const { field } = renderComposer({ mentions: mentions() });
 		await typeInLexicalEditor(field, "check with @");
