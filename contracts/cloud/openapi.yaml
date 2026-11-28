@@ -3443,11 +3443,14 @@ paths:
         their authors and times) and the reply apart from it as the request,
         within size limits (FromAside describes the text). A thread sent
         before carries only the comments written since. The send is
-        pinned to the thread as the caller read it (throughSequence): a
-        comment it would carry that was written or edited after that answers
-        409 thread_changed, and nothing is stored. That message goes
-        through sendMessage's path (it queues behind a running turn like any
-        message) and its chat.user_message event carries fromAside, from
+        pinned to the thread as the caller read it: seen lists every comment
+        the caller was shown, at the version shown, and throughSequence bounds
+        it. A comment the send would carry that is missing from seen, newer
+        than the version seen lists, or written or edited after
+        throughSequence answers 409 thread_changed, and nothing is stored.
+        That message goes through sendMessage's path (it queues behind a
+        running turn like any message) and its chat.user_message event
+        carries fromAside, from
         which a client draws the card. The thread gets a `sent_to_agent`
         history entry, and everyone watching gets chat.aside_resolved with
         sentToAgent. Nobody is notified of the resolve or the send. A retry
@@ -3484,14 +3487,16 @@ paths:
           description: The caller can't open the session, or the session has no such aside.
           $ref: "#/components/responses/Error"
         "409":
-          description: "`SESSION_TERMINATED`: the session ended or was deleted. `thread_changed`: with sendToAgent, a comment the send would carry was written or edited after throughSequence; read the thread again and resend. Nothing is stored."
+          description: "`SESSION_TERMINATED`: the session ended or was deleted. `thread_changed`: with sendToAgent, a comment the send would carry was written or edited after throughSequence, is missing from seen, or is newer than the version seen lists; read the thread again and resend. Nothing is stored."
           $ref: "#/components/responses/Error"
         "422":
           description: >-
             `validation_error`: details.field `text` when the text is blank
             (allowed only with sendToAgent) or longer than 65536 characters;
             details.field `throughSequence` when sendToAgent comes without it
-            (or below 0);
+            (or below 0); details.field `seen` when sendToAgent comes without
+            it, with more than 500 entries, or with an entry that has no uuid
+            replyId or no version;
             details.field `mentions` with a
             details.reason as on sendMessage (`unknown`, `no_access`,
             `outside_session`, `too_many`, `team_too_large`). Nothing is stored.
@@ -4189,7 +4194,11 @@ paths:
               $ref: "#/components/schemas/SteerTurnInput"
       responses:
         "202":
-          description: Guidance for the active turn accepted.
+          description: >-
+            Guidance for the active turn accepted: the chat.turn_steer_requested
+            event it appended (with asideId when it named people or teams).
+            Its outcome follows on the session's events as chat.turn_steered
+            or chat.turn_steer_failed with the same clientMessageId.
           content:
             application/json:
               schema:
@@ -4197,7 +4206,7 @@ paths:
                 required: [event]
                 properties:
                   event:
-                    $ref: "#/components/schemas/TurnSteeredEvent"
+                    $ref: "#/components/schemas/TurnSteerRequestedEvent"
         "422":
           description: >-
             `validation_error`: a field is invalid. A refused mention has
@@ -7327,7 +7336,15 @@ components:
         eventId:
           type: string
         metadata:
-          type: object
+          description: >-
+            Detail by type: a `mentioned` row's is a
+            MentionNotificationMetadata, an `aside_reply` row's an
+            AsideReplyNotificationMetadata; other kinds carry their own keys.
+          anyOf:
+            - $ref: "#/components/schemas/MentionNotificationMetadata"
+            - $ref: "#/components/schemas/AsideReplyNotificationMetadata"
+            - type: object
+              additionalProperties: true
         resolvedAt:
           type: string
           format: date-time
@@ -7502,35 +7519,50 @@ components:
         projectName:
           type: string
     NotificationStateChange:
-      type: object
-      additionalProperties: false
-      required: [read]
       description: >-
         Marks some of the caller's own notifications read. Name exactly one
         target: ids; all (every notification the caller has, in every
         organization); or orgId with sessionId (the caller's mention
         notifications in that session, which a client marks when it opens the
         session).
-      properties:
-        ids:
-          type: array
-          minItems: 1
-          maxItems: 200
-          items:
-            type: string
-            format: uuid
-        all:
-          type: boolean
-          const: true
-        orgId:
-          type: string
-          format: uuid
-        sessionId:
-          type: string
-          format: uuid
-        read:
-          type: boolean
-          const: true
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [ids, read]
+          properties:
+            ids:
+              type: array
+              minItems: 1
+              maxItems: 200
+              items:
+                type: string
+                format: uuid
+            read:
+              type: boolean
+              const: true
+        - type: object
+          additionalProperties: false
+          required: [all, read]
+          properties:
+            all:
+              type: boolean
+              const: true
+            read:
+              type: boolean
+              const: true
+        - type: object
+          additionalProperties: false
+          required: [orgId, sessionId, read]
+          properties:
+            orgId:
+              type: string
+              format: uuid
+            sessionId:
+              type: string
+              format: uuid
+            read:
+              type: boolean
+              const: true
     NotificationPreferences:
       type: object
       additionalProperties: false
@@ -10547,7 +10579,10 @@ components:
         quote:
           type: string
           maxLength: 2000
-          description: The exact passage of the anchor message the thread is about. Absent for a thread on the whole message.
+          description: >-
+            The exact passage of the anchor message the thread is about. Absent
+            for a thread on the whole message. The message's own text for the
+            passage (AsideCreateInput.quote).
         startedBy:
           $ref: "#/components/schemas/AsidePerson"
         resolvedAt:
@@ -10693,6 +10728,12 @@ components:
             code block headed by its language, or "text"), and otherwise
             refuses it with 422 not_in_message. Absent for a thread on the
             whole message.
+            The thread keeps the message's own text for the passage, not this
+            string: the span of the message as the app draws it from the first
+            matched word to the last (cut words cut the same way), so Aside.quote,
+            chat.aside_created's quote and a send's fromAside.quote can differ
+            from what was sent here in punctuation, symbols, markdown syntax and
+            whitespace.
         text:
           type: string
           minLength: 1
@@ -10821,7 +10862,7 @@ components:
           description: >-
             Its newest edit's chat.aside_reply_edited event; absent if never
             edited. With sequence it says which version of the comment a
-            client shows (AsideReplyInput.throughSequence).
+            client shows (AsideReplyInput.seen).
     AsideThread:
       type: object
       additionalProperties: false
@@ -10874,8 +10915,8 @@ components:
             Also send the whole thread to the agent as one message from the
             caller, and resolve it ("Also send to agent"). Only someone who
             can prompt the agent may (403 prompt_forbidden otherwise).
-            Needs throughSequence (422 validation_error, details.field
-            throughSequence, without it).
+            Needs throughSequence and seen (422 validation_error, details.field
+            throughSequence or seen, without one).
         throughSequence:
           type: integer
           format: int64
@@ -10885,11 +10926,35 @@ components:
             Required with sendToAgent. The newest comment of the thread the
             sender read: the highest AsideReply.sequence or
             AsideReply.editedSequence the client showed them (any session
-            event sequence the client had applied works too). A comment
-            written or edited after it, among those the send would carry
-            (written since the thread's last send), refuses the send with 409
-            thread_changed; the agent gets only comments up to it. Ignored
-            without sendToAgent.
+            event sequence the client had applied works too). It bounds the
+            send: the agent gets only comments up to it, and a comment written
+            or edited after it refuses the send with 409 thread_changed. seen
+            pins each comment shown. Ignored without sendToAgent.
+        seen:
+          type: array
+          maxItems: 500
+          description: >-
+            Required with sendToAgent (an empty list for a thread with no
+            comment to carry). Every comment of the thread the client showed
+            the sender, with the version shown: its editedSequence, or its
+            sequence if never edited. A comment the send would carry (written
+            since the thread's last send) that is missing from it, or whose
+            version is now newer than the one listed, refuses the send with
+            409 thread_changed, as one written or edited after throughSequence
+            does. Ignored without sendToAgent.
+          items:
+            type: object
+            additionalProperties: false
+            required: [replyId, version]
+            properties:
+              replyId:
+                type: string
+                format: uuid
+              version:
+                type: integer
+                format: int64
+                minimum: 0
+                maximum: 9007199254740991
     CommentThreadPage:
       type: object
       additionalProperties: false
@@ -14384,6 +14449,20 @@ components:
             authorName:
               type: string
               description: With authorUserId, their name when they sent it.
+            mentions:
+              type: array
+              description: >-
+                The people and teams the guidance named, with their names when
+                it was sent. Absent when it named none.
+              items:
+                $ref: "#/components/schemas/EventMention"
+            asideId:
+              type: string
+              format: uuid
+              description: >-
+                The aside the guidance started, when it named people or teams.
+                The aside is anchored on the chat.turn_steer_requested event
+                the request returned, matched by clientMessageId.
         createdAt:
           type: string
           format: date-time
