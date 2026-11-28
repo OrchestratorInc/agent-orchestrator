@@ -85,7 +85,13 @@ type Coordinator struct {
 	failureSeq          map[domain.ProjectID]int
 	failureAckedSeq     map[domain.ProjectID]int
 	wake                chan struct{}
-	mu                  sync.Mutex
+	// pass serializes RunDue passes. It is held across delivery calls.
+	pass sync.Mutex
+	// mu guards the maps below and the store calls that claim or settle a
+	// batch. It is never held across a delivery call, which can wait seconds
+	// for an orchestrator, so PreparePiggyback (a user's Chat send) never
+	// waits behind another project's delivery.
+	mu sync.Mutex
 	// earlyHold pauses early flush for a project whose last attempt, early or
 	// due, left its batch pending (busy orchestrator, failed submit, or coalesced
 	// stuck deferral). Those deferrals cannot move a done row's later settlement
@@ -207,6 +213,8 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	if c == nil || c.store == nil || c.delivery == nil {
 		return -1, errors.New("report coordinator dependencies are required")
 	}
+	c.pass.Lock()
+	defer c.pass.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for {
@@ -379,7 +387,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			}
 			if acquired {
 				interrupted = true
-				if interruptErr := c.delivery.Interrupt(ctx, target.ID); interruptErr != nil {
+				if interruptErr := c.unlocked(func() error { return c.delivery.Interrupt(ctx, target.ID) }); interruptErr != nil {
 					return c.release(ctx, batch, interruptErr)
 				}
 			} else if nextInterrupt.IsZero() || next.Before(nextInterrupt) {
@@ -394,7 +402,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			return deferErr
 		}
 	}
-	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
+	if err := c.unlocked(func() error { return c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()) }); err != nil {
 		if errors.Is(err, ErrOrchestratorBusy) {
 			if c.isExpired(batch) {
 				return c.fail(ctx, batch, err)
@@ -416,6 +424,16 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	// Accepted, so a separate pending batch need not wait out the hold.
 	delete(c.earlyHold, projectID)
 	return nil
+}
+
+// unlocked runs a delivery call with c.mu released. The caller holds both
+// c.pass and c.mu. c.pass keeps other passes out while c.mu is released, and
+// the claim token fences the batch, so only PreparePiggyback, Accept and
+// Release can run meanwhile, and they touch other batches.
+func (c *Coordinator) unlocked(call func() error) error {
+	c.mu.Unlock()
+	defer c.mu.Lock()
+	return call()
 }
 
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {
