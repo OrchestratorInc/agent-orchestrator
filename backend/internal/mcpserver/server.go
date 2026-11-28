@@ -276,6 +276,10 @@ const (
 		`for example /tmp/plot.png; Orchestrator embeds PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, and ICO files of up to 10 MiB each.`
 	mcpLayoutGuide = `Layout: the page sits in the reply column with no frame border, over the same background as the thread, starting at the left edge of your text. ` +
 		`Treat it as part of your answer: let it fill the width, and leave out outer padding, a wrapping card or border, and a heading banner. ` +
+		`The same page is also shown in the mobile app, where the available width is typically about 390-440 CSS pixels. Make every page responsive rather than designing only for the desktop reply column or expanded dialog. ` +
+		`Include <meta name="viewport" content="width=device-width, initial-scale=1"> in the document head. Use box-sizing: border-box globally; let images, video, and other media shrink with max-width: 100%; and avoid fixed pixel widths or fixed multi-column layouts. ` +
+		`For CSS grid, use shrinkable tracks such as minmax(0, 1fr) and minmax(280px, 1fr) with auto-fit/auto-fill where appropriate; set min-width: 0 on grid and flex children. Collapse dense multi-column layouts to one column at narrow widths (around 600px). Wrap long words and code, and put wide tables in their own horizontally scrollable wrapper instead of making the whole page overflow. Do not clip content or cause horizontal page scrolling. ` +
+		`Preview the finished page at both 720px (desktop reply column) and 390px (phone), inspect both screenshots, and fix overflow or unreadably narrow columns before publishing. ` +
 		`When the reader expands it, it opens in a dialog of up to 1024 px wide sized to its height, and Orchestrator centers a top-level block that sets a max-width. ` +
 		`Charts need a fixed height in pixels. The frame takes the page's height, so html and body must not be sized from the viewport (100vh, height: 100%), which would make the frame keep growing. ` +
 		`Scripts are sandboxed away from Orchestrator, cookies, and storage, and links open in the user's browser.`
