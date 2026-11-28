@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 func previewCommand(name string, args ...string) *exec.Cmd {

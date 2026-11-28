@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // The cloud control plane resolves a cloud session's interface with the same

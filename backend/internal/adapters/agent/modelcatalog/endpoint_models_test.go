@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/harnessendpoint"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func codexEndpointRequest(baseURL, key, model string) ports.AgentModelDiscoveryRequest {

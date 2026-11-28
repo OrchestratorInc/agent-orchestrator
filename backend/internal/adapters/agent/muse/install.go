@@ -3,7 +3,7 @@ package muse
 import (
 	"context"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 )
 
 // ResolveBinary resolves the executable path for the plugin.

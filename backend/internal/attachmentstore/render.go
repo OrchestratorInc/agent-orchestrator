@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // Renders are agent-published HTML pages shown inline in chat. They share the

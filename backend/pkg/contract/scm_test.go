@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 )
 
 func TestSCMContractJSONUsesProviderNeutralFields(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // A canceled child gets to run its exit handlers, e.g. removing a lock file.

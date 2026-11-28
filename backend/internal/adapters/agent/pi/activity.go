@@ -1,6 +1,6 @@
 package pi
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // DeriveActivityState maps the lifecycle callbacks emitted by AO's managed Pi
 // extension onto normalized activity. session-start is idle because Pi emits it

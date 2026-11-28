@@ -338,10 +338,10 @@ export const chatFixture: ConversationSnapshot = {
 				// copied ansi-regex omits `@` from its CSI final-byte class.
 				output:
 					"\u001b[?25l\u001b[2K\u001b[@\u001b[0m" +
-					"\u001b[32mok\u001b[0m  \tgithub.com/aoagents/agent-orchestrator/backend/internal/domain\t0.412s\n" +
-					"\u001b[32mok\u001b[0m  \tgithub.com/aoagents/agent-orchestrator/backend/internal/ports\t0.286s\n" +
+					"\u001b[32mok\u001b[0m  \tgithub.com/OrchestratorInc/agent-orchestrator/backend/internal/domain\t0.412s\n" +
+					"\u001b[32mok\u001b[0m  \tgithub.com/OrchestratorInc/agent-orchestrator/backend/internal/ports\t0.286s\n" +
 					"downloading modules  12%\rdownloading modules  57%\rdownloading modules 100%\n" +
-					"\u001b[32mok\u001b[0m  \tgithub.com/aoagents/agent-orchestrator/backend/internal/service/chat\t11.554s\n",
+					"\u001b[32mok\u001b[0m  \tgithub.com/OrchestratorInc/agent-orchestrator/backend/internal/service/chat\t11.554s\n",
 				outputSource: "stream",
 				outputMayBePartial: true,
 				// What the agent typed at the running command, not what the command

@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 type gitError struct {

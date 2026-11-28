@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/cdc"
 )
 
 type contextRecordingSource struct{ readCancellable []bool }

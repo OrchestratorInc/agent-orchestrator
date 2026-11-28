@@ -15,13 +15,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
-	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/daemon"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/datadirlock"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/processalive"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // Execute runs the ao CLI with process stdio.

@@ -1,9 +1,9 @@
 package fx
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 var _ ports.AgentRuntimeLaunchEnv = (*Plugin)(nil)

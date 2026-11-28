@@ -1,7 +1,7 @@
 package vibe
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // DeriveActivityState maps Vibe's available hook events conservatively. A

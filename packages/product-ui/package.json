@@ -49,7 +49,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/aoagents/agent-orchestrator.git",
+		"url": "https://github.com/OrchestratorInc/agent-orchestrator.git",
 		"directory": "packages/product-ui"
 	}
 }

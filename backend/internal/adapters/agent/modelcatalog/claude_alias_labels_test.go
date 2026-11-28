@@ -3,7 +3,7 @@ package modelcatalog
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func TestLabelClaudeAliasVersionsUsesNewestProviderModelPerFamily(t *testing.T) {

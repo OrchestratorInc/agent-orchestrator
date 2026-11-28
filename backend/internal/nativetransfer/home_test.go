@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/pkg/handoffnote"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/handoffnote"
 )
 
 // The tests run without a home folder unless one sets it, so a temp folder

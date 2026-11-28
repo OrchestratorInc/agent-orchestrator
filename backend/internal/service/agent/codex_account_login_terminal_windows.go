@@ -7,7 +7,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // Windows does not allow the pending account directory to be renamed while

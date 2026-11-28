@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 type kimiWireRecord struct {

@@ -1,6 +1,6 @@
 package agentaccounts
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // SetCustomEndpoint late-binds whether a provider's harness runs on a custom
 // API endpoint the user set. Such sessions send the endpoint's key, not the

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/caller"
 )
 
 type switchCommandCalls struct {

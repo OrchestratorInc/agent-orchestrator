@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	chatsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/chat"
 )
 
 // renderCheckBroker is the slice of the browser-runtime broker a render check needs.

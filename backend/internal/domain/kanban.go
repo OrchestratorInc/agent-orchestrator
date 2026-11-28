@@ -1,6 +1,6 @@
 package domain
 
-import "github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 
 // KanbanColumn is the derived delivery-lifecycle placement of a session:
 // building, the AO-driven validating loop, the review-feedback loop

@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	scmgitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/httpkit"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	scmgitlab "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/scm/gitlab"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/tracker/httpkit"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const (

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	agentsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/agent"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
 func TestHarnessUpdateWarmupWaitsForReadinessAndChecksOnlyInstalledHarnesses(t *testing.T) {

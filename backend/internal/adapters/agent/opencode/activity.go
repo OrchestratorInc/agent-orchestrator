@@ -1,6 +1,6 @@
 package opencode
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // DeriveActivityState maps an opencode plugin hook event onto an AO activity
 // state. The opencode plugin (assets/ao-activity.ts) normalizes opencode's

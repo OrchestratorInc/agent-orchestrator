@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 var fxIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)

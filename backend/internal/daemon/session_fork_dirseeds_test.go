@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/filesnapshot"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/sessionfork"
 )
 
 func TestDirForkSeedsManagesOnlySessionFolders(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 const recordSessionInteraction = `-- name: RecordSessionInteraction :execrows

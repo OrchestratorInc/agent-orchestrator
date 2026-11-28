@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
-	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/nativetransfer"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/OrchestratorInc/agent-orchestrator/backend/internal/session_manager"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/sessionmove"
 )
 
 // CloudPromptMaxBytes is the most AO Cloud accepts as a session prompt.

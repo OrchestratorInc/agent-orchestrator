@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/clienttz"
 )
 
 // userTimeZone is the zone agent prompts name as the user's. The zone the

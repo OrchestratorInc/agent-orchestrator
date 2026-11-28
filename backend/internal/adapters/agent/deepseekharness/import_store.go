@@ -22,7 +22,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 const maxImportFile = 64 << 20

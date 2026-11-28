@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // WorkspaceFilePaths is a session workspace's file paths, without file details.

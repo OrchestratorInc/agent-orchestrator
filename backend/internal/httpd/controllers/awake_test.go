@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	awakesvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/awake"
 )
 
 type awakeHTTPStub struct {

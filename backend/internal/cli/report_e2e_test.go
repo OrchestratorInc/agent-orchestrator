@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
+	reportsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/report"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 // TestReportRoundTrip pins the intentionally hand-mirrored CLI DTO to the real
@@ -53,7 +53,7 @@ func TestReportRoundTrip(t *testing.T) {
 	_, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
 		"report", "--done", "--note", "real boundary",
 		"--artifact", "artifact-one", "--artifact", "artifact-two",
-		"--pr-reviewed", "https://github.com/aoagents/agent-orchestrator/pull/4488")
+		"--pr-reviewed", "https://github.com/OrchestratorInc/agent-orchestrator/pull/4488")
 	server.Close()
 	if err != nil {
 		t.Fatalf("report: %v\nstderr=%s", err, stderr)

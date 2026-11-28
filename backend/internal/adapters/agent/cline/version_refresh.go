@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // SupportsTerminalVersionRefresh declares unattended exact-conversation resume.

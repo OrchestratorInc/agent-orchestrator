@@ -3,7 +3,7 @@ package lifecycle
 import (
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // maxKimiApprovals bounds both the map and FIFO per session. Wire keys are

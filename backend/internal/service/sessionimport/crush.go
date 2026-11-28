@@ -15,8 +15,8 @@ import (
 
 	_ "modernc.org/sqlite" // read-only Crush project databases
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/crush"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 type crushProject struct {

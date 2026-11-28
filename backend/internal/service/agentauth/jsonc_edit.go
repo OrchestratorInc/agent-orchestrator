@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/gemini"
 )
 
 // Gemini CLI and Qwen Code read settings.json as JSON with comments, trailing

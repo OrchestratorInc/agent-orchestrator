@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // captureBackgroundFault reports a session-manager failure that happens off

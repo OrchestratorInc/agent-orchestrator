@@ -12,8 +12,8 @@ import (
 
 	_ "modernc.org/sqlite" // read-only SQLite driver for KiloCode's session store
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // KiloCode keeps every conversation in one global SQLite database rather than a

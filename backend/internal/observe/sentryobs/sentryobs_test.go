@@ -20,8 +20,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	sqlite3 "modernc.org/sqlite"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 func TestShouldCaptureStatus(t *testing.T) {

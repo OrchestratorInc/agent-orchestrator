@@ -4,7 +4,7 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 )
 
 const (

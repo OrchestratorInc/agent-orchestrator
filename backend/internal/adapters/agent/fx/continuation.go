@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 var fxNativeID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)

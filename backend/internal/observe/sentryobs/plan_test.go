@@ -7,7 +7,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 func TestPaidPlanSendsOutsideTheSampleAndTagsEveryEvent(t *testing.T) {

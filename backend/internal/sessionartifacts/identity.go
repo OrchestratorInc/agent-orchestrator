@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // MaxPreviousPaths bounds how many earlier paths an artifact remembers.

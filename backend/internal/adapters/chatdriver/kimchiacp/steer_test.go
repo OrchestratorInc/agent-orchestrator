@@ -6,7 +6,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
 func TestSteeringAdvertisedReadsKimchiCapabilityMeta(t *testing.T) {

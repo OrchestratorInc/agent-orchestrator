@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/harnessendpoint"
 )
 
 func TestAppServerArgsCarryCustomEndpoint(t *testing.T) {

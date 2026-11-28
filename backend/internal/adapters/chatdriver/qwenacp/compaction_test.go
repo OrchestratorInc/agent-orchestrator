@@ -3,7 +3,7 @@ package qwenacp
 import (
 	"testing"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
 func TestCompactionMessageRecognizesQwenCompression(t *testing.T) {

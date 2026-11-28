@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/runtime/tmux"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestWiringLifecycleOwnsHerdrSocket(t *testing.T) {

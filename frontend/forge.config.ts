@@ -452,7 +452,7 @@ const config: ForgeConfig = {
 					icon: "assets/icon.png",
 					categories: LINUX_DESKTOP_CATEGORIES,
 					maintainer: appPackage.author,
-					homepage: "https://github.com/aoagents/agent-orchestrator",
+					homepage: "https://github.com/OrchestratorInc/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
 			},
@@ -465,7 +465,7 @@ const config: ForgeConfig = {
 					categories: LINUX_DESKTOP_CATEGORIES,
 					// rpmbuild rejects a spec with an empty License field.
 					license: "MIT",
-					homepage: "https://github.com/aoagents/agent-orchestrator",
+					homepage: "https://github.com/OrchestratorInc/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
 			},

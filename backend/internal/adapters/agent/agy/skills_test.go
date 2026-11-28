@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/skillbridge"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/skillbridge"
 )
 
 func TestTerminalCommandsAddTheBridgedSkillFolder(t *testing.T) {

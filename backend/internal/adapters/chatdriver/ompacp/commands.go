@@ -1,6 +1,6 @@
 package ompacp
 
-import acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+import acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 
 // hiddenCommands are oh-my-pi built-ins kept out of the `/` menu.
 //

@@ -12,7 +12,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // Receiving an event only proves SendEvent published it. The capture goroutine

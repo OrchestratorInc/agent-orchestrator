@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeidentity"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeidentity"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/nativetransfer"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // ErrCloudTranscriptUnsupported reports an agent whose conversation AO Cloud

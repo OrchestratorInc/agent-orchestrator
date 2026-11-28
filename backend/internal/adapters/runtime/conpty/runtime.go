@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
-	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/procmem"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/sessionid"
 )
 
 const (

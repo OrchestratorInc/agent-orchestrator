@@ -3,7 +3,7 @@ package ports_test
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // A PR counts as the account's own only when a human account's login matches

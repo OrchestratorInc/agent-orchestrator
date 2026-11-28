@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 type fakeApp struct {

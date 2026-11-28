@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
-	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	sessionsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/session"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 )
 
 func TestNewSessionPRSummaryMapsProviderReviewEntries(t *testing.T) {

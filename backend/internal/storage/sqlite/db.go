@@ -20,7 +20,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
+	sqlitestore "github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/store"
 
 	// modernc.org/sqlite is the pure-Go (CGO-free) SQLite driver — chosen so the
 	// daemon cross-compiles and ships as a static binary with no libsqlite/CGO

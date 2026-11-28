@@ -13,14 +13,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
 )
 
 // releaseRepo is the GitHub "owner/repo" that `ao start` fetches the desktop app
 // from. It defaults to the production target and is overridable at build time so
 // a test binary fetches from the fork without a source edit:
 //
-//	go build -ldflags "-X github.com/aoagents/agent-orchestrator/backend/internal/cli.releaseRepo=harshitsinghbhandari/agent-orchestrator" ./cmd/ao
+//	go build -ldflags "-X github.com/OrchestratorInc/agent-orchestrator/backend/internal/cli.releaseRepo=harshitsinghbhandari/agent-orchestrator" ./cmd/ao
 //
 // Mirrors how version.go's Version var is stamped by release tooling.
 //

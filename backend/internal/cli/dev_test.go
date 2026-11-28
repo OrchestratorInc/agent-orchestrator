@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/devimport"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/runfile"
 )
 
 type devImportCapture struct {

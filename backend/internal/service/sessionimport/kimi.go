@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	kimiadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	kimiadapter "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // Kimi Code (Moonshot AI) keeps one conversation per session directory under

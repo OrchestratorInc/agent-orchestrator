@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/commandcode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	browsersvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/browser"
 )
 
 type recordingBrowserAuthority struct {

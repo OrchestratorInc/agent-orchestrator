@@ -1,6 +1,6 @@
 package copilotacp
 
-import acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+import acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 
 // hiddenCommands are Copilot CLI built-ins kept out of the `/` menu.
 //

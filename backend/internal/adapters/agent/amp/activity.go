@@ -3,7 +3,7 @@ package amp
 import (
 	"encoding/json"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // DeriveActivityState maps the AO sub-command emitted by the managed Amp

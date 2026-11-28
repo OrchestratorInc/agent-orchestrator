@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 // commandGOOS selects the platform for Command; tests override it.

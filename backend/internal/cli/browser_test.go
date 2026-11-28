@@ -15,7 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/approval"
 )
 
 type browserRequestCapture struct {

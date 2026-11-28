@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/processalive"
 )
 
 // pidAlive probes PID liveness on Windows.

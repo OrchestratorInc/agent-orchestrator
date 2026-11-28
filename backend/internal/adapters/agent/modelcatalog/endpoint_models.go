@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/harnessendpoint"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // codexEndpoint returns the custom endpoint a Codex discovery request carries:

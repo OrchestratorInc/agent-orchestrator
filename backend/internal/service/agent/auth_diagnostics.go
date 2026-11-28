@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // Diagnostics describe the evidence; they never change the authentication verdict.
 func completeAuthenticationDiagnostics(observation *domain.AgentAuthenticationObservation) {

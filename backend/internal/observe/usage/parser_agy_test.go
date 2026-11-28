@@ -9,8 +9,8 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	usagesvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/usage"
 )
 
 const agyTestConversationID = "7e58d1c1-4a55-4e47-8393-fb6413f594fe"

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/attribution"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/attribution"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // SetCommitAttributionEnabled supplies the Orchestrator attribution beta

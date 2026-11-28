@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // Use a subprocess because restoring SIGTERM's default behavior would kill

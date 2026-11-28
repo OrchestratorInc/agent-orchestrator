@@ -3,8 +3,8 @@ package sessionmanager
 import (
 	"context"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // Before adoption Cursor uses the default open-elsewhere check on its

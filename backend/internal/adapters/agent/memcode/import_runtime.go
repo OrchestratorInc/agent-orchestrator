@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 )
 
 func memcodeRestoreCrash(output string) error {

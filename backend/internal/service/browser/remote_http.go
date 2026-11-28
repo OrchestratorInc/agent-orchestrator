@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/approval"
 )
 
 // remoteMaxResponseBytes bounds one service response; it matches the CLI's

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 )
 
 // forkDependencyDirs are the dependency folders a fork clones from its

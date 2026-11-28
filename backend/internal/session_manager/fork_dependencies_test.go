@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 func writeTestFile(t *testing.T, path, body string) {

@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
 )
 
 func TestPrepareLoginTerminalForCommitClosesExitedWindowsHost(t *testing.T) {

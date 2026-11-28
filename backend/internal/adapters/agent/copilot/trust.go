@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 )
 
 // Copilot CLI shows an interactive "Confirm folder trust" dialog on first

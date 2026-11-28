@@ -5,7 +5,7 @@ import { AppBrowserLinkContext, AppLink } from "./AppLink";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { aoBridge } from "../lib/bridge";
 
-const url = "https://github.com/aoagents/agent-orchestrator/pull/42";
+const url = "https://github.com/OrchestratorInc/agent-orchestrator/pull/42";
 afterEach(() => vi.restoreAllMocks());
 
 describe("AppLink", () => {

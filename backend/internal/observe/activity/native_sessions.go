@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // DefaultNativeSessionTick keeps three polls inside the 10 second window a

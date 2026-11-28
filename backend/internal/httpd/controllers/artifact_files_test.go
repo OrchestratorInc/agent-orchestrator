@@ -22,13 +22,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
-	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
-	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/mobilebridge"
+	previewutil "github.com/OrchestratorInc/agent-orchestrator/backend/internal/preview"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/renderpage"
 )
 
 func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T) {

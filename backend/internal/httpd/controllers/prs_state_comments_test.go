@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	prsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/pr"
 )
 
 const prURLForTests = "https://github.com/acme/widgets/pull/42"

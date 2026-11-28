@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/mcpserver"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/mcpserver"
 )
 
 func main() {

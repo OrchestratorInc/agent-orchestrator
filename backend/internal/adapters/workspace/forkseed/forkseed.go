@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // RefPrefix holds every seed ref. Leftovers here with no fork are reaped.

@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // turnFailureErrorLogEvery rate-limits the error log for a failed turn whose

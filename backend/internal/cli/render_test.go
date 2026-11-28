@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/mcpserver"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/mcpserver"
 )
 
 const pngSignature = "\x89PNG\r\n\x1a\n"

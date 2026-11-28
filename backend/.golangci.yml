@@ -124,4 +124,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/aoagents/agent-orchestrator
+        - github.com/OrchestratorInc/agent-orchestrator

@@ -3,8 +3,8 @@ package review
 import (
 	"sort"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 )
 
 // StateStatus is the per-PR review planning state.

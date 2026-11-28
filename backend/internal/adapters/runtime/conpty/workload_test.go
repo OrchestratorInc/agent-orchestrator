@@ -3,7 +3,7 @@ package conpty
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/procmem"
 )
 
 func TestCountWorkloadCommands(t *testing.T) {

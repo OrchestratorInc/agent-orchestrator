@@ -6,7 +6,7 @@ import (
 
 	sqlitedriver "modernc.org/sqlite"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/searchtext"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/searchtext"
 )
 
 // ao_search_body(body) decodes a session search document's stored text. The

@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	telemetryadapter "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/telemetry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
 )
 
 type telemetryRoundTripper func(*http.Request) (*http.Response, error)

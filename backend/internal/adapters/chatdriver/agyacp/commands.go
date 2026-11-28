@@ -1,6 +1,6 @@
 package agyacp
 
-import acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+import acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 
 // hiddenCommands are Antigravity built-ins kept out of the `/` menu.
 //

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
 // Qwen Code reports compression in its reply rather than as a status. Since

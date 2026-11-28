@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // LaunchColdChatSwitch builds the launch for a Chat provider switch whose source

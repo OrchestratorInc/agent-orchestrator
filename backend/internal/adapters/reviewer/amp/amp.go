@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	workeramp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	workeramp "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/amp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // Reviewer builds Amp's interactive reviewer command.

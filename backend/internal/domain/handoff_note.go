@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/pkg/handoffnote"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/handoffnote"
 )
 
 const (

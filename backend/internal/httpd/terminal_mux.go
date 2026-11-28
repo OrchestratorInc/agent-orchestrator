@@ -11,9 +11,9 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
-	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
+	previewutil "github.com/OrchestratorInc/agent-orchestrator/backend/internal/preview"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/terminal"
 )
 
 // terminalMuxReadLimit caps a single inbound frame. Client→server frames are small

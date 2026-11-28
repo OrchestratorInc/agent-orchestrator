@@ -4,10 +4,10 @@ package muse
 import (
 	"context"
 
-	workermuse "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/agentrestore"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	workermuse "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/muse"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/reviewer/agentrestore"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // Reviewer is the Muse Code reviewer adapter.

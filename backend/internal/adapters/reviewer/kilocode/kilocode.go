@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kilocode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	workeragent "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/kilocode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const configAssignmentPrefix = "KILO_CONFIG_CONTENT="

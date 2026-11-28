@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
 )
 
 // cuaDaemon serves the computer-use routes `ao mcp` uses. A nil tools body

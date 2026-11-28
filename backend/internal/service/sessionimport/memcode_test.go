@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const memcodeImportFixture = `{"session_id":"sess_01234567","saved_at":"2026-11-01T10:00:00Z","messages":[{"role":"system","content":[{"type":"text","text":"hidden instructions"}]},{"role":"user","content":[{"type":"text","text":"make a greeting"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"private thought"},{"type":"text","text":"Hello"},{"type":"tool_use","name":"bash","input":{"command":"private command"}}]},{"role":"user","content":[{"type":"tool_result","content":"private result"}]}]}`

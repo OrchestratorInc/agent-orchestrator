@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 var sessionIDPattern = regexp.MustCompile(`^ses_[A-Za-z0-9]{1,64}$`)

@@ -9,7 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/devices"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/devices"
 )
 
 const (

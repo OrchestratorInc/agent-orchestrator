@@ -9,8 +9,8 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func TestSessionOptionsUseProviderAdvertisedModelOption(t *testing.T) {

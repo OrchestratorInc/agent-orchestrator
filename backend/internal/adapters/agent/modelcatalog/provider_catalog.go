@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // These are native catalog snapshots, not credentials. Supplement auth-filtered

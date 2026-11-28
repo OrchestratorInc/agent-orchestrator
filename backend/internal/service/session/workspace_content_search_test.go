@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 func searchContentPaths(t *testing.T, svc *Service, query string) ([]string, []WorkspaceContentHit) {

@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/clienttz"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/requestscope"
 )
 
 func TestClientTimeZoneMiddlewareRecordsHeader(t *testing.T) {

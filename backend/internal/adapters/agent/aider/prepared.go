@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/importcopy"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const aiderPreparationFile = ".aider.chat.history.md.ao-import.json"

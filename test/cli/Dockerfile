@@ -25,7 +25,7 @@ COPY backend ./backend
 # now publishes a linux-x64 AppImage, so an unpinned binary would download it and
 # exit 0, defeating the fresh-install assertion below. See install-check.sh.
 RUN cd backend && CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-X github.com/aoagents/agent-orchestrator/backend/internal/cli.releaseRepo=AgentWrapper/ao-fresh-install-fixture" \
+      -ldflags "-X github.com/OrchestratorInc/agent-orchestrator/backend/internal/cli.releaseRepo=AgentWrapper/ao-fresh-install-fixture" \
       -o /out/ao ./cmd/ao
 
 # ---- stage 2: a clean machine with NO Go toolchain, just like an end user ----

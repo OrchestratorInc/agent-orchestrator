@@ -3,8 +3,8 @@ package piacp_test
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/pi"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func TestPiRemainsChatOnlyWithoutInterfaceHandoff(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 const codexFileStoreOverride = `cli_auth_credentials_store="file"`

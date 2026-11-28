@@ -24,15 +24,15 @@ import (
 
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
 
-	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	projectsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/project"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // emptyGetManager returns a GetResult that sets neither Project nor Degraded —

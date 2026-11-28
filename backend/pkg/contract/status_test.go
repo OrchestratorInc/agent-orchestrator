@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 )
 
 var statusNow = time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)

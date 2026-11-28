@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite" // read-only native session probes
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
