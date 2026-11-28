@@ -1667,6 +1667,28 @@ describe("controller recovery", () => {
 		apiErrorMessageMock.mockReset();
 	});
 
+	it("shows a message held for the agent at once and sends it once the agent is ready", async () => {
+		const MESSAGES = "/api/v1/sessions/{sessionId}/conversation/messages";
+		postMock.mockResolvedValue({ data: { turnId: "turn-1", state: "running" }, error: undefined });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const ready = deferred<void>();
+
+		let sending: Promise<unknown> = Promise.resolve();
+		act(() => {
+			sending = result.current.send({ text: "go on", clientMessageId: "m1" }, ready.promise);
+		});
+		await waitFor(() => expect(result.current.localEchos).toMatchObject([{ clientMessageId: "m1", delivery: "held" }]));
+		expect(postMock.mock.calls.filter(([path]) => path === MESSAGES)).toEqual([]);
+
+		await act(async () => {
+			ready.resolve();
+			await sending;
+		});
+		expect(postMock.mock.calls.filter(([path]) => path === MESSAGES)).toHaveLength(1);
+		await waitFor(() => expect(result.current.localEchos).toMatchObject([{ clientMessageId: "m1", turnId: "turn-1" }]));
+		expect(result.current.localEchos[0]?.delivery).toBeUndefined();
+	});
+
 	describe("sending to an archived chat", () => {
 		const RESTORE = "/api/v1/sessions/{sessionId}/restore";
 		const MESSAGES = "/api/v1/sessions/{sessionId}/conversation/messages";

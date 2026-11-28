@@ -281,6 +281,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			!previous.readiness || previous.readiness === "ready") return;
 		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 	}, [hostId, queryClient, session.id, statusReadiness]);
+	const heldSends = useRef<(() => void)[]>([]);
+	const agentPending = statusReadiness === "checking" || Boolean(agentResuming) || commands.resumingAgent;
+	useEffect(() => {
+		if (agentPending) return;
+		for (const release of heldSends.current.splice(0)) release();
+	}, [agentPending]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
@@ -829,7 +835,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					};
 					// A new message replaces an earlier switch's failure.
 					clearSwitchError();
-					if (!pendingSwitch) return commands.send(message);
+					if (!pendingSwitch) {
+						if (statusReadiness !== "checking" || renderSnapshot?.controller.state !== "stopped") return commands.send(message);
+						return commands.send(message, new Promise<void>((release) => { heldSends.current.push(release); }));
+					}
 					// The bar shows the mode the agent will start in only once its modes are known
 					// (Pi runs only with permissions bypassed); nothing goes before then.
 					if (!pendingPermissionModes) {

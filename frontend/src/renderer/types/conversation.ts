@@ -70,7 +70,7 @@ export type ActivityStatus =
  * into `failed`: the provider may have accepted the turn while AO lost the
  * connection, and silently retrying would run the work twice.
  */
-export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";
+export type DeliveryState = "queued" | "held" | "sending" | "accepted" | "uncertain" | "failed";
 
 /**
  * Result of attempting to steer a running turn. A typed non-acceptance proves

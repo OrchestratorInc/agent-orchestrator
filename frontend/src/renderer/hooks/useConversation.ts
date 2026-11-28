@@ -178,7 +178,7 @@ export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
 	/** A retained receipt can fail locally or have an uncertain dispatch. */
-	delivery?: "failed" | "uncertain";
+	delivery?: "failed" | "uncertain" | "held";
 	/** A continue after a stop, drawn as a marker while it is sent. */
 	continuation?: boolean;
 	createdAt: string;
@@ -1668,7 +1668,7 @@ export function useConversationCommands(
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
 
 	return {
-		send: (input: string | ConversationSendInput) => {
+		send: (input: string | ConversationSendInput, whenReady?: Promise<void>) => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 			const clientMessageId = (typeof input === "string" ? undefined : input.clientMessageId) ?? crypto.randomUUID();
 			const normalizedInput: ConversationSendInput = typeof input === "string"
@@ -1687,13 +1687,14 @@ export function useConversationCommands(
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			const variables = { targetSessionId: sessionId, clientMessageId, input: normalizedInput };
-			if (!terminated) return send.mutateAsync(variables);
+			if (!terminated && !whenReady) return send.mutateAsync(variables);
 			// An archived chat is restored by sending to it. The message shows at once,
 			// as any send's does, and goes out only after the restore succeeded, so it
 			// lands after it. A failed restore sent nothing: the composer gets the draft
 			// back with the reason, and the session stays archived.
-			addConversationLocalEcho(queryClient, stateKey(sessionId), sendLocalEcho(clientMessageId, normalizedInput));
-			return resume.mutateAsync().then(
+			const echo = sendLocalEcho(clientMessageId, normalizedInput);
+			addConversationLocalEcho(queryClient, stateKey(sessionId), whenReady ? { ...echo, delivery: "held" } : echo);
+			return (whenReady ?? resume.mutateAsync()).then(
 				() => send.mutateAsync(variables),
 				(error: unknown) => {
 					releaseConversationDispatch(queryClient, stateKey(sessionId), clientMessageId);

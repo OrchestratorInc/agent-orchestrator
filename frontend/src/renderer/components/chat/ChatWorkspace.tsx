@@ -2585,7 +2585,7 @@ function ChatWorkspaceContent({
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
 										restoring={restoring}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && !startupReconnecting && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
 										// keeps its look; the agent and model can still be changed.
@@ -2610,11 +2610,9 @@ function ChatWorkspaceContent({
 												? t("chat.archived.placeholder")
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
-													: startupReconnecting
-														? "Reconnecting to the agent…"
-														: signInRequired && snapshot.controller.state === "stopped"
-															? t("chat.reauth.composerPlaceholder")
-															: undefined
+													: signInRequired && snapshot.controller.state === "stopped"
+														? t("chat.reauth.composerPlaceholder")
+														: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -3240,7 +3238,7 @@ function ControllerBanner({
 	const waking = Boolean(resuming && controller.state === "stopped");
 	// Nothing to act on yet: offering Resume here invites a click the daemon is
 	// about to make unnecessary.
-	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
+	if (reconnecting && controller.state === "stopped" && !waking) return null;
 	const resumeClick = () => {
 		void Promise.resolve().then(() => onResume?.()).catch(() => {});
 	};
@@ -3264,20 +3262,18 @@ function ControllerBanner({
 		stopped: {
 			title: waking
 				? "Waking agent…"
-				: restarting
-					? "Reconnecting to the agent…"
-					: openElsewhere
-						? t("chat.controller.openElsewhere")
-						: needsResume
-							? t("chat.controller.couldNotConnect")
-							: "The agent controller stopped",
-			tone: waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
+				: openElsewhere
+					? t("chat.controller.openElsewhere")
+					: needsResume
+						? t("chat.controller.couldNotConnect")
+						: "The agent controller stopped",
+			tone: waking || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
-	const loading = controller.state === "connecting" || waking || restarting;
-	const actionable = controller.state === "stopped" && !waking && !restarting;
+	const loading = controller.state === "connecting" || waking;
+	const actionable = controller.state === "stopped" && !waking;
 	if (actionable && signInRequired) return null;
 
 	return (
@@ -3298,8 +3294,6 @@ function ControllerBanner({
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
 				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
-				) : restarting ? (
-					<span className="text-xs leading-snug text-muted-foreground">Orchestrator restarted. History is kept.</span>
 				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
