@@ -683,7 +683,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The CLI's login and the saved account signed in as it are one login: name each against the list the picker shows.
 	const accountPeers = useMemo(() => oneRowPerLogin(agentAccounts.accounts, agentAccounts.current), [agentAccounts.accounts, agentAccounts.current]);
 	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, accountPeers) : undefined;
-	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	const menuAccountCanMove = accountPeers.some((account) => account.signedIn && account.id !== agentAccounts.current);
 	// The account sheet follows the accounts while it is up (see `AccountPickerEntry`).
 	const accountPicker = useMemo(() => ({ options: agentAccountOptions(agentAccounts.accounts, agentAccounts.current), selected: agentAccounts.current ?? "" }), [agentAccounts.accounts, agentAccounts.current]);
 	const subscribeAccountPicker = useValueFeed(accountPicker);
