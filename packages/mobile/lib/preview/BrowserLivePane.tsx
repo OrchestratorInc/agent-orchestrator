@@ -5,7 +5,8 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
-import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveState } from "../browserLive";
+import { LocalBrowserTransport } from "../browserLive";
+import { commandSupported, type BrowserCommand, type BrowserTransport, type BrowserViewState } from "../browserTransport";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { machineState, rejectedMachineLine } from "../hostRoute";
 import { useApp } from "../store";
@@ -45,11 +46,20 @@ export type BrowserLivePaneProps = {
 	 * browser's controls go there too, so the page hands its item over.
 	 */
 	headerItem?: ReactElement | null;
+	/**
+	 * Makes the stream to show, memoised: a new one is made on every
+	 * (re)connect. Without it the pane streams this machine's desktop browser,
+	 * and waits for the paired connection to do so.
+	 */
+	transport?: () => BrowserTransport;
 };
 
-export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null }: BrowserLivePaneProps) {
+export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null, transport }: BrowserLivePaneProps) {
 	const app = useApp();
 	const { config } = app;
+	// A supplied stream doesn't go through the paired machine, so that
+	// machine's reconnects don't restart it.
+	const localConfig = transport ? null : config;
 	// Why there is no verified connection to stream over, while there is none.
 	// The app drops it every time it goes to the background, and Preview keeps
 	// this pane on screen through that when it holds an app preview, so a
@@ -58,7 +68,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	// machineState) or none is paired. Null with a connection, so nothing here
 	// restarts the stream.
 	const state = config ? "ok" : machineState(app);
-	const away = config ? null : app.paired === false ? "unpaired" : state === "ok" ? "reconnecting" : state;
+	const away = localConfig || transport ? null : app.paired === false ? "unpaired" : state === "ok" ? "reconnecting" : state;
 	// The board's words for the refusal, as one line.
 	const rejection = away === "rejected" ? rejectedMachineLine(app.errorStatus) : undefined;
 	const t = useTheme();
@@ -67,11 +77,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const reduceMotion = useReducedMotion();
 	const toast = useToast();
 	const showNotice = toast.show;
-	const client = useRef<BrowserLiveClient | null>(null);
+	const client = useRef<BrowserTransport | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
-	const [page, setPage] = useState<BrowserLiveState | null>(null);
+	const [page, setPage] = useState<BrowserViewState | null>(null);
 	const [frameURI, setFrameURI] = useState<string>();
 	// Whether the frame on screen came from the stream that is running now. The
 	// last stream's frame stays up through a reconnect so the page doesn't blank,
@@ -102,7 +112,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	useEffect(() => {
 		setPage(null);
 		setFrameIsLive(false);
-		if (!config) {
+		if (!localConfig && !transport) {
 			if (away === "reconnecting") {
 				setStatus("connecting");
 				setError(undefined);
@@ -120,9 +130,10 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		let disposed = false;
 		setStatus("connecting");
 		setError(undefined);
-		const live = new BrowserLiveClient(config, sessionID, {
+		const live = transport ? transport() : new LocalBrowserTransport(localConfig!, sessionID);
+		live.connect({
 			onStatus: (next, message) => {
-				if (disposed || next === "closed") return;
+				if (disposed) return;
 				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
 				if (next === "open") {
 					setError(undefined);
@@ -151,14 +162,13 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			},
 		});
 		client.current = live;
-		live.connect();
 
 		return () => {
 			disposed = true;
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, away, config, onDisabled, rejection, sessionID, showNotice]);
+	}, [attempt, away, localConfig, onDisabled, rejection, sessionID, showNotice, transport]);
 
 	// The bar is titled with the desktop's page while one is showing.
 	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;
@@ -167,7 +177,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	}, [onTitle, pageTitle]);
 	useEffect(() => () => onTitle?.(undefined), [onTitle]);
 
-	const send = useCallback((command: BrowserLiveCommand) => client.current?.send(command), []);
+	// A command the stream can't carry is dropped here, so no transport has to.
+	const send = useCallback((command: BrowserCommand) => {
+		const live = client.current;
+		if (live && commandSupported(live.capabilities, command)) live.send(command);
+	}, []);
 	const navigate = useCallback((action: NavigateAction) => send({ type: "navigate", payload: { action } }), [send]);
 	const [prompting, setPrompting] = useState(false);
 	const openURL = useCallback((url: string) => send({ type: "navigate", payload: { action: "open", url } }), [send]);

@@ -1,6 +1,7 @@
 import { ApiError, apiRequest } from "./api";
 import { authHeaders, type ServerConfig } from "./config";
-import { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
+import { browserLiveURL, decodeBrowserFrame } from "./browserLiveProtocol";
+import { commandSupported, toViewState, type BrowserCapabilities, type BrowserCommand, type BrowserTransport, type BrowserTransportHandlers } from "./browserTransport";
 
 export { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
 
@@ -38,22 +39,19 @@ const RECOVERABLE_ERRORS = new Map<string, string | null>([
 	["TAB_ID_REQUIRED", "That tab has already closed."],
 ]);
 
-type BrowserLiveHandlers = {
-	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
-	onState(state: BrowserLiveState): void;
-	onFrame(frame: BrowserLiveFrame): void;
-	// Also used when an older desktop does not support browser streaming.
-	onDisabled?(): void;
-};
-
-export class BrowserLiveClient {
+/** The desktop's browser, streamed through the daemon's live socket. */
+export class LocalBrowserTransport implements BrowserTransport {
+	// The desktop accepts key and text input; the rest arrive in later releases.
+	readonly capabilities: BrowserCapabilities = { text: true, keys: true, viewport: false, quality: false, control: false, dialogs: false };
 	private socket: WebSocket | null = null;
 	private closed = false;
 	private reportedError = false;
+	private handlers: BrowserTransportHandlers = { onStatus() {}, onState() {}, onFrame() {} };
 
-	constructor(private readonly config: ServerConfig, private readonly sessionID: string, private readonly handlers: BrowserLiveHandlers) {}
+	constructor(private readonly config: ServerConfig, private readonly sessionID: string) {}
 
-	connect(): void {
+	connect(handlers: BrowserTransportHandlers): void {
+		this.handlers = handlers;
 		this.closed = false;
 		this.reportedError = false;
 		this.handlers.onStatus("connecting");
@@ -101,7 +99,8 @@ export class BrowserLiveClient {
 		}
 	}
 
-	send(command: BrowserLiveCommand): void {
+	send(command: BrowserCommand): void {
+		if (!commandSupported(this.capabilities, command)) return;
 		if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(command));
 	}
 
@@ -114,7 +113,7 @@ export class BrowserLiveClient {
 	private async handleMessage(data: unknown): Promise<void> {
 		if (typeof data === "string") {
 			const message = JSON.parse(data) as { type?: string; payload?: BrowserLiveState; code?: string; message?: string };
-			if (message.type === "state" && message.payload) this.handlers.onState(message.payload);
+			if (message.type === "state" && message.payload) this.handlers.onState(toViewState(message.payload));
 			if (message.type === "error") {
 				const detail = message.message ?? message.code ?? "Browser host error";
 				if (message.code && RECOVERABLE_ERRORS.has(message.code)) {
