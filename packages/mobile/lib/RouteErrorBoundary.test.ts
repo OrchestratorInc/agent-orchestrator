@@ -13,6 +13,8 @@ const source = (route: string) => readFileSync(new URL(route, appDir), "utf8");
 const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
+	"+not-found.tsx",
+	"_sitemap.tsx",
 	"(tabs)/(workers)/index.tsx",
 	"(tabs)/(projects)/projects.tsx",
 	"prs/index.tsx",
@@ -77,8 +79,8 @@ const deferredRoutes = [
 describe("route error boundaries", () => {
 	it("places every route file on exactly one list", () => {
 		// expo-router takes any .js/.jsx/.ts/.tsx under app/ as a route, bar the
-		// `+api`, `+html`, `+middleware` and `+native-intent` files. This app has only
-		// `+native-intent`. The recursive listing joins with the platform separator.
+		// `+api`, `+html`, `+middleware` and `+native-intent` files (`+not-found` is a
+		// route). This app has only `+native-intent`. The recursive listing joins with the platform separator.
 		const routes = readdirSync(appDir, { recursive: true, encoding: "utf8" })
 			.filter((file) => /\.[jt]sx?$/.test(file) && !/^\+native-intent\.[jt]sx?$/.test(file))
 			.map((file) => file.split(sep).join("/"))

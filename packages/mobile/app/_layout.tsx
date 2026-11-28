@@ -277,6 +277,10 @@ function Shell() {
 				    stack's back: the scanner, then the manual form over it. */}
 				<Stack.Screen name="pair" options={{ title: "Pair a machine" }} />
 				<Stack.Screen name="connect" options={{ title: "Connect manually" }} />
+				{/* A link to a route the app does not have, and expo-router's sitemap,
+				    which would crash on native (see NotFoundScreen). */}
+				<Stack.Screen name="+not-found" options={{ title: "Not found" }} />
+				<Stack.Screen name="_sitemap" options={{ title: "Not found" }} />
 
 				{/* Sheets. `formSheet` is a real UIKit sheet, so the drag-to-dismiss,
 				    the grabber and the rubber-banding come from the OS rather than

@@ -1140,12 +1140,13 @@ screenshot. There is no session replay.
   `shell`, `cloud_terminal`, `cloud_new_project`, `cloud_plan`,
   `conversation_usage`, `model_picker`, `agent_picker`, `account`,
   `machine_name`, `onboarding`, `pair`, `connect`, `settings`,
-  `settings_theme`, `settings_machine`, `settings_cloud`, or `other` for a
-  screen added later.
+  `settings_theme`, `settings_machine`, `settings_cloud`, `not_found` (a link
+  to a route the app does not have), or `other` for a screen added later.
 - `presentation` is `toast`, `screen`, or `sheet`. `error_kind` is
   `render_crash`, `unreachable`, `auth`, `incompatible_host`, `rate_limited`,
-  `server_error`, `phone_offline`, `cloud_unavailable`, or `action_failed` (a
-  warning toast after an action).
+  `server_error`, `phone_offline`, `cloud_unavailable`, `action_failed` (a
+  warning toast after an action), or `route_not_found` (a link to a route the
+  app does not have; the path itself is not sent).
 
 `mobile.ui.usage_summary` properties (a counter that stayed at 0 is left out):
 
