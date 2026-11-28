@@ -16,7 +16,7 @@
 
 import type { CloudCpClient } from "./cloud-cp/client";
 import type { CloudCpCreateSessionRequest, CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
-import { billingSummaryPlan, isPaidBillingSummary, type CloudPlan } from "../../shared/cloud-plan";
+import { billingSummaryPlan, isPaidBillingSummary, isTrialBillingSummary, type CloudPlan } from "../../shared/cloud-plan";
 import { selectActiveOrganization } from "./cloud-offering";
 import { captureRendererEvent, hashedTelemetryID, setCloudTelemetryContext } from "./telemetry";
 
@@ -33,7 +33,7 @@ let defaultProvider = "";
 /** The signed-in org's offering from /me, re-tagged with the plan when billing loads. */
 let currentOffering: { orgId?: string; orgKind: string; billingMode: string } | undefined;
 /** Per org, the plan the last fresh billing summary showed this run. */
-const billedPlans = new Map<string, { plan: CloudPlan; paid: boolean }>();
+const billedPlans = new Map<string, { plan: CloudPlan; paid: boolean; trial: boolean }>();
 /** Per hashed org id, the plan last seen, so a change can be reported across launches. */
 const LAST_PLANS_KEY = "ao.telemetry.cloudPlans";
 const PLAN_RANKS = new Map<unknown, number>([["free", 0], ["starter", 1], ["pro", 2], ["enterprise", 3]]);
@@ -156,7 +156,7 @@ export function reportCloudOffering(me: CloudCpMeResponse): void {
 	currentOffering = { orgId, orgKind: kind, billingMode };
 	// No org or billing off: no plan. Otherwise the plan the last fresh billing
 	// summary showed for this org, unknown until one has (a contract org never fetches one).
-	const plan = !orgId || billingMode === "off" ? { plan: "none", paid: false } : billedPlans.get(orgId) ?? { plan: "unknown", paid: false };
+	const plan = !orgId || billingMode === "off" ? { plan: "none", paid: false, trial: false } : billedPlans.get(orgId) ?? { plan: "unknown", paid: false, trial: false };
 	setCloudTelemetryContext({ ...currentOffering, ...plan });
 	const key = `${orgId ?? ""}:${kind}:${billingMode}:${defaultProvider}`;
 	if (reportedOfferings.has(key)) return;
@@ -238,16 +238,19 @@ export function observeBillingSummary(summary: { entitled?: boolean; subscriptio
 
 /**
  * A fresh billing summary for orgId: tags events with its plan and reports
- * ao.billing.plan_changed when it differs from the plan last seen for that org.
- * The first summary for an org only records it; "none" and "unknown" are never
- * compared, and a failed fetch never gets here.
+ * ao.billing.plan_changed when the plan, or its trial state, differs from the
+ * one last seen for that org. A trial converting to paid on the same plan is
+ * same_tier; from_trial and to_trial tell a trial ending from a paying
+ * customer cancelling. The first summary for an org only records it; "none"
+ * and "unknown" are never compared, and a failed fetch never gets here.
  */
 export async function observeBillingPlan(orgId: string, summary: Parameters<typeof billingSummaryPlan>[0]): Promise<void> {
 	const plan = billingSummaryPlan(summary);
 	const paid = isPaidBillingSummary(summary);
-	billedPlans.set(orgId, { plan, paid });
+	const trial = isTrialBillingSummary(summary);
+	billedPlans.set(orgId, { plan, paid, trial });
 	// A summary that lands after /me said billing is off cannot bring a plan back.
-	if (currentOffering?.orgId === orgId && currentOffering.billingMode !== "off") setCloudTelemetryContext({ ...currentOffering, plan, paid });
+	if (currentOffering?.orgId === orgId && currentOffering.billingMode !== "off") setCloudTelemetryContext({ ...currentOffering, plan, paid, trial });
 	const to = PLAN_RANKS.get(plan);
 	if (to === undefined) return;
 	const orgHash = await hashedTelemetryID(orgId);
@@ -259,10 +262,12 @@ export async function observeBillingPlan(orgId: string, summary: Parameters<type
 	} catch {
 		// Unreadable: treated as a first load.
 	}
-	const previous = Object.hasOwn(lastPlans, orgHash) ? lastPlans[orgHash] : undefined;
-	if (previous === plan) return;
+	const stored = Object.hasOwn(lastPlans, orgHash) ? (lastPlans[orgHash] as { plan?: unknown; trial?: unknown } | null) : undefined;
+	const previous = stored && typeof stored === "object" ? stored.plan : undefined;
+	const previousTrial = stored && typeof stored === "object" && stored.trial === true;
+	if (previous === plan && previousTrial === trial) return;
 	try {
-		window.localStorage.setItem(LAST_PLANS_KEY, JSON.stringify({ ...lastPlans, [orgHash]: plan }));
+		window.localStorage.setItem(LAST_PLANS_KEY, JSON.stringify({ ...lastPlans, [orgHash]: { plan, trial } }));
 	} catch {
 		// Best effort: without storage a change is simply not reported.
 		return;
@@ -270,7 +275,7 @@ export async function observeBillingPlan(orgId: string, summary: Parameters<type
 	const from = PLAN_RANKS.get(previous);
 	if (from === undefined) return;
 	const direction = plan === "free" ? "cancel" : to > from ? "upgrade" : to < from ? "downgrade" : "same_tier";
-	void captureRendererEvent("ao.billing.plan_changed", { from_plan: previous, to_plan: plan, direction });
+	void captureRendererEvent("ao.billing.plan_changed", { from_plan: previous, to_plan: plan, direction, from_trial: previousTrial, to_trial: trial });
 }
 
 function prunePending(now: number): void {

@@ -620,14 +620,15 @@ function enumValue(value: unknown, allowed: ReadonlySet<string>, fallback = "unk
 	return typeof value === "string" && allowed.has(value) ? value : fallback;
 }
 
-export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string; plan?: string; paid?: boolean }): void {
+export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string; plan?: string; paid?: boolean; trial?: boolean }): void {
 	const next: TelemetryProperties = {
 		cloud_org_kind: enumValue(context.orgKind, CLOUD_ORG_KINDS),
 		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
 	};
 	cloudContext = { ...cloudContext, ...next };
 	const plan = cloudPlanValue(context.plan);
-	setCloudPlan(plan, context.paid === true && isPaidCloudPlan(plan));
+	const paid = context.paid === true && isPaidCloudPlan(plan);
+	setCloudPlan(plan, paid, true, paid && context.trial === true);
 	void hashedTelemetryID(context.orgId).then((hash) => {
 		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
 	});
@@ -638,16 +639,20 @@ export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: st
  * and in Electron main, which tags Sentry events with it. Only a change is
  * passed on; main keeps it in memory and sends nothing itself.
  */
-function setCloudPlan(plan: CloudPlan, paid: boolean, updatePerson = true): void {
-	const changed = cloudContext.cloud_plan !== plan || cloudContext.cloud_paid !== paid;
-	cloudContext = { ...cloudContext, cloud_plan: plan, cloud_paid: paid };
+function setCloudPlan(plan: CloudPlan, paid: boolean, updatePerson = true, trial = false): void {
+	const planChanged = cloudContext.cloud_plan !== plan;
+	const changed = planChanged || cloudContext.cloud_paid !== paid || cloudContext.cloud_trial !== trial;
+	cloudContext = { ...cloudContext, cloud_plan: plan, cloud_paid: paid, cloud_trial: trial };
 	if (!changed) return;
-	void Promise.resolve().then(() => aoBridge.telemetry.setPlan(plan)).catch(() => false);
+	// Sentry keys only on the plan; a trial is a paid plan there.
+	if (planChanged) void Promise.resolve().then(() => aoBridge.telemetry.setPlan(plan)).catch(() => false);
 	if (updatePerson && posthogReady && identifiedId && !analyticsOptedOut) posthog.setPersonProperties(cloudPlanPersonProperties());
 }
 
 function cloudPlanPersonProperties(): TelemetryProperties {
-	return typeof cloudContext.cloud_plan === "string" ? { cloud_plan: cloudContext.cloud_plan, cloud_paid: cloudContext.cloud_paid === true } : {};
+	return typeof cloudContext.cloud_plan === "string"
+		? { cloud_plan: cloudContext.cloud_plan, cloud_paid: cloudContext.cloud_paid === true, cloud_trial: cloudContext.cloud_trial === true }
+		: {};
 }
 
 function omitKey(properties: TelemetryProperties, key: string): TelemetryProperties {
@@ -1042,6 +1047,9 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 			safe.from_plan = cloudPlanValue(properties?.from_plan);
 			safe.to_plan = cloudPlanValue(properties?.to_plan);
 			safe.direction = enumValue(properties?.direction, PLAN_CHANGE_DIRECTIONS);
+			for (const key of ["from_trial", "to_trial"]) {
+				if (typeof properties?.[key] === "boolean") safe[key] = properties[key];
+			}
 			break;
 		case "ao.renderer.cloud_plan_refusal_shown":
 		case "ao.renderer.cloud_limit_reached":

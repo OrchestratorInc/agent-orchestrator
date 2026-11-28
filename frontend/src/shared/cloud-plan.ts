@@ -23,8 +23,17 @@ type BillingSummaryShape = {
 	exempt?: boolean;
 	billingMode?: string;
 	plan?: string;
+	subscriptionStatus?: string;
 	limits?: { plan?: string };
 };
+
+/**
+ * A paid plan on a free trial: Stripe marks the subscription trialing until it
+ * converts or ends. Still paid (badge, Sentry), but told apart in PostHog.
+ */
+export function isTrialBillingSummary(summary: BillingSummaryShape | undefined): boolean {
+	return isPaidBillingSummary(summary) && summary?.subscriptionStatus === "trialing";
+}
 
 /** Whether the org pays through self-serve billing: enabled, entitled, not exempt, not Free. */
 export function isPaidBillingSummary(summary: BillingSummaryShape | undefined): boolean {

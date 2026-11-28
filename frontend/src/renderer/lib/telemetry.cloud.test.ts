@@ -121,6 +121,13 @@ describe("cloud plan context", () => {
 		expect(withTelemetryContext({})).toMatchObject({ cloud_plan: plan, cloud_paid: paid });
 	});
 
+	it("flags a trial only on a paid plan", () => {
+		setCloudTelemetryContext({ ...org, plan: "pro", paid: true, trial: true });
+		expect(withTelemetryContext({})).toMatchObject({ cloud_plan: "pro", cloud_paid: true, cloud_trial: true });
+		setCloudTelemetryContext({ ...org, plan: "free", paid: false, trial: true });
+		expect(withTelemetryContext({})).toMatchObject({ cloud_plan: "free", cloud_paid: false, cloud_trial: false });
+	});
+
 	it("reports unknown for a value outside the vocabulary, never the value", () => {
 		for (const junk of ["Pro Plan $49", "price_123", "acme-corp", "", undefined]) {
 			setCloudTelemetryContext({ ...org, plan: junk, paid: true });
@@ -145,8 +152,8 @@ describe("cloud plan context", () => {
 	});
 
 	it("keeps only vocabulary values on ao.billing.plan_changed", async () => {
-		expect(await sanitizeRendererProperties("ao.billing.plan_changed", { from_plan: "starter", to_plan: "pro", direction: "upgrade", price: 49, org_name: "Acme" })).toEqual({
-			from_plan: "starter", to_plan: "pro", direction: "upgrade",
+		expect(await sanitizeRendererProperties("ao.billing.plan_changed", { from_plan: "starter", to_plan: "pro", direction: "upgrade", from_trial: true, to_trial: "yes", price: 49, org_name: "Acme" })).toEqual({
+			from_plan: "starter", to_plan: "pro", direction: "upgrade", from_trial: true,
 		});
 		expect(await sanitizeRendererProperties("ao.billing.plan_changed", { from_plan: "Pro $49", to_plan: "sub_123", direction: "sideways" })).toEqual({
 			from_plan: "unknown", to_plan: "unknown", direction: "unknown",

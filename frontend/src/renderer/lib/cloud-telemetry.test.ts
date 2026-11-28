@@ -228,7 +228,7 @@ describe("cloud funnel telemetry", () => {
 		await client.me();
 		expect(events()).toEqual(["ao.renderer.cloud_offering_resolved"]);
 		expect(captured[0]?.properties).toMatchObject({ org_kind: "b2c", billing_mode: "self_serve", default_provider: "freestyle", provider_count: 1 });
-		expect(contexts.at(-1)).toEqual({ orgId: "org-1", orgKind: "b2c", billingMode: "self_serve", plan: "unknown", paid: false });
+		expect(contexts.at(-1)).toEqual({ orgId: "org-1", orgKind: "b2c", billingMode: "self_serve", plan: "unknown", paid: false, trial: false });
 
 		reportCloudOffering({ ...me, offering: undefined } as unknown as CloudCpMeResponse);
 		expect(captured.at(-1)?.properties).toMatchObject({ org_kind: "unknown", billing_mode: "unknown", default_provider: "freestyle" });
@@ -317,10 +317,10 @@ describe("cloud funnel telemetry", () => {
 			set(paid("free"));
 			await client.getBilling("org-1");
 			expect(planChanges()).toEqual([
-				{ from_plan: "starter", to_plan: "pro", direction: "upgrade" },
-				{ from_plan: "pro", to_plan: "starter", direction: "downgrade" },
-				{ from_plan: "starter", to_plan: "pro", direction: "upgrade" },
-				{ from_plan: "pro", to_plan: "free", direction: "cancel" },
+				{ from_plan: "starter", to_plan: "pro", direction: "upgrade", from_trial: false, to_trial: false },
+				{ from_plan: "pro", to_plan: "starter", direction: "downgrade", from_trial: false, to_trial: false },
+				{ from_plan: "starter", to_plan: "pro", direction: "upgrade", from_trial: false, to_trial: false },
+				{ from_plan: "pro", to_plan: "free", direction: "cancel", from_trial: false, to_trial: false },
 			]);
 		});
 
@@ -331,9 +331,9 @@ describe("cloud funnel telemetry", () => {
 			const second = billingClient(paid("pro"));
 			await second.client.getBilling("org-1");
 			await second.client.getBilling("org-2");
-			expect(planChanges()).toEqual([{ from_plan: "starter", to_plan: "pro", direction: "upgrade" }]);
+			expect(planChanges()).toEqual([{ from_plan: "starter", to_plan: "pro", direction: "upgrade", from_trial: false, to_trial: false }]);
 			// Keyed by the hashed org id (the mock's hash), never the raw id.
-			expect(JSON.parse(window.localStorage.getItem("ao.telemetry.cloudPlans") ?? "{}")).toEqual({ "hash:org-1": "pro", "hash:org-2": "pro" });
+			expect(JSON.parse(window.localStorage.getItem("ao.telemetry.cloudPlans") ?? "{}")).toEqual({ "hash:org-1": { plan: "pro", trial: false }, "hash:org-2": { plan: "pro", trial: false } });
 		});
 
 		it("does not report a failed fetch, billing off or a sign-out", async () => {
@@ -347,6 +347,32 @@ describe("cloud funnel telemetry", () => {
 			set(paid("pro"));
 			await client.getBilling("org-1");
 			expect(planChanges()).toEqual([]);
+		});
+
+		it("tells a trial converting or ending apart from a paying customer", async () => {
+			const trialing = (plan: string) => ({ ...paid(plan), subscriptionStatus: "trialing" });
+			const { client, set } = billingClient(paid("free"));
+			await client.me();
+			await client.getBilling("org-1");
+			// Trial starts: an upgrade into a trial; still paid, flagged as a trial.
+			set(trialing("pro"));
+			await client.getBilling("org-1");
+			expect(contexts.at(-1)).toMatchObject({ plan: "pro", paid: true, trial: true });
+			// Converts on the same plan: same_tier, no longer a trial.
+			set({ ...paid("pro"), subscriptionStatus: "active" });
+			await client.getBilling("org-1");
+			expect(contexts.at(-1)).toMatchObject({ plan: "pro", paid: true, trial: false });
+			// A second trial that ends unpaid.
+			set(trialing("starter"));
+			await client.getBilling("org-1");
+			set(paid("free"));
+			await client.getBilling("org-1");
+			expect(planChanges()).toEqual([
+				{ from_plan: "free", to_plan: "pro", direction: "upgrade", from_trial: false, to_trial: true },
+				{ from_plan: "pro", to_plan: "pro", direction: "same_tier", from_trial: true, to_trial: false },
+				{ from_plan: "pro", to_plan: "starter", direction: "downgrade", from_trial: false, to_trial: true },
+				{ from_plan: "starter", to_plan: "free", direction: "cancel", from_trial: true, to_trial: false },
+			]);
 		});
 
 		it("uses the active org, not the first", async () => {
