@@ -69,6 +69,23 @@ export function createDesktopQuitController(options: {
 			}
 			return true;
 		},
+		/**
+		 * Whether the quit now reaching before-quit is an outside quit, or the
+		 * cleanup continuation of one. Its caller gives up within seconds, so
+		 * nothing (such as a feedback prompt) may hold it.
+		 */
+		isOutsideQuit(): boolean {
+			if (
+				options.platform !== "darwin" ||
+				!options.hasTray() ||
+				options.isUpdateRestartRequested()
+			) return false;
+			return externalQuitRequested || (!quitCompletelyRequested && !backgroundQuitRequested);
+		},
+		/** Whether before-quit is running inside Orchestrator's own Quit. */
+		isBackgroundQuit(): boolean {
+			return backgroundQuitRequested;
+		},
 		/** Start the outside-quit budget after the synchronous draft guard passes. */
 		startCleanupDeadline(): void {
 			if (!externalQuitRequested || deadline !== undefined) return;

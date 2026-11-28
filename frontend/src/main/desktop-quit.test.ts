@@ -215,6 +215,28 @@ describe("desktop quit", () => {
 		expect(inAppQuit()).toBe(true);
 	});
 
+	it("reports outside quits and their continuations, but not in-app or full quits", () => {
+		const { options, controller, event } = setup();
+		let duringInApp: [boolean, boolean] | undefined;
+		options.quit = vi.fn(() => { duringInApp = [controller.isOutsideQuit(), controller.isBackgroundQuit()]; });
+		controller.backgroundQuit();
+		expect(duringInApp).toEqual([false, true]);
+		expect(controller.isBackgroundQuit()).toBe(false);
+		expect(controller.isOutsideQuit()).toBe(true);
+		controller.handleBeforeQuit(event);
+		expect(controller.isOutsideQuit()).toBe(true);
+		controller.cancelQuit();
+		options.quit = vi.fn();
+		controller.quitCompletely();
+		expect(controller.isOutsideQuit()).toBe(false);
+	});
+
+	it("reports no outside quit off macOS, without the tray, or during an update restart", () => {
+		expect(setup({ platform: "win32" }).controller.isOutsideQuit()).toBe(false);
+		expect(setup({ hasTray: () => false }).controller.isOutsideQuit()).toBe(false);
+		expect(setup({ isUpdateRestartRequested: () => true }).controller.isOutsideQuit()).toBe(false);
+	});
+
 	it.each<NodeJS.Platform>(["win32", "linux"])("keeps %s quit behavior unchanged", (platform) => {
 		const { options, controller, event, inAppQuit } = setup({ platform });
 		expect(inAppQuit()).toBe(false);

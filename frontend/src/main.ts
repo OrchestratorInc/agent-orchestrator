@@ -5309,8 +5309,11 @@ app.on("before-quit", (event) => {
 	// update restart, a shutdown or a forced quit was bypassed before this. An
 	// unsafe chat draft asks first, so a cancelled quit never spends the prompt;
 	// once confirmed, the re-entered quit reaches the gate.
+	// An outside quit (Apple Event, Homebrew, SIGTERM) is never held. A held
+	// in-app Quit resumes as one, so it still only hides to the tray.
 	const chatDraftConfirmPending = chatDraftRisks.length > 0 && !chatDraftQuitConfirmed;
-	if (!chatDraftConfirmPending && exitFeedbackGate.intercept(() => app.quit())) {
+	const resumeQuit = desktopQuit.isBackgroundQuit() ? () => desktopQuit.backgroundQuit() : () => app.quit();
+	if (!chatDraftConfirmPending && !desktopQuit.isOutsideQuit() && exitFeedbackGate.intercept(resumeQuit)) {
 		event.preventDefault();
 		return;
 	}
