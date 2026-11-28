@@ -28,7 +28,7 @@ const pr2 = "https://github.com/ao/repo/pull/42";
 function run(over: Partial<ReviewRun> = {}): ReviewRun {
 	return {
 		id: "run-1", reviewId: "review-1", sessionId, batchId: "batch-1", harness: "codex",
-		triggerSource: "manual", prUrl: pr1, targetSha: "sha-1", status: "complete",
+		triggerSource: "manual", prUrl: pr1, targetSha: "sha-1", status: "completed",
 		verdict: "approved", body: "Looks good", githubReviewId: "101",
 		createdAt: "2026-09-23T00:00:00Z", autoInjectReview: true, ...over,
 	};

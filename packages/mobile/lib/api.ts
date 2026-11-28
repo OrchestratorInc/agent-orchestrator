@@ -1310,6 +1310,12 @@ export type PRReviewEntry = {
 	autoInjectReview: boolean;
 };
 
+/** A comment in a review thread, or a top-level PR comment. */
+export type PRComment = { id: string; author: string; body: string; createdAt?: string | null; isBot: boolean; url?: string };
+/** An inline review thread with its comments, oldest first. */
+export type PRThread = { id: string; path?: string; line?: number; resolved: boolean; comments: PRComment[] };
+export type PRRequestedReviewer = { login: string; isTeam?: boolean; avatarUrl?: string };
+
 export type SessionPRSummary = {
 	url: string;
 	htmlUrl?: string;
@@ -1333,6 +1339,14 @@ export type SessionPRSummary = {
 		resolvedBy?: PRUnresolvedReviewer[];
 		reviews?: PRReviewEntry[];
 	};
+	// The PR's details: read by the SCM observer for the open PRs it follows,
+	// or on request (POST /prs/{n}/details). Empty until detailsObservedAt is set.
+	detailsObservedAt?: string | null;
+	/** Inline review threads with their replies. */
+	threads?: PRThread[];
+	/** The newest top-level comments, oldest first. */
+	conversation?: PRComment[];
+	requestedReviewers?: PRRequestedReviewer[];
 	mergeability: {
 		state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 		reasons: string[];
@@ -1365,10 +1379,12 @@ export type ReviewRun = {
 	sessionId: string;
 	batchId: string;
 	harness: string;
-	triggerSource: "manual" | "auto";
+	triggerSource: "manual" | "auto" | "agent";
 	prUrl: string;
 	targetSha: string;
-	status: "running" | "complete" | "delivered" | "failed" | "cancelled";
+	// The daemon's run states (backend/internal/domain/review.go). Cloud's
+	// "complete" and "delivered" are read as "completed" (cloud/pullRequests.ts).
+	status: "queued" | "launching" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "superseded";
 	verdict: "" | "approved" | "changes_requested";
 	body: string;
 	githubReviewId: string;

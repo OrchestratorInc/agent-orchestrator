@@ -1,3 +1,4 @@
+import { buildReviewBlocks } from "../../shared/review/review-comments";
 import type { DashboardPR, DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
 
 export function reviewRouteForSession(session: DashboardSession, hostId?: string) {
@@ -113,13 +114,13 @@ export function reviewVerdictLabel(run: ReviewRun): string {
 
 /** Only a finished run with findings is worth giving to the worker. */
 export function reviewRunSendable(run: ReviewRun): boolean {
-	return (run.status === "complete" || run.status === "delivered") && Boolean(run.body?.trim());
+	return run.status === "completed" && Boolean(run.body?.trim());
 }
 
-/** "harness · trigger · status", adding "delivered" only when the status does not already say so. */
+/** "harness · trigger · status · delivered", the last once the worker has it. */
 export function reviewRunMeta(run: ReviewRun): string {
 	const parts = [run.harness, run.triggerSource, run.status];
-	if (run.deliveredAt && run.status !== "delivered") parts.push("delivered");
+	if (run.deliveredAt) parts.push("delivered");
 	return parts.filter(Boolean).join(" · ");
 }
 
@@ -194,4 +195,42 @@ export function reviewPrimaryActionLabel(action: ReviewPrimaryAction, multiple =
 		case "review_again": return multiple ? "Review all again" : "Review again";
 		default: return "";
 	}
+}
+
+/** A login as GitHub's two APIs write it: REST adds "[bot]" to an app's login, GraphQL does not. */
+const loginKey = (login: string) => login.trim().replace(/^@+/, "").toLowerCase().replace(/\[bot\]$/i, "");
+
+/**
+ * The provider reviewers a PR's reviewer can be asked to review again, with
+ * how many inline comments each left. Read from the shared comment model, so
+ * the phone offers whom the desktop's Reviewers menu does: not a bot (GitHub
+ * refuses review requests for apps), not one who approved or is already asked,
+ * not the PR's author, and not the Orchestrator's own reviews. `asked` holds the
+ * reviewers asked from here, left out until the provider's next read says so.
+ */
+export function rerequestableReviewers(
+	pr: SessionPRSummary | undefined,
+	reviews: Pick<SessionReviews, "reviews" | "runs"> | undefined,
+	asked: ReadonlySet<string> = new Set(),
+): { reviewerId: string; count: number }[] {
+	if (!pr) return [];
+	const [block] = buildReviewBlocks({
+		openPRs: [{ url: pr.url, number: pr.number, title: pr.title, repo: pr.repo }],
+		providerPRs: [pr],
+		reviewStates: reviews?.reviews ?? [],
+		runs: reviews?.runs ?? [],
+	});
+	if (!block) return [];
+	return block.reviewers
+		.filter((reviewer) => !reviewer.orchestrator && reviewer.canRerequest && !asked.has(loginKey(reviewer.id)))
+		.map((reviewer) => ({
+			reviewerId: reviewer.id,
+			// A person's own comments: an app sharing their base login ("dana[bot]") is not them.
+			count: block.comments.filter((comment) => comment.source === "provider" && comment.kind === "inline" && !comment.isBot && loginKey(comment.author) === loginKey(reviewer.id)).length,
+		}));
+}
+
+/** The key `rerequestableReviewers` matches an asked reviewer by. */
+export function rerequestKey(reviewerId: string): string {
+	return loginKey(reviewerId);
 }

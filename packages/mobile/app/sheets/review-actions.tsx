@@ -6,7 +6,6 @@ import {
 	type ReviewerAgentConfig,
 	type PRReviewCommentLink,
 	type PRReviewEntry,
-	type PRUnresolvedReviewer,
 	type SessionPRSummary,
 	type SessionReviews,
 } from "../../lib/api";
@@ -21,7 +20,7 @@ import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, Review
 import { useReviewBackend, type ReviewSettings } from "../../lib/reviewBackend";
 import { reviewerEffortPick, reviewerModelPick, reviewerModelView, type ReviewerModelState } from "../../lib/reviewer-picker.types";
 import { reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
-import { pullRequestSummaryForURL } from "../../lib/reviewView";
+import { pullRequestSummaryForURL, rerequestableReviewers, rerequestKey } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useThemedStyles } from "../../lib/ThemeProvider";
@@ -104,7 +103,9 @@ function ReviewActionsContent() {
 		return () => polling.abort();
 	}, [backend, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
-	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
+	// Asked from here: left out at once, so a second tap cannot ask again before the provider's next read shows them waited on.
+	const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
+	const externalReviewers = useMemo(() => rerequestableReviewers(pr, reviews, asked), [asked, pr, reviews]);
 	// Like the spawn sheet, only offer reviewers that can run now. A saved
 	// override that has since become unavailable stays listed so it can be read.
 	const availableReviewers = useMemo(() => agents
@@ -187,13 +188,14 @@ function ReviewActionsContent() {
 		}
 	}
 
-	async function rerequest(item: PRUnresolvedReviewer) {
+	async function rerequest(reviewerId: string) {
 		const ask = backend?.rerequest;
 		if (!ask || !pr || busy) return;
-		setBusy({ kind: "rerequest", id: item.reviewerId });
+		setBusy({ kind: "rerequest", id: reviewerId });
 		setError("");
 		try {
-			await ask(sessionId, pr.url, item.reviewerId);
+			await ask(sessionId, pr.url, reviewerId);
+			setAsked((current) => new Set(current).add(rerequestKey(reviewerId)));
 			haptics.success();
 		} catch (cause) {
 			setError(userFacingError(cause, "Could not request another review."));
@@ -328,25 +330,11 @@ function ReviewActionsContent() {
 			busy: busy?.kind === "rerequest" && busy.id === item.reviewerId,
 		}))}
 		onRerequest={(id) => {
-			const item = externalReviewers.find((reviewer) => reviewer.reviewerId === id);
-			if (item) void rerequest(item);
+			if (externalReviewers.some((reviewer) => reviewer.reviewerId === id)) void rerequest(id);
 		}}
 		feedback={feedback}
 		emptyFeedback={!pr && !error && !prMissing ? "No GitHub feedback is available for this pull request yet." : undefined}
 	/>;
-}
-
-function uniqueReviewers(pr: SessionPRSummary | undefined, aoReviewIds: Set<string>): PRUnresolvedReviewer[] {
-	const byId = new Map<string, PRUnresolvedReviewer>();
-	for (const item of [...(pr?.review.unresolvedBy ?? []), ...(pr?.review.resolvedBy ?? [])]) {
-		const links = item.links.filter((link) => !link.reviewId || !aoReviewIds.has(link.reviewId));
-		if (item.reviewerId && item.reviewerId !== pr?.author && links.length && !byId.has(item.reviewerId)) byId.set(item.reviewerId, { ...item, count: links.length, links });
-	}
-	for (const item of pr?.review.reviews ?? []) {
-		const isAOReview = [...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`));
-		if (!isAOReview && item.reviewerId && item.reviewerId !== pr?.author && !byId.has(item.reviewerId)) byId.set(item.reviewerId, { reviewerId: item.reviewerId, count: 0, links: [] });
-	}
-	return [...byId.values()];
 }
 
 type ReviewCommentItem = { reviewerId: string; comment: PRReviewCommentLink };
