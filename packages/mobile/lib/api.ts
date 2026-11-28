@@ -116,6 +116,12 @@ export type DashboardSession = {
 	// finished status: a merged session whose agent is still running belongs on
 	// the board, only a terminated one belongs in the archive.
 	isTerminated?: boolean;
+	/**
+	 * False when the daemon recorded no workspace for this session: its spawn
+	 * failed before one existed, so a restore has nothing to bring back and the
+	 * daemon refuses it every time. Absent (unknown) from daemons before 0.15.
+	 */
+	workspacePublished?: boolean;
 	provisionState?: "provisioning" | "ready" | "failed";
 	provisionError?: string;
 	/** The daemon's start-up stages while a Chat session provisions. Absent from older daemons. */
@@ -268,6 +274,7 @@ type WireSession = {
 	displayName?: string;
 	activity?: unknown;
 	isTerminated?: boolean;
+	workspacePublished?: boolean;
 	provisionState?: "provisioning" | "ready" | "failed";
 	provisionError?: string;
 	provisionSteps?: SessionProvisionStep[];
@@ -375,6 +382,7 @@ function mapSession(s: WireSession): DashboardSession {
 		prs,
 		previewUrl: s.previewUrl ?? null,
 		isTerminated: !!s.isTerminated,
+		...(typeof s.workspacePublished === "boolean" ? { workspacePublished: s.workspacePublished } : {}),
 		provisionState: s.provisionState,
 		provisionError: s.provisionError,
 		provisionSteps: s.provisionSteps?.length ? s.provisionSteps : undefined,
@@ -412,10 +420,14 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 const REQUEST_TIMEOUT_MS = 12000;
 const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
-// A cold agent resume spawns the chat host and reloads the transcript; the
-// daemon allows the driver 60s for that and cancels it if the client gives up.
-export const RESUME_REQUEST_TIMEOUT_MS = 70_000;
 export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
+// A spawn, an orchestrator start, a restore and a resume run the project's
+// Setup inside the request, and the daemon bounds them by Setup's own step
+// limits (30 minutes each by default) on top of a 2-minute base. Hanging up
+// first is not a harmless client timeout: the daemon cancels the operation and
+// kills the Setup step it was running. So the phone waits as long as the
+// daemon would for a one-step Setup, and leaves the real bound to the daemon.
+export const SETUP_REQUEST_TIMEOUT_MS = 32 * 60_000;
 
 // The server answered, but with an error status. Distinct from the errors fetch
 // itself throws (DNS/refused/timeout), which mean the server was never reached —
@@ -1606,13 +1618,53 @@ export async function setSessionAutoInjectCI(cfg: ServerConfig, id: string, auto
 	return mapSession(data?.session ?? data);
 }
 
-export async function restoreSession(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
+// Restore and resume ask for an end state: this session live, this agent
+// running. Every screen that offers them may be showing a board a poll behind,
+// and the daemon runs one such operation per session at a time, so:
+//  - a second request for a session joins the one already in flight instead of
+//    racing it into the daemon's "operation in progress" or "not restorable";
+//  - the daemon saying the end state already holds is success, not an error.
+const recoveriesInFlight = new Map<string, Promise<void>>();
+
+function recoverOnce(cfg: ServerConfig, kind: "restore" | "resume", id: string, run: () => Promise<void>): Promise<void> {
+	const key = `${kind}\n${cfg.hostId ?? httpBase(cfg)}\n${id}`;
+	const pending = recoveriesInFlight.get(key);
+	if (pending) return pending;
+	const recovery = run().finally(() => recoveriesInFlight.delete(key));
+	recoveriesInFlight.set(key, recovery);
+	return recovery;
 }
 
-/** Restart a stopped agent/controller without restoring a terminated AO session. */
-export async function resumeSessionAgent(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" }, RESUME_REQUEST_TIMEOUT_MS);
+function alreadyThere(error: unknown, code: string): boolean {
+	return error instanceof ApiError && error.status === 409 && error.code === code;
+}
+
+/** Bring a terminated session back. Resolves when the session is live, including when it already was. */
+export function restoreSession(cfg: ServerConfig, id: string): Promise<void> {
+	return recoverOnce(cfg, "restore", id, async () => {
+		try {
+			await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" }, SETUP_REQUEST_TIMEOUT_MS);
+		} catch (error) {
+			// The daemon refuses only a session that is not terminated, i.e. live.
+			if (!alreadyThere(error, "SESSION_NOT_RESTORABLE")) throw error;
+		}
+	});
+}
+
+/**
+ * Restart a stopped agent/controller without restoring a terminated AO session.
+ * Resolves when the agent is running, including when it already was.
+ */
+export function resumeSessionAgent(cfg: ServerConfig, id: string): Promise<void> {
+	return recoverOnce(cfg, "resume", id, async () => {
+		try {
+			// The first open of an imported chat runs Setup inside this request.
+			await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" }, SETUP_REQUEST_TIMEOUT_MS);
+		} catch (error) {
+			// As on desktop: the agent is already running, which is what was asked for.
+			if (!alreadyThere(error, "AGENT_NOT_EXITED")) throw error;
+		}
+	});
 }
 
 /**
@@ -1656,7 +1708,7 @@ export async function spawnSession(
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
 			clientRequestId: opts.clientRequestId,
 		}),
-	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	}, SETUP_REQUEST_TIMEOUT_MS);
 	const data = await res.json();
 	return mapSession(data?.session ?? data);
 }
@@ -1691,22 +1743,29 @@ export async function delegateTask(
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
 			clientRequestId: opts.clientRequestId,
 		}),
-	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	}, SETUP_REQUEST_TIMEOUT_MS);
 	const data = await res.json();
 	if (!data?.workerId) throw new Error("Your machine didn't return the new worker. Refresh the board to check whether it started.");
 	return getSession(cfg, data.workerId);
 }
 
+/**
+ * Without `mode` the daemon starts the orchestrator in Chat and falls back to
+ * Terminal UI by itself when this harness or installation cannot run Chat (no
+ * Chat driver, missing adapter, not signed in). Naming Chat turns that fallback
+ * off and refuses instead, so only an explicit choice (the Terminal UI retry)
+ * is sent. Every daemon the app supports applies this precedence.
+ */
 export async function launchOrchestrator(
 	cfg: ServerConfig,
 	projectId: string,
 	clean = false,
-	mode: SessionMode = "chat",
+	mode?: SessionMode,
 ): Promise<OrchestratorLink> {
 	const res = await req(cfg, `${API}/orchestrators`, {
 		method: "POST",
-		body: JSON.stringify({ projectId, clean, mode }),
-	});
+		body: JSON.stringify({ projectId, clean, ...(mode ? { mode } : {}) }),
+	}, SETUP_REQUEST_TIMEOUT_MS);
 	const data = await res.json();
 	const o = data?.orchestrator ?? {};
 	return {
@@ -1717,7 +1776,8 @@ export async function launchOrchestrator(
 		// active", not that a Chat session owns a tmux runtime handle.
 		hasRuntime: true,
 		isTerminal: false,
-		mode: o.mode === "tui" ? "tui" : o.mode === "chat" ? "chat" : mode,
+		// The daemon's reply names no mode; the next board refresh carries the one it chose.
+		mode: o.mode === "tui" ? "tui" : o.mode === "chat" ? "chat" : mode ?? "chat",
 	};
 }
 

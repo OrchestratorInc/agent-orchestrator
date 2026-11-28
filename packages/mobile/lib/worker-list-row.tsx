@@ -2,6 +2,7 @@ import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, BackHandler, Keyboard, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
+import { canRestore } from "./sessionStatus";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { sessionHostId } from "./hostedRows";
@@ -184,6 +185,7 @@ export const WorkerListRow = memo(
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
 		terminated,
+		restorable: canRestore(session),
 		// A live session whose agent has stopped: exited or crashed, but the AO
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),

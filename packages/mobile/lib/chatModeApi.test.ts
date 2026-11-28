@@ -406,6 +406,79 @@ describe("mobile Chat API boundaries", () => {
 		expect(init?.method).toBe("POST");
 	});
 
+	it("lets the daemon pick the orchestrator's mode, so it can fall back to Terminal UI itself", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ orchestrator: { id: "o-1", projectId: "p-1" } }, 201));
+		await launchOrchestrator(cfg, "p-1");
+		const [, init] = vi.mocked(fetch).mock.calls[0];
+		const body = JSON.parse(String(init?.body));
+		expect(body).toEqual({ projectId: "p-1", clean: false });
+	});
+
+	it.each([
+		["restore", () => restoreSession(cfg, "w-1"), "http://ao.test:3011/api/v1/sessions/w-1/restore"],
+		["resume", () => resumeSessionAgent(cfg, "w-1"), "http://ao.test:3011/api/v1/sessions/w-1/resume-agent"],
+		["orchestrator start", () => launchOrchestrator(cfg, "p-1"), "http://ao.test:3011/api/v1/orchestrators"],
+		["spawn", () => spawnSession(cfg, { projectId: "p-1" }), "http://ao.test:3011/api/v1/sessions"],
+	])("does not hang up on a %s while the project's Setup runs", async (_name, request, url) => {
+		vi.useFakeTimers();
+		try {
+			let reply!: (res: Response) => void;
+			vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => { reply = resolve; }));
+			const pending = request();
+			const [calledUrl, init] = vi.mocked(fetch).mock.calls[0];
+			expect(calledUrl).toBe(url);
+			// A one-step Setup such as a dependency install, well past the ordinary 12 s.
+			await vi.advanceTimersByTimeAsync(10 * 60_000);
+			expect(init?.signal?.aborted).toBe(false);
+			reply(response({ ok: true, orchestrator: { id: "o-1" }, session: { id: "w-1", projectId: "p-1" } }, 200));
+			await pending;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps whether an archived session has a workspace to restore", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ sessions: [
+			{ id: "w-1", projectId: "p-1", isTerminated: true, workspacePublished: false },
+			{ id: "w-2", projectId: "p-1", isTerminated: true, workspacePublished: true },
+			{ id: "w-3", projectId: "p-1", isTerminated: true },
+		] }));
+		const page = await getArchivedSessions(cfg);
+		expect(page.sessions.map((s) => [s.id, s.workspacePublished])).toEqual([["w-1", false], ["w-2", true], ["w-3", undefined]]);
+	});
+
+	it("treats a restore of a session that is already live as done", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ error: "conflict", code: "SESSION_NOT_RESTORABLE", message: "Session is not restorable" }, 409));
+		await expect(restoreSession(cfg, "w-1")).resolves.toBeUndefined();
+	});
+
+	it("treats a resume of an agent that is already running as done", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ error: "conflict", code: "AGENT_NOT_EXITED", message: "The agent is still running" }, 409));
+		await expect(resumeSessionAgent(cfg, "w-1")).resolves.toBeUndefined();
+	});
+
+	it("still reports a restore the daemon refused for another reason", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ error: "conflict", code: "SESSION_OPEN_ELSEWHERE", message: "Open elsewhere" }, 409));
+		await expect(restoreSession(cfg, "w-1")).rejects.toMatchObject({ status: 409, code: "SESSION_OPEN_ELSEWHERE" });
+	});
+
+	it("sends one restore for a session however many times it is asked for at once", async () => {
+		let reply!: (res: Response) => void;
+		vi.mocked(fetch).mockImplementation(async () => response({ ok: true }));
+		vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => { reply = resolve; }));
+		const first = restoreSession(cfg, "w-1");
+		const second = restoreSession(cfg, "w-1");
+		const other = restoreSession(cfg, "w-2");
+		reply(response({ ok: true }));
+		await Promise.all([first, second]);
+		await other;
+		const restores = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/w-1/restore"));
+		expect(restores).toHaveLength(1);
+		// A later request is a new restore, not the finished one replayed.
+		await restoreSession(cfg, "w-1");
+		expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/w-1/restore"))).toHaveLength(2);
+	});
+
 	it("acknowledges the exact durable interface-transition notice", async () => {
 		vi.mocked(fetch).mockResolvedValue(
 			response({

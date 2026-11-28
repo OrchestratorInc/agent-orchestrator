@@ -1424,7 +1424,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	);
 
 	const launchConductor = useCallback(
-		async (projectId: string, clean = false, mode: SessionMode = "chat", hostId?: string) =>
+		// No mode means "Chat where this machine can run it": see apiLaunchOrchestrator.
+		async (projectId: string, clean = false, mode?: SessionMode, hostId?: string) =>
 			trackFeature("conductor", async () => {
 				if (isCloudHost(hostId)) return launchCloudOrchestrator(cloudActionsRef.current, projectId, mode);
 				const c = requireConfig(hostId);

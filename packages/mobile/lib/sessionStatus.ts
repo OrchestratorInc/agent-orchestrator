@@ -6,6 +6,16 @@
 import type { DashboardSession } from "./api";
 import type { AttentionLevel } from "./theme";
 
+/**
+ * Whether Restore can bring this session back. Only a terminated session is
+ * restored, and the daemon refuses one it recorded no workspace for (its spawn
+ * failed before one existed) on every attempt, so that one offers no Restore.
+ * A daemon that does not say (before 0.15) keeps Restore on offer.
+ */
+export function canRestore(s: Pick<DashboardSession, "isTerminated" | "status" | "workspacePublished">): boolean {
+	return (s.isTerminated === true || s.status === "terminated") && s.workspacePublished !== false;
+}
+
 const TERMINAL_STATUSES = new Set(["killed", "terminated", "done", "cleanup", "errored", "merged"]);
 
 export function isTerminalStatus(status?: string | null): boolean {

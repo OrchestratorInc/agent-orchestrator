@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
-import { attentionOf, isTerminalStatus, sessionTitle } from "./sessionStatus";
+import { attentionOf, canRestore, isTerminalStatus, sessionTitle } from "./sessionStatus";
 
 // Minimal session; each test overrides only the fields it is about.
 const session = (over: Partial<DashboardSession> = {}): DashboardSession =>
@@ -106,5 +106,25 @@ describe("attentionOf", () => {
 
 	it("defaults to working", () => {
 		expect(attentionOf(session())).toBe("working");
+	});
+});
+
+describe("canRestore", () => {
+	it("restores a terminated session that has a workspace", () => {
+		expect(canRestore(session({ isTerminated: true, workspacePublished: true }))).toBe(true);
+	});
+
+	// Its spawn failed before a workspace existed: the daemon answers every
+	// restore with SESSION_INCOMPLETE_HANDLE.
+	it("does not offer to restore a session that never had a workspace", () => {
+		expect(canRestore(session({ isTerminated: true, workspacePublished: false }))).toBe(false);
+	});
+
+	it("keeps Restore when the daemon does not say (before 0.15)", () => {
+		expect(canRestore(session({ isTerminated: true }))).toBe(true);
+	});
+
+	it("never restores a live session", () => {
+		expect(canRestore(session({ isTerminated: false, workspacePublished: true }))).toBe(false);
 	});
 });

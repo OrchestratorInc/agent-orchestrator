@@ -29,6 +29,8 @@ export type WorkerActionState = {
 	terminated: boolean;
 	/** The runtime is stopped but the session is alive; the agent can be resumed. */
 	stopped: boolean;
+	/** False for a terminated session the daemon cannot restore (see canRestore). */
+	restorable?: boolean;
 	hasPr: boolean;
 	/** An Orchestrator Cloud session. */
 	cloud?: boolean;
@@ -43,7 +45,9 @@ export type WorkerActionState = {
 export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 	const actions: WorkerAction[] = [{ id: "open", title: "Open" }];
 
-	if (state.terminated) actions.push({ id: "restore", title: "Restore session" });
+	if (state.terminated) {
+		if (state.restorable !== false) actions.push({ id: "restore", title: "Restore session" });
+	}
 	else if (state.stopped) actions.push({ id: "resume", title: "Resume agent" });
 
 	actions.push(state.pinned ? { id: "unpin", title: "Unpin" } : { id: "pin", title: "Pin" });

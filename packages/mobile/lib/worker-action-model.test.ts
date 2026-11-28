@@ -50,6 +50,14 @@ describe("workerContextActions", () => {
 		expect(ids({ terminated: true })).not.toContain("resume");
 	});
 
+	// A session whose spawn failed before it had a workspace is refused by the
+	// daemon on every restore, so the menu must not offer one (or a resume).
+	it("offers no restore for a terminated session the daemon cannot restore", () => {
+		expect(ids({ terminated: true, restorable: false })).not.toContain("restore");
+		expect(ids({ terminated: true, restorable: false })).not.toContain("resume");
+		expect(ids({ terminated: true, restorable: true })).toContain("restore");
+	});
+
 	it("prefers restore when a session is both terminated and stopped", () => {
 		expect(ids({ terminated: true, stopped: true })).toContain("restore");
 		expect(ids({ terminated: true, stopped: true })).not.toContain("resume");
