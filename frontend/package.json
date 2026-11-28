@@ -5,7 +5,7 @@
 	"private": true,
 	"description": "Run and manage a fleet of AI coding agents",
 	"author": "Orchestrator.inc",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"homepage": "https://github.com/aoagents/agent-orchestrator",
 	"main": ".vite/build/main.js",
 	"repository": {
