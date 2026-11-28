@@ -2135,6 +2135,17 @@ function ChatWorkspaceContent({
 	});
 	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !openingTurnSettled(snapshot, controllerStopped) &&
 		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
+	const stoppedLocksComposer = snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues &&
+		!terminated && !startupReconnecting && (!resumingAgent || session?.provisionState === "failed");
+	const composerDisabled = !queueEdit?.clientMessageId && (
+		orchestratorBlocksComposer ||
+		(openingStarting && !session && !followUpWhileOpening) ||
+		loadingQuietly ||
+		stoppedLocksComposer ||
+		(controllerTransitioning && !accountMoveQueues) ||
+		(newWorkDisabled && sendBlockedReason === undefined) ||
+		composerLockedPlaceholder !== undefined
+	);
 	// An existing session opens docked before its history is read, never centered
 	// and then dropped once it loads. One that turns out empty stays docked: only a
 	// chat known to be new (the new chat page, a session still being created) centers.
@@ -2593,7 +2604,7 @@ function ChatWorkspaceContent({
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
 										restoring={restoring}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && !startupReconnecting && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={composerDisabled}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
 										// keeps its look; the agent and model can still be changed.
