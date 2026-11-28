@@ -22,7 +22,9 @@ import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats
 
 import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import { canResumeAgent } from "../../hooks/useCanResumeAgent";
+import { workspaceQueryKeyForHost } from "../../hooks/useWorkspaceQuery";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
@@ -57,7 +59,7 @@ import type { Theme } from "../../stores/ui-store";
 import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession, type WorkspaceSummary } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
@@ -281,17 +283,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			!previous.readiness || previous.readiness === "ready") return;
 		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 	}, [hostId, queryClient, session.id, statusReadiness]);
-	const heldSends = useRef<(() => void)[] | undefined>(undefined);
-	const agentPending = statusReadiness === "checking" || Boolean(agentResuming) || commands.resumingAgent;
-	useEffect(() => {
-		if (!agentPending) return;
-		const held: (() => void)[] = [];
-		heldSends.current = held;
-		return () => {
-			heldSends.current = undefined;
-			for (const release of held.splice(0)) release();
-		};
-	}, [agentPending]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
@@ -622,10 +613,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? unavailableConversationSnapshot(session)
 			: undefined);
 	const startupHold = statusReadiness === "checking" && sessionIsActive(session) && renderSnapshot?.controller.state === "stopped";
-	const sendWhenReady = (input: Parameters<typeof commands.send>[0]) => {
-		const held = startupHold ? heldSends.current : undefined;
-		return held ? commands.send(input, new Promise<void>((release) => { held.push(release); })) : commands.send(input);
-	};
+	const sendWhenReady = (input: Parameters<typeof commands.send>[0]) => startupHold
+		? commands.send(input, whenSessionRecovered(queryClient, session.id, hostId))
+		: commands.send(input);
 	// A held search match is applied to the conversation the daemon holds. An
 	// orchestrator with nothing cached, and a switch from the terminal, first
 	// render a placeholder under another conversation id. Find opened on that
@@ -999,6 +989,35 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		</>
 	);
 });
+
+function whenSessionRecovered(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
+	const workspacesKey = workspaceQueryKeyForHost(hostId);
+	const resumeKey = ["resume-agent", hostId ?? "local", sessionId];
+	let resumeSettled = false;
+	const recovered = () => {
+		const session = queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
+			?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === sessionId);
+		return session?.statusReadiness !== "checking" && queryClient.isMutating({ mutationKey: resumeKey }) === 0 &&
+			(resumeSettled || !canResumeAgent(session));
+	};
+	return new Promise((resolve) => {
+		if (recovered()) return resolve();
+		const settle = () => {
+			if (!recovered()) return;
+			stopQueries();
+			stopMutations();
+			resolve();
+		};
+		const stopQueries = queryClient.getQueryCache().subscribe((event) => {
+			if (event.query.queryHash === hashKey(workspacesKey)) settle();
+		});
+		const stopMutations = queryClient.getMutationCache().subscribe((event) => {
+			if (!event.mutation || hashKey(event.mutation.options.mutationKey ?? []) !== hashKey(resumeKey)) return;
+			if (event.mutation.state.status === "success" || event.mutation.state.status === "error") resumeSettled = true;
+			settle();
+		});
+	});
+}
 
 function unavailableConversationSnapshot(session: WorkspaceSession): ConversationSnapshot {
 	return {

@@ -549,10 +549,14 @@ describe("SessionChatSurface pending switch effort", () => {
 });
 
 describe("SessionChatSurface startup check", () => {
-	const sendDuringCheck = async (target: WorkspaceSession) => {
+	const listed = (client: QueryClient, target: WorkspaceSession) =>
+		client.setQueryData(["workspaces"], [{ id: target.workspaceId, sessions: [target] }]);
+	const checking = { ...session, statusReadiness: "checking" } satisfies WorkspaceSession;
+	const sendDuringCheck = async (target: WorkspaceSession, cached: WorkspaceSession = target) => {
 		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
 		conversationCommandState.send = vi.fn().mockResolvedValue({});
 		const client = new QueryClient();
+		listed(client, cached);
 		const view = render(<Wrapper client={client}><SessionChatSurface session={target} /></Wrapper>);
 		await act(async () => {
 			await sideMocks.workspaceSend?.("go on", undefined, "held-1");
@@ -565,18 +569,32 @@ describe("SessionChatSurface startup check", () => {
 	};
 
 	it("holds a message sent during the check until the check is over", async () => {
-		const { client, view, whenReady, released } = await sendDuringCheck({ ...session, statusReadiness: "checking" });
+		const { client, whenReady, released } = await sendDuringCheck(checking);
 		expect(whenReady).toBeInstanceOf(Promise);
 		expect(released()).toBe(false);
-		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
-		await act(async () => {});
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready" }); });
 		expect(released()).toBe(true);
 	});
 
-	it("lets a held message go when the chat view goes away", async () => {
-		const { view, released } = await sendDuringCheck({ ...session, statusReadiness: "checking" });
+	it("keeps holding after the chat view goes away, until that session's check is over", async () => {
+		const { client, view, released } = await sendDuringCheck(checking);
 		view.unmount();
 		await act(async () => {});
+		expect(released()).toBe(false);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready" }); });
+		expect(released()).toBe(true);
+	});
+
+	it("waits for the resume when the check finds the agent exited", async () => {
+		const { client, released } = await sendDuringCheck(checking);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready", activity: { state: "exited", lastActivityAt: "2026-08-08T00:00:00Z" } }); });
+		expect(released()).toBe(false);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready", activity: { state: "idle", lastActivityAt: "2026-08-08T00:00:00Z" } }); });
+		expect(released()).toBe(true);
+	});
+
+	it("sends at once when the check is already over", async () => {
+		const { released } = await sendDuringCheck(checking, { ...session, statusReadiness: "ready" });
 		expect(released()).toBe(true);
 	});
 
