@@ -70,7 +70,9 @@ import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
 import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse, isLoopbackHost } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
+import { FOCUS_QUERY_SOURCE, FOCUS_WORLD, parseFocusPayload } from "./browser-focus-probe";
 import type {
+	BrowserFocusedEditable,
 	BrowserLiveSink,
 	BrowserLiveState,
 	BrowserRemoteInput,
@@ -698,6 +700,15 @@ type BrowserEntry = {
   // Compared by identity: an older, aborted load of the same URL must not clear
   // a newer one.
   pendingNavigation?: { url: string };
+  // The isolated world the focus query runs in, for one document (queryFocus).
+  focusWorld?: { contextId: number; document: number };
+  focusQuery?: Promise<void>;
+  // The query whose answer may still be stored; one given up on is not.
+  focusQueryToken?: object;
+  // The page's focused text field as the focus query last found it.
+  focusedEditable?: BrowserFocusedEditable | null;
+  // Tells a phone watching this tab that its focused field changed.
+  onFocusChange?: () => void;
   findState: BrowserFindState & { requestId?: number };
   annotationEnabled: boolean;
   annotationSessions: Map<
@@ -751,6 +762,9 @@ type BrowserSessionEntry = {
   layoutRevision: number;
   networkTabId?: string;
   agentBrowserCommands: number;
+  // Control is on its way back to a person, waiting on a fresh read of the
+  // focused field (handBackControl). Until then, every update says "agent".
+  controlHandoff?: object;
   browserOperations: number;
   // Woken when no agent command or renderer operation is in flight.
   idleWaiters: Array<() => void>;
@@ -1190,6 +1204,11 @@ export function createBrowserViewHost(
     );
     syncBackgroundThrottling(session);
     if (!active) wakeIfIdle(session);
+    // A phone stops typing the moment the agent starts acting. Control comes
+    // back only once the page has said what its focused field now holds: the
+    // agent may have typed into it, and the phone starts again from that value.
+    if (session.agentBrowserCommands > 0) emitShownLiveState(session);
+    else handBackControl(session);
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
       active: session.agentBrowserCommands > 0,
@@ -1581,6 +1600,9 @@ export function createBrowserViewHost(
       }, 0);
     };
     wireAutomationEvents(view.webContents, entry);
+    entry.onFocusChange = () => {
+      if (isCurrentEntry() && session.live && session.activeTabId === entry.tabId) emitLiveState(session);
+    };
     // The preview is a separate WebContentsView, so renderer-window keydown
     // listeners never see keys typed here. Forward application shortcuts to the
     // shell renderer so they still work with the panel focused.
@@ -3447,6 +3469,7 @@ export function createBrowserViewHost(
     }
 
     session.profileSwitching = true;
+    emitShownLiveState(session);
     session.profileSwitchTargetId = normalizedRequestedProfileId;
     const previousProfileId = session.profileId;
     const previousPartition = session.profilePartition;
@@ -3574,6 +3597,7 @@ export function createBrowserViewHost(
       throw error;
     } finally {
       session.profileSwitching = false;
+      handBackControl(session);
       session.profileReplacing = false;
       session.profileSwitchTargetId = null;
     }
@@ -4332,7 +4356,41 @@ export function createBrowserViewHost(
 			}),
 			width: bounds.width,
 			height: bounds.height,
+			control: session.agentBrowserCommands > 0 || session.profileSwitching || session.controlHandoff ? "agent" : "human",
+			focusedEditable: current.focusedEditable ?? null,
 		};
+	}
+
+	// Hands control back to a person only with the focused field as the page
+	// holds it now: the agent may just have typed into it. Every update until
+	// then, a frame's included, still says the agent has control.
+	function handBackControl(session: BrowserSessionEntry): void {
+		const shown = shownEntry(session);
+		if (!session.live || !shown || session.agentBrowserCommands > 0 || session.profileSwitching) {
+			session.controlHandoff = undefined;
+			emitShownLiveState(session);
+			return;
+		}
+		const handoff = {};
+		session.controlHandoff = handoff;
+		const settle = () => {
+			if (session.controlHandoff !== handoff) return;
+			session.controlHandoff = undefined;
+			emitShownLiveState(session);
+		};
+		// A page that never answers must not keep the phone read-only.
+		const timeout = setTimeout(settle, CONTROL_HANDOFF_MAX_MS);
+		timeout.unref?.();
+		void queryFreshFocus(shown).finally(() => {
+			clearTimeout(timeout);
+			settle();
+		});
+	}
+
+	// For updates outside a stream's own lifecycle, which may find every tab
+	// closed: there is then no page to describe until one opens.
+	function emitShownLiveState(session: BrowserSessionEntry): void {
+		if (session.live && shownEntry(session)) emitLiveState(session);
 	}
 
 	function emitLiveState(session: BrowserSessionEntry): BrowserLiveState {
@@ -4398,6 +4456,7 @@ export function createBrowserViewHost(
 		try {
 			emitLiveState(session);
 			await retargetLiveStream(session);
+			watchFocus(session);
 			return emitLiveState(session);
 		} catch (error) {
 			session.live = undefined;
@@ -4405,6 +4464,25 @@ export function createBrowserViewHost(
 			if (!session.visible) applySessionBounds(session, activeEntry(session));
 			throw error;
 		}
+	}
+
+	// Focus can move without the phone: the page autofocuses a field, the agent
+	// or a desktop user clicks one. A phone that is watching asks again shortly.
+	function watchFocus(session: BrowserSessionEntry): void {
+		const live = session.live;
+		if (!live) return;
+		const timer = setInterval(() => {
+			if (session.live !== live) {
+				clearInterval(timer);
+				return;
+			}
+			// No tab is open: ask again once one is.
+			const shown = shownEntry(session);
+			if (shown) void queryFocus(shown);
+		}, FOCUS_POLL_MS);
+		timer.unref?.();
+		const shown = shownEntry(session);
+		if (shown) void queryFocus(shown);
 	}
 
 	function detachLiveStream(session: BrowserSessionEntry): Promise<void> | undefined {
@@ -4460,7 +4538,14 @@ export function createBrowserViewHost(
 		const session = await ensureSessionReady(sessionId);
 		const scrollOnly = input.kind === "wheel";
 		assertRemoteWritable(session, scrollOnly);
-		await queueNativeOperation(session, async () => {
+		await queueNativeOperation(session, () => dispatchRemoteInput(session, input, scrollOnly));
+		// A click or key may have moved focus, and typing changed the field.
+		const shown = shownEntry(session);
+		if (!scrollOnly && shown) await queryFocus(shown);
+	}
+
+	async function dispatchRemoteInput(session: BrowserSessionEntry, input: BrowserRemoteInput, scrollOnly: boolean): Promise<void> {
+		{
 			assertRemoteWritable(session, scrollOnly);
 			const entry = activeEntry(session);
 			await entry.ready;
@@ -4505,12 +4590,11 @@ export function createBrowserViewHost(
 			if (modifiers.length !== (input.modifiers ?? []).length || (modifiers.includes("meta") && ["q", "w"].includes(input.key.toLowerCase()))) {
 				throw browserError("INVALID_ARGUMENT", "Key combination is not allowed");
 			}
-			entry.view.webContents.sendInputEvent({
-				type: input.phase === "down" ? "keyDown" : "keyUp",
-				keyCode: input.key,
-				modifiers,
-			} as never);
-		});
+			// Through CDP, like text: native key events need a focused window,
+			// and a page the phone types into is usually parked.
+			await ensureDebugger(entry);
+			await entry.view.webContents.debugger!.sendCommand("Input.dispatchKeyEvent", remoteKeyEvent(input, modifiers));
+		}
 	}
 
 	async function handleRemoteNavigation(sessionId: string, input: BrowserRemoteNavigation): Promise<void> {
@@ -5679,6 +5763,11 @@ function emptyDevToolsState(viewId: string): BrowserDevToolsState {
   return { viewId, open: false, activeTabId: "", placement: "undocked" };
 }
 
+/** The active tab, or undefined once every tab has closed. */
+function shownEntry(session: BrowserSessionEntry): BrowserEntry | undefined {
+  return session.tabs.get(session.activeTabId);
+}
+
 function activeEntry(session: BrowserSessionEntry): BrowserEntry {
   const entry = session.tabs.get(session.activeTabId);
   if (!entry)
@@ -6320,6 +6409,7 @@ function wireNavEvents(
   };
   contents.on("did-navigate", (_event, url) => {
     resetFind();
+    entry.focusedEditable = null;
     entry.documentGeneration += 1;
     entry.navigationGeneration += 1;
     clearStaleFavicon(entry, url);
@@ -6681,6 +6771,122 @@ function hostOf(url: string): string {
     return new URL(url).hostname;
   } catch {
     return "";
+  }
+}
+
+/** The longest one focus read may take before it is given up on. */
+const FOCUS_QUERY_MAX_MS = 1_000;
+
+/** The longest a handback waits for the page to say what its field holds. */
+const CONTROL_HANDOFF_MAX_MS = 2_000;
+
+/** How often a watched page is asked which field has focus. */
+const FOCUS_POLL_MS = 500;
+
+const REMOTE_KEYS: Record<string, { keyCode: number; text?: string }> = {
+  Enter: { keyCode: 13, text: "\r" },
+  Tab: { keyCode: 9 },
+  Backspace: { keyCode: 8 },
+  Delete: { keyCode: 46 },
+  Escape: { keyCode: 27 },
+  ArrowLeft: { keyCode: 37 },
+  ArrowUp: { keyCode: 38 },
+  ArrowRight: { keyCode: 39 },
+  ArrowDown: { keyCode: 40 },
+  Home: { keyCode: 36 },
+  End: { keyCode: 35 },
+};
+const CDP_MODIFIERS: Record<string, number> = { alt: 1, control: 2, meta: 4, shift: 8 };
+
+function remoteKeyEvent(
+  input: Extract<BrowserRemoteInput, { kind: "key" }>,
+  modifiers: string[],
+): Record<string, unknown> {
+  const named = REMOTE_KEYS[input.key];
+  const printable = !named && [...input.key].length === 1 ? input.key : undefined;
+  const keyCode = named?.keyCode ?? (printable && /^[a-z0-9]$/i.test(printable) ? printable.toUpperCase().charCodeAt(0) : 0);
+  // Text makes a key down type its character; a shortcut types nothing.
+  const text = modifiers.some((value) => value !== "shift") ? undefined : named?.text ?? printable;
+  return {
+    type: input.phase === "down" ? (text ? "keyDown" : "rawKeyDown") : "keyUp",
+    key: input.key,
+    code: input.code,
+    windowsVirtualKeyCode: keyCode,
+    modifiers: modifiers.reduce((mask, value) => mask | (CDP_MODIFIERS[value] ?? 0), 0),
+    ...(input.phase === "down" && text ? { text, unmodifiedText: text } : {}),
+  };
+}
+
+// Asks the page which field has focus, in a world of its own that the page's
+// scripts cannot see. One query at a time per tab.
+function queryFocus(entry: BrowserEntry): Promise<void> {
+  // An agent tab shows AO's viewer page, whose fields are not the agent's page.
+  if (entry.agentTab !== undefined) return Promise.resolve();
+  entry.focusQuery ??= boundedFocusQuery(entry).finally(() => { entry.focusQuery = undefined; });
+  return entry.focusQuery;
+}
+
+// A page that stops answering must hold up neither the phone's next command
+// nor later reads: the query is given up on, and its late answer dropped.
+async function boundedFocusQuery(entry: BrowserEntry): Promise<void> {
+  const token = {};
+  entry.focusQueryToken = token;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const giveUp = new Promise<void>((resolve) => { timer = setTimeout(resolve, FOCUS_QUERY_MAX_MS); });
+  try {
+    await Promise.race([runFocusQuery(entry, token), giveUp]);
+  } finally {
+    clearTimeout(timer);
+    if (entry.focusQueryToken === token) entry.focusQueryToken = undefined;
+  }
+}
+
+// A query started from now: one already in flight may have read the page
+// before whatever just happened, such as the agent's last write.
+async function queryFreshFocus(entry: BrowserEntry): Promise<void> {
+  while (entry.focusQuery) await entry.focusQuery;
+  await queryFocus(entry);
+}
+
+async function runFocusQuery(entry: BrowserEntry, token: object): Promise<void> {
+  const debug = entry.view.webContents.debugger;
+  if (!debug?.isAttached()) return;
+  // A second try for a world that went away with its document.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (entry.focusWorld?.document !== entry.documentGeneration) {
+        const tree = await debug.sendCommand("Page.getFrameTree") as { frameTree?: { frame?: { id?: string } } } | undefined;
+        const frameId = tree?.frameTree?.frame?.id;
+        if (!frameId) return;
+        const world = await debug.sendCommand("Page.createIsolatedWorld", { frameId, worldName: FOCUS_WORLD }) as { executionContextId?: number } | undefined;
+        if (typeof world?.executionContextId !== "number") return;
+        entry.focusWorld = { contextId: world.executionContextId, document: entry.documentGeneration };
+      }
+      const queried = entry.documentGeneration;
+      const reply = await debug.sendCommand("Runtime.evaluate", {
+        expression: FOCUS_QUERY_SOURCE,
+        contextId: entry.focusWorld!.contextId,
+        returnByValue: true,
+      }) as { result?: { value?: unknown } } | undefined;
+      const value = reply?.result?.value;
+      if (typeof value !== "string") {
+        entry.focusWorld = undefined;
+        continue;
+      }
+      const focused = parseFocusPayload(value);
+      if (focused === undefined) return;
+      // An answer from a document that has since navigated away is stale.
+      if (entry.documentGeneration !== queried) return;
+      // The page numbers fields per document; the tab and document make it unique.
+      if (focused?.field) focused.field = `${entry.tabId}:${entry.documentGeneration}:${focused.field}`;
+      if (JSON.stringify(focused) === JSON.stringify(entry.focusedEditable ?? null)) return;
+      if (entry.focusQueryToken !== token) return;
+      entry.focusedEditable = focused;
+      entry.onFocusChange?.();
+      return;
+    } catch {
+      entry.focusWorld = undefined;
+    }
   }
 }
 

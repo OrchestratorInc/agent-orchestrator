@@ -220,7 +220,7 @@ function setupHost(
 				debuggerAttached = false;
 			}),
 			isAttached: () => debuggerAttached,
-			on: (event: string, listener: (...args: never[]) => void) => debuggerListeners.set(event, listener),
+			on: (event: string, listener: (...args: never[]) => void) => addListener(debuggerListeners, event, listener),
 			sendCommand: debuggerSendCommand,
 		},
 		clearHistory: () => undefined,
@@ -7502,5 +7502,339 @@ describe("remote session partitions", () => {
 		expect(sessionBrowserPartition(profile, "h_box/1")).not.toBe(sessionBrowserPartition(profile, "h_box_1"));
 		expect(sessionBrowserPartition(profile)).toBe(browserProfilePartition(profile));
 		expect(sessionBrowserPartition(null, "h_box")).not.toContain("-host-");
+	});
+});
+
+describe("browser live typing", () => {
+	const liveSink = () => ({ frame: vi.fn(), state: vi.fn(), error: vi.fn() });
+
+	// Answers the focus query the way a page would.
+	function focusPage(debuggerSendCommand: ReturnType<typeof setupHost>["debuggerSendCommand"]) {
+		const page = { focus: "null", worlds: 0 };
+		const original = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+			if (method === "Page.createIsolatedWorld") return { executionContextId: ++page.worlds };
+			if (method === "Runtime.evaluate" && params?.contextId === page.worlds) return { result: { value: page.focus } };
+			if (method === "Runtime.evaluate") throw new TypeError("Cannot find context with specified id");
+			return original(method, params);
+		});
+		return page;
+	}
+
+	it("focusin emits focusedEditable", async () => {
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human", focusedEditable: null }));
+
+		// The phone's tap focuses a field; the desktop asks the page right after.
+		page.focus = JSON.stringify({ kind: "text", value: "hi" });
+		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "up", x: 0.5, y: 0.5, button: "left" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "text", value: "hi" } }));
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.createIsolatedWorld", { frameId: "main", worldName: "ao-focus" });
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Runtime.evaluate", expect.objectContaining({ contextId: 1, returnByValue: true }));
+
+		// The page never sees the query, so it needs nothing bot managers detect.
+		for (const method of ["Runtime.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"]) {
+			expect(debuggerSendCommand.mock.calls.some(([called]) => called === method)).toBe(false);
+		}
+
+		// A password's value never leaves the desktop, and a malformed answer is ignored.
+		page.focus = JSON.stringify({ kind: "password", value: "hunter2" });
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "password" } }));
+		page.focus = "{";
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "password" } }));
+
+		// A new document gets a new world, and nothing focused until it is asked.
+		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
+		navigated({}, "https://example.com/next");
+		await host.execute("sess-1", "tabs");
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: null }));
+		page.focus = JSON.stringify({ kind: "search", value: "" });
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Tab", code: "Tab" });
+		expect(page.worlds).toBe(2);
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "search", value: "" } }));
+		await host.stopLiveStream("sess-1", 7);
+	});
+
+	it("names the focused field by tab and document as well as the page's number", async () => {
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		page.focus = JSON.stringify({ kind: "password", field: 1 });
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		const first = (sink.state.mock.lastCall![0] as { focusedEditable: { field: string } }).focusedEditable.field;
+		expect(first).toMatch(/^.+:\d+:1$/);
+
+		// The next document numbers its fields from 1 again: still another field.
+		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
+		navigated({}, "https://example.com/next");
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		const second = (sink.state.mock.lastCall![0] as { focusedEditable: { field: string } }).focusedEditable.field;
+		expect(second).toMatch(/:1$/);
+		expect(second).not.toBe(first);
+		await host.stopLiveStream("sess-1", 7);
+	});
+
+	// The agent may type into the field just before its command ends: control
+	// must come back with the page's value, never the cached one.
+	it("returns control with the page's current value of the focused field", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		page.focus = JSON.stringify({ kind: "text", value: "old", field: 1 });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: expect.objectContaining({ value: "old" }) }));
+		page.focus = JSON.stringify({ kind: "text", value: "agent wrote", field: 1 });
+		sink.state.mockClear();
+
+		await host.execute("sess-1", "tabs");
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human" })));
+
+		const returned = sink.state.mock.calls
+			.map(([state]) => state as { control: string; focusedEditable: { value?: string } | null })
+			.filter((state) => state.control === "human");
+		expect(returned.length).toBeGreaterThan(0);
+		for (const state of returned) expect(state.focusedEditable?.value).toBe("agent wrote");
+		await host.stopLiveStream("sess-1", 7);
+	});
+
+	// The desktop user may close the last tab while a phone watches.
+	it("keeps polling quietly with no tab open", async () => {
+		vi.useFakeTimers();
+		try {
+			const { debuggerSendCommand, host, invoke } = setupHost();
+			focusPage(debuggerSendCommand);
+			const { viewId } = await invoke("browser:ensure", "sess-1") as { viewId: string };
+			await host.startLiveStream("sess-1", 7, liveSink());
+			await invoke("browser:closeTab", { viewId, tabId: "t1" });
+			debuggerSendCommand.mockClear();
+			await vi.advanceTimersByTimeAsync(1500);
+			expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.evaluate", expect.anything());
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("lets profiles switch on a watched session with no tab open", async () => {
+		const profile: BrowserProfile = { id: "22222222-2222-4222-8222-222222222222", name: "Work", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+		const { host, invoke } = setupTabHost(fakeBrowserProfileStore(profile, { "worker-1": profile.id }));
+		const { viewId } = await invoke("browser:ensure", "worker-1") as { viewId: string };
+		await host.startLiveStream("worker-1", 7, liveSink());
+		await invoke("browser:closeTab", { viewId, tabId: "t1" });
+
+		await host.switchProfile(viewId, null).catch(() => undefined);
+		// A switch that never finished would refuse every later one.
+		await expect(host.switchProfile(viewId, profile.id)).resolves.toBeDefined();
+	});
+
+	it("drops an answer from a document that navigated away while it was asked", async () => {
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+
+		// The old document's answer is held until after the navigation.
+		let release!: () => void;
+		let asked = false;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			const result = await answer(method, params);
+			if (method === "Runtime.evaluate") {
+				asked = true;
+				await held;
+			}
+			return result;
+		});
+		page.focus = JSON.stringify({ kind: "text", value: "old page", field: 1 });
+		const asking = host.handleRemoteInput("sess-1", { kind: "text", value: "y" });
+		await vi.waitFor(() => expect(asked).toBe(true));
+		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
+		navigated({}, "https://example.com/next");
+		const afterNavigation = sink.state.mock.calls.length;
+		page.focus = "null";
+		release();
+		await asking;
+		await host.execute("sess-1", "tabs");
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human" })));
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: null }));
+		expect(JSON.stringify(sink.state.mock.calls.slice(afterNavigation))).not.toContain("old page");
+	});
+
+	// A poll that read the field before the agent's last write may still be in
+	// flight when control returns: its answer must not become the handoff.
+	it("returns control with a value read after the agent finished, not an older poll's", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		page.focus = JSON.stringify({ kind: "text", value: "old", field: 1 });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+
+		// The next read answers with what the page held when it was read, and
+		// is held until released.
+		let release!: () => void;
+		let asked = false;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			const result = await answer(method, params);
+			if (method === "Runtime.evaluate" && !asked) {
+				asked = true;
+				await held;
+			}
+			return result;
+		});
+		const polling = host.handleRemoteInput("sess-1", { kind: "text", value: "y" });
+		await vi.waitFor(() => expect(asked).toBe(true));
+
+		page.focus = JSON.stringify({ kind: "text", value: "agent wrote", field: 1 });
+		sink.state.mockClear();
+		const agent = host.execute("sess-1", "tabs");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		release();
+		await Promise.all([polling, agent]);
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human", focusedEditable: expect.objectContaining({ value: "agent wrote" }) })));
+		const handoff = sink.state.mock.calls
+			.map(([state]) => state as { control: string; focusedEditable: { value?: string } | null })
+			.find((state) => state.control === "human");
+		expect(handoff?.focusedEditable?.value).toBe("agent wrote");
+	});
+
+	// A frame may arrive while the handoff still asks the page: its state must
+	// not hand control back with the old value either.
+	it("keeps reporting agent control on every update until the handoff's read lands", async () => {
+		const { debuggerListeners, debuggerSendCommand, host } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		page.focus = JSON.stringify({ kind: "text", value: "old", field: 1 });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+
+		let release!: () => void;
+		let held = false;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "Runtime.evaluate" && !held) {
+				held = true;
+				await gate;
+			}
+			return answer(method, params);
+		});
+		page.focus = JSON.stringify({ kind: "text", value: "agent wrote", field: 1 });
+		sink.state.mockClear();
+		const agent = host.execute("sess-1", "tabs");
+		await vi.waitFor(() => expect(held).toBe(true));
+
+		const jpeg = Buffer.alloc(21);
+		jpeg.set([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08]);
+		jpeg.writeUInt16BE(720, 7);
+		jpeg.writeUInt16BE(1280, 9);
+		const message = debuggerListeners.get("message") as unknown as (event: unknown, method: string, params: unknown) => void;
+		message({}, "Page.screencastFrame", { data: jpeg.toString("base64"), sessionId: 1, metadata: { timestamp: 1 } });
+		await vi.waitFor(() => expect(sink.frame).toHaveBeenCalled());
+
+		release();
+		await agent;
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human" })));
+		const human = sink.state.mock.calls
+			.map(([state]) => state as { control: string; focusedEditable: { value?: string } | null })
+			.filter((state) => state.control === "human");
+		for (const state of human) expect(state.focusedEditable?.value).toBe("agent wrote");
+	});
+
+	// A page that stops answering must not hold up the phone's next command,
+	// nor stop later focus reads.
+	it("gives up on a focus read the page never answers", async () => {
+		vi.useFakeTimers();
+		try {
+			const { debuggerSendCommand, host } = setupHost();
+			const page = focusPage(debuggerSendCommand);
+			const sink = liveSink();
+			await host.startLiveStream("sess-1", 7, sink);
+			const answer = debuggerSendCommand.getMockImplementation()!;
+			let hang = true;
+			debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+				if (method === "Runtime.evaluate" && hang) return new Promise(() => undefined);
+				return answer(method, params);
+			});
+			const input = host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+			let settled = false;
+			void input.then(() => { settled = true; });
+			await vi.advanceTimersByTimeAsync(1_100);
+			expect(settled).toBe(true);
+
+			// The page answers again: the next read is not stuck behind the lost one.
+			hang = false;
+			page.focus = JSON.stringify({ kind: "search", value: "q", field: 1 });
+			await host.handleRemoteInput("sess-1", { kind: "text", value: "y" });
+			expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: expect.objectContaining({ kind: "search", value: "q" }) }));
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("notices focus the phone did not move while it watches", async () => {
+		vi.useFakeTimers();
+		try {
+			const { debuggerSendCommand, host } = setupHost();
+			const page = focusPage(debuggerSendCommand);
+			const sink = liveSink();
+			await host.startLiveStream("sess-1", 7, sink);
+			page.focus = JSON.stringify({ kind: "email", value: "" });
+			await vi.advanceTimersByTimeAsync(600);
+			expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "email", value: "" } }));
+
+			await host.stopLiveStream("sess-1", 7);
+			debuggerSendCommand.mockClear();
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.evaluate", expect.anything());
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("reports agent control while an agent command runs", async () => {
+		const { host } = setupHost();
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		sink.state.mockClear();
+
+		await host.execute("sess-1", "tabs");
+
+		// Control comes back once the page has been asked about its focused field.
+		await vi.waitFor(() => {
+			const controls = sink.state.mock.calls.map(([state]) => (state as { control: string }).control);
+			expect(controls).toEqual(["agent", "human"]);
+		});
+	});
+
+	it("types keys through CDP so a parked page receives them", async () => {
+		const { debuggerSendCommand, host, webContents } = setupHost();
+		await host.startLiveStream("sess-1", 7, liveSink());
+		const lastKey = () => debuggerSendCommand.mock.calls.filter(([method]) => method === "Input.dispatchKeyEvent").at(-1)?.[1];
+
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Enter", code: "Enter" });
+		expect(lastKey()).toEqual({
+			type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0, text: "\r", unmodifiedText: "\r",
+		});
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "up", key: "Enter", code: "Enter" });
+		expect(lastKey()).toEqual({
+			type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0,
+		});
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Backspace", code: "Backspace" });
+		expect(lastKey()).toEqual({
+			type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, modifiers: 0,
+		});
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "a", code: "KeyA", modifiers: ["control"] });
+		expect(lastKey()).toEqual({
+			type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
+		});
+		await expect(host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "q", code: "KeyQ", modifiers: ["meta"] }))
+			.rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		expect(webContents.sendInputEvent).not.toHaveBeenCalled();
 	});
 });
