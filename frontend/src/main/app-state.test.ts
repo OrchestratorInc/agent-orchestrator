@@ -10,6 +10,8 @@ import {
 	readFirstRunProjectPrompt,
 	markFirstRunProjectPromptSeen,
 	claimFirstRunExperimentExposure,
+	cliLinkFirstLaunchPending,
+	spendCliLinkFirstLaunch,
 	updateMigration,
 	type AppStateMarker,
 } from "./app-state";
@@ -51,6 +53,33 @@ describe("writeAppStateMarker", () => {
 		expect(m.lastReconciledAt).toBe("2026-06-26T10:00:00.000Z");
 		expect(m.installSource).toBe("npm-bootstrap");
 		expect(m.firstRunProjectPrompt).toBe("pending");
+	});
+
+	it("offers the first launch ao link once, and only to a new install", async () => {
+		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
+		await writeAppStateMarker(options);
+		await writeAppStateMarker(options);
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(true);
+		await spendCliLinkFirstLaunch(dir);
+		await spendCliLinkFirstLaunch(dir);
+		await writeAppStateMarker(options);
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(false);
+		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("eligible");
+	});
+
+	it("leaves an install from an earlier build, or one with a damaged marker, out of the first launch ao link", async () => {
+		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
+		await writeAppStateMarker(options);
+		const { cliLinkFirstLaunch: _dropped, ...older } = await readMarker(dir);
+		await writeFile(path.join(dir, APP_STATE_FILE_NAME), JSON.stringify(older));
+		await writeAppStateMarker(options);
+		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("skip");
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(false);
+
+		await writeFile(path.join(dir, APP_STATE_FILE_NAME), "{");
+		await writeAppStateMarker(options);
+		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("skip");
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(false);
 	});
 
 	it("keeps the first run prompt seen across later launch writes", async () => {
@@ -127,7 +156,7 @@ describe("writeAppStateMarker", () => {
 
 		const raw = await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8");
 		const keys = Object.keys(JSON.parse(raw) as Record<string, unknown>);
-		expect(keys.sort()).toEqual([...GO_READER_KEYS, "firstRunProjectPrompt"].sort());
+		expect(keys.sort()).toEqual([...GO_READER_KEYS, "firstRunProjectPrompt", "cliLinkFirstLaunch"].sort());
 		// Trailing newline, mirroring runfile.Write.
 		expect(raw.endsWith("}\n")).toBe(true);
 	});

@@ -444,7 +444,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					markFirstRunProjectPromptSeen: async () => undefined,
 				},
 				cliLink: {
-					setEnabled: async () => undefined,
 					inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
@@ -1484,7 +1483,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				tray: { setAttentionState: () => undefined, onOpenSession: unsubscribe },
 				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined, getExperimentCohort: async () => null, claimFirstRunExperimentExposure: async () => false, getFirstRunProjectPrompt: async () => "seen", markFirstRunProjectPromptSeen: async () => undefined },
 				cliLink: {
-					setEnabled: async () => undefined,
 					inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),

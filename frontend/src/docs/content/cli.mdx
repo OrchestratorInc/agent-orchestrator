@@ -15,7 +15,7 @@ The desktop app bundles the CLI and does not add it to your PATH. Until you link
 
 On Windows and Linux the binary is `daemon/ao` (`ao.exe` on Windows) inside the app's `resources` folder.
 
-To use the short `ao` name in any terminal on macOS or Linux, open **Settings → General**, turn on **Developer mode**, and choose **Link** beside **Global ao command**. The link stays up to date with the app. On macOS, move the app to Applications before linking; an AppImage install cannot be linked. Sessions that Orchestrator starts already have `ao` on their PATH.
+To use the short `ao` name in any terminal on macOS or Linux, open **Settings → General** and choose **Link** beside **Global ao command**. A new install makes this link by itself on first launch, when no `ao` is on your `PATH` yet and one of `/usr/local/bin`, `/opt/homebrew/bin` (macOS), `~/.local/bin` or `~/bin` is on your `PATH` and writable without a password. The link stays up to date with the app. On macOS, move the app to Applications before linking; an AppImage install cannot be linked. Sessions that Orchestrator starts already have `ao` on their PATH.
 
 To have a coding agent run these commands for you, see [Set up with your coding agent](/guides/agent-setup).
 

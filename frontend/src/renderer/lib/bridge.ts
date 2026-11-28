@@ -444,7 +444,6 @@ export const aoBridge: AoBridge =
 			markFirstRunProjectPromptSeen: async () => undefined,
 		},
 		cliLink: {
-			setEnabled: async () => undefined,
 			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),

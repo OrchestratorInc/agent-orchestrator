@@ -1004,7 +1004,6 @@ const api = {
 		markFirstRunProjectPromptSeen: () => ipcRenderer.invoke("appState:markFirstRunProjectPromptSeen") as Promise<void>,
 	},
 	cliLink: {
-		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
 		inspect: () => ipcRenderer.invoke("cliLink:inspect") as Promise<import("./shared/cli-link").CliLinkView>,
 		link: (confirmReplacement: boolean, expectedTarget?: string | null) =>
 			ipcRenderer.invoke("cliLink:link", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,

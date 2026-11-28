@@ -8,6 +8,7 @@ import {
 	CLI_LINK_MARKER_FILE,
 	inspectCliLink,
 	linkCli,
+	linkCliOnFirstLaunch,
 	selectCliLinkDirectory,
 	unlinkCli,
 	type CliLinkIo,
@@ -44,7 +45,6 @@ async function executable(directory: string, name: string, version: string): Pro
 
 function request(partial: Partial<CliLinkRequest> & Pick<CliLinkRequest, "appCliPath" | "linkDirectory" | "dataDir">): CliLinkRequest {
 	return {
-		developerMode: true,
 		platform: "darwin",
 		isPackaged: true,
 		...partial,
@@ -67,21 +67,6 @@ function counting(io: CliLinkIo): CliLinkIo & { symlinks: number } {
 const countedHolder = { symlinks: 0 };
 
 describe("cli link", () => {
-	it("refuses the action when developer mode is off without touching the filesystem", async () => {
-		const io: CliLinkIo = {
-			...nodeCliLinkIo(),
-			lstat: () => Promise.reject(new Error("filesystem touched")),
-			version: () => Promise.reject(new Error("filesystem touched")),
-		};
-		const result = await inspectCliLink(io, request({
-			developerMode: false,
-			appCliPath: "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao",
-			linkDirectory: CLI_LINK_DIRECTORY,
-			dataDir: "/tmp/does-not-matter",
-		}));
-		expect(result).toMatchObject({ ok: false, code: "developer-mode" });
-	});
-
 	it("refuses to inspect a real global bin directory from tests", async () => {
 		await expect(inspectCliLink(nodeCliLinkIo(), request({
 			appCliPath: "/tmp/ao",
@@ -192,14 +177,16 @@ describe("cli link", () => {
 		expect(result).toMatchObject({ ok: false, code: "missing-app" });
 	});
 
-	it("never claims a user made symlink to the app CLI", async () => {
+	it("shows a user made symlink to the app CLI as linked and never claims it", async () => {
 		const { linkDirectory, dataDir, apps } = await layout();
 		const appCliPath = await executable(apps, "ao", "1.0.0");
 		const linkPath = path.join(linkDirectory, "ao");
 		await symlink(appCliPath, linkPath);
 		const req = request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true, expectedTarget: appCliPath });
-		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
+		expect(await inspectCliLink(nodeCliLinkIo(), req)).toMatchObject({ ok: true, status: { current: { kind: "linked", managed: false } } });
+		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: true, changed: false });
 		expect(await unlinkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
+		expect(await unlinkCli(nodeCliLinkIo(), { ...req, confirmReplacement: false })).toMatchObject({ ok: false, code: "foreign" });
 		expect(await readlink(linkPath)).toBe(appCliPath);
 		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE)).catch(() => null)).toBeNull();
 	});
@@ -290,6 +277,88 @@ describe("cli link", () => {
 		const appCliPath = await executable(apps, "ao", "1.0.0");
 		expect(await linkCli(restricted, request({ appCliPath, linkDirectory, dataDir, shellPath }))).toMatchObject({ ok: true, linkPath: path.join(linkDirectory, "ao") });
 		expect(await lstat(path.join(protectedDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it("selects the directory where a command already points at this app", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const later = path.join(root, "later");
+		await mkdir(later);
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		await symlink(appCliPath, path.join(later, "ao"));
+		const shellPath = `${linkDirectory}:${later}`;
+		expect(await selectCliLinkDirectory(nodeCliLinkIo(), dataDir, shellPath, [linkDirectory, later], appCliPath)).toBe(later);
+		expect(await inspectCliLink(nodeCliLinkIo(), request({ appCliPath, linkDirectory: later, dataDir, shellPath })))
+			.toMatchObject({ ok: true, status: { current: { kind: "linked", managed: false } } });
+		expect(await selectCliLinkDirectory(nodeCliLinkIo(), dataDir, shellPath, [linkDirectory, later])).toBe(linkDirectory);
+	});
+
+	function firstLaunch() {
+		const state = { pending: true, asked: 0 };
+		return {
+			state,
+			pending: async () => {
+				state.asked += 1;
+				return state.pending;
+			},
+			spend: async () => {
+				state.pending = false;
+			},
+		};
+	}
+
+	it("links on a first launch only when the login shell PATH has no ao", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const other = path.join(root, "other");
+		await executable(other, "ao", "9.9.9");
+		const io = nodeCliLinkIo();
+		const base = request({ appCliPath, linkDirectory, dataDir });
+		const link = path.join(linkDirectory, "ao");
+
+		const idle = firstLaunch();
+		expect(await linkCliOnFirstLaunch(io, { ...base, isPackaged: false, shellPath: linkDirectory }, idle)).toBeNull();
+		expect(await linkCliOnFirstLaunch(io, base, idle)).toBeNull();
+		expect(idle.state).toEqual({ pending: true, asked: 0 });
+
+		const taken = firstLaunch();
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${linkDirectory}:${other}` }, taken)).toBeNull();
+		expect(taken.state.pending).toBe(false);
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, taken)).toBeNull();
+		expect(await lstat(link).catch(() => null)).toBeNull();
+		expect(await readFile(path.join(other, "ao"), "utf8")).toContain("9.9.9");
+
+		const fresh = firstLaunch();
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${appCliPath}:${linkDirectory}` }, fresh)).toMatchObject({ ok: true, changed: true, linkPath: link });
+		expect(fresh.state.pending).toBe(false);
+		expect(await readlink(link)).toBe(appCliPath);
+		expect(JSON.parse(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8"))).toMatchObject({ linkPath: link, targetPath: appCliPath });
+	});
+
+	it("keeps the first launch attempt when the app CLI does not answer", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = path.join(apps, "ao");
+		await writeFile(appCliPath, "#!/bin/sh\nexit 3\n");
+		await chmod(appCliPath, 0o755);
+		const attempt = firstLaunch();
+		expect(await linkCliOnFirstLaunch(nodeCliLinkIo(), { ...request({ appCliPath, linkDirectory, dataDir }), shellPath: linkDirectory }, attempt)).toMatchObject({ ok: false, code: "version" });
+		expect(attempt.state.pending).toBe(true);
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it.skipIf(process.getuid?.() === 0)("does not link on a first launch beside a PATH folder it cannot read", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const closed = path.join(root, "closed");
+		await mkdir(closed);
+		await chmod(closed, 0o000);
+		const attempt = firstLaunch();
+		try {
+			expect(await linkCliOnFirstLaunch(nodeCliLinkIo(), { ...request({ appCliPath, linkDirectory, dataDir }), shellPath: `${closed}:${linkDirectory}` }, attempt)).toBeNull();
+		} finally {
+			await chmod(closed, 0o755);
+		}
+		expect(attempt.state.pending).toBe(false);
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
 	});
 
 	it("keeps an existing AO managed link in its original directory for repair and unlink", async () => {

@@ -2,14 +2,8 @@ import { ipcMain } from "electron";
 import { homedir } from "node:os";
 import path from "node:path";
 import { nodeCliLinkIo } from "./cli-link-fs";
-import { CLI_LINK_DIRECTORY, inspectCliLink, linkCli, selectCliLinkDirectory, unlinkCli, type CliLinkRequest } from "../shared/cli-link";
+import { CLI_LINK_DIRECTORY, inspectCliLink, linkCli, linkCliOnFirstLaunch, selectCliLinkDirectory, unlinkCli, type CliLinkFirstLaunch, type CliLinkRequest, type CliLinkResult } from "../shared/cli-link";
 import { bundledDaemonBinaryName } from "../shared/daemon-launch";
-
-let developerMode = false;
-
-export function setCliLinkDeveloperMode(enabled: boolean): void {
-	developerMode = enabled;
-}
 
 export function registerCliLinkIpc(input: {
 	isPackaged: () => boolean;
@@ -18,22 +12,23 @@ export function registerCliLinkIpc(input: {
 	dataDir: string;
 	appVersion: string;
 	shellPath: () => string | undefined;
-}): void {
+	firstLaunch: CliLinkFirstLaunch;
+}): (loginShellPath: string | undefined) => Promise<CliLinkResult | null> {
 	const io = nodeCliLinkIo();
 	const request = async (confirmReplacement = false, expectedTarget?: string | null): Promise<CliLinkRequest> => {
 		const shellPath = input.shellPath();
+		const appCliPath = path.join(input.resourcesPath, "daemon", bundledDaemonBinaryName(process.platform));
 		return {
-			developerMode,
 			platform: process.platform,
 			isPackaged: input.isPackaged(),
 			appImage: input.appImage,
-			appCliPath: path.join(input.resourcesPath, "daemon", bundledDaemonBinaryName(process.platform)),
+			appCliPath,
 			linkDirectory: await selectCliLinkDirectory(io, input.dataDir, shellPath, [
 				CLI_LINK_DIRECTORY,
 				...(process.platform === "darwin" ? ["/opt/homebrew/bin"] : []),
 				path.join(homedir(), ".local", "bin"),
 				path.join(homedir(), "bin"),
-			]),
+			], appCliPath),
 			dataDir: input.dataDir,
 			appVersion: input.appVersion,
 			shellPath,
@@ -42,10 +37,14 @@ export function registerCliLinkIpc(input: {
 			expectedTarget,
 		};
 	};
-	ipcMain.handle("cliLink:setEnabled", (_event, enabled: unknown) => {
-		setCliLinkDeveloperMode(enabled === true);
-	});
 	ipcMain.handle("cliLink:inspect", async () => inspectCliLink(io, await request()));
 	ipcMain.handle("cliLink:link", async (_event, confirm: unknown, target: unknown) => linkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));
-	ipcMain.handle("cliLink:unlink", async (_event, confirm: unknown, target: unknown) => unlinkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));
+	ipcMain.handle("cliLink:unlink", async (_event, confirm: unknown, target: unknown) => {
+		const result = await unlinkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined));
+		if (result.ok) await input.firstLaunch.spend().catch(() => undefined);
+		return result;
+	});
+	return async (loginShellPath) => loginShellPath && (await input.firstLaunch.pending())
+		? linkCliOnFirstLaunch(io, { ...(await request()), shellPath: loginShellPath }, input.firstLaunch)
+		: null;
 }

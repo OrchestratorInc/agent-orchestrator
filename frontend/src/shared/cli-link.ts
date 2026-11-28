@@ -1,6 +1,6 @@
-// Developer Mode only. Links the global ao command to the CLI shipped inside the
-// installed app. It never edits shell startup files and never replaces a
-// command AO did not create.
+// Links the global ao command to the CLI shipped inside the installed app. It
+// never edits shell startup files and never replaces a command AO did not
+// create.
 
 import { randomUUID } from "node:crypto";
 
@@ -11,7 +11,6 @@ export const CLI_LINK_MARKER_FILE = "cli-link.json";
 const SYSTEM_LINK_DIRECTORIES = new Set(["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"]);
 
 export type CliLinkCode =
-	| "developer-mode"
 	| "unsupported"
 	| "missing-app"
 	| "permission"
@@ -22,7 +21,7 @@ export type CliLinkCode =
 
 export type CliLinkCurrent =
 	| { kind: "missing" }
-	| { kind: "linked"; target: string; version: string }
+	| { kind: "linked"; target: string; version: string; managed?: boolean }
 	| { kind: "stale"; target: string | null }
 	| { kind: "foreign"; target: string | null };
 
@@ -73,7 +72,6 @@ export type CliLinkIo = {
 };
 
 export type CliLinkRequest = {
-	developerMode: boolean;
 	platform: NodeJS.Platform;
 	isPackaged: boolean;
 	appImage?: string;
@@ -134,9 +132,6 @@ export function cliLinkSupport(input: {
 }
 
 function guard(io: CliLinkIo, request: CliLinkRequest): CliLinkFailure | ReadyLink {
-	if (!request.developerMode) {
-		return failure("developer-mode", "Turn on Developer mode to link the global ao command.");
-	}
 	const resolvedDir = io.resolve(request.linkDirectory);
 	if (!request.allowSystemLinkDir && SYSTEM_LINK_DIRECTORIES.has(resolvedDir)) {
 		throw new Error("refusing to inspect or change a real global CLI directory");
@@ -163,6 +158,7 @@ export async function selectCliLinkDirectory(
 	dataDir: string,
 	shellPath: string | undefined,
 	candidates: string[],
+	appCliPath?: string,
 ): Promise<string> {
 	const allowed = new Set(candidates.map((directory) => io.resolve(directory)));
 	const marker = await readMarker(io, dataDir);
@@ -175,10 +171,15 @@ export async function selectCliLinkDirectory(
 			}
 		}
 	}
-	for (const entry of shellPath?.split(":") ?? []) {
-		if (!entry || !entry.startsWith("/")) continue;
-		const directory = io.resolve(entry);
-		if (!allowed.has(directory)) continue;
+	const onPath = (shellPath?.split(":") ?? [])
+		.filter((entry) => entry.startsWith("/"))
+		.map((entry) => io.resolve(entry))
+		.filter((directory) => allowed.has(directory));
+	const appReal = appCliPath ? await io.realpath(appCliPath) : null;
+	for (const directory of appReal ? onPath : []) {
+		if (await io.realpath(io.join(directory, CLI_LINK_NAME)) === appReal) return directory;
+	}
+	for (const directory of onPath) {
 		if (await io.canWrite(directory)) return directory;
 	}
 	return io.resolve(candidates[0] ?? CLI_LINK_DIRECTORY);
@@ -212,7 +213,11 @@ async function classify(io: CliLinkIo, linkPath: string, appCliPath: string, mar
 	const appReal = await io.realpath(appCliPath);
 	const linkReal = await io.realpath(linkPath);
 	const sameAsApp = Boolean(appReal && linkReal && appReal === linkReal) || absolute === io.resolve(appCliPath);
-	if (!markerOwns) return { kind: "foreign", target: absolute, managed: false };
+	if (!markerOwns) {
+		return linkReal && sameAsApp
+			? { kind: "linked", target: absolute, version: "", managed: false }
+			: { kind: "foreign", target: absolute, managed: false };
+	}
 	if (!linkReal || !sameAsApp) return { kind: "stale", target: absolute, managed: true };
 	return { kind: "linked", target: absolute, version: "", managed: true };
 }
@@ -365,12 +370,32 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 	return { ok: true, changed: true, linkPath: status.linkPath, targetPath: status.proposedTarget, version: status.proposedVersion };
 }
 
+export type CliLinkFirstLaunch = { pending(): Promise<boolean>; spend(): Promise<unknown> };
+
+export async function linkCliOnFirstLaunch(io: CliLinkIo, request: CliLinkRequest, attempt: CliLinkFirstLaunch): Promise<CliLinkResult | null> {
+	const directories = (request.shellPath?.split(":") ?? []).filter((directory) => directory.startsWith("/"));
+	if (!directories.length || !cliLinkSupport(request).ok || !(await attempt.pending())) return null;
+	let taken = false;
+	for (const directory of directories) {
+		taken = Boolean(await io.lstat(io.join(directory, CLI_LINK_NAME)).catch((error: { code?: string }) => error?.code !== "ENOTDIR"));
+		if (taken) break;
+	}
+	const result = taken ? null : await linkCli(io, { ...request, confirmReplacement: false });
+	if (!result || result.ok || result.code !== "version") await attempt.spend();
+	return result;
+}
+
 export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise<CliLinkResult> {
 	const view = await inspectCliLink(io, request);
 	if (!view.ok) return view;
 	const { status } = view;
 	if (status.current.kind === "foreign") {
 		return failure("foreign", status.message ?? "The existing command is not an Orchestrator link.", {
+			linkPath: status.linkPath, currentTarget: status.current.target,
+		});
+	}
+	if (status.current.kind === "linked" && status.current.managed === false) {
+		return failure("foreign", `The command at ${status.linkPath} was not linked by Orchestrator. It was left unchanged.`, {
 			linkPath: status.linkPath, currentTarget: status.current.target,
 		});
 	}
@@ -384,7 +409,7 @@ export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise
 		return failure("io", `No ao command exists at ${status.linkPath}.`, { linkPath: status.linkPath });
 	}
 	const latest = await classify(io, status.linkPath, request.appCliPath, await readMarker(io, request.dataDir));
-	if (latest.kind === "foreign" || latest.kind === "missing" || latest.target !== status.current.target) {
+	if (latest.kind === "foreign" || latest.kind === "missing" || !latest.managed || latest.target !== status.current.target) {
 		return failure("foreign", `The command at ${status.linkPath} is not an Orchestrator link. It was left unchanged.`, {
 			linkPath: status.linkPath,
 		});

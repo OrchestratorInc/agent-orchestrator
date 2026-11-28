@@ -493,7 +493,6 @@ if (typeof window !== "undefined") {
 			markFirstRunProjectPromptSeen: async () => undefined,
 		},
 		cliLink: {
-			setEnabled: async () => undefined,
 			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),

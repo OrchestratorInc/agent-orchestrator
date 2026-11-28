@@ -63,7 +63,7 @@ Without the cask, call `ao` by its full path, or add an alias to your shell prof
 alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'
 ```
 
-To use the short `ao` name without the cask on macOS, or on Linux with a `.deb` or `.rpm` install, turn on **Developer mode** in **Settings → General** and choose **Link** beside **Global ao command**. AppImage installs cannot be linked. See [Run the CLI](/cli#run-the-cli).
+To use the short `ao` name without the cask on macOS, or on Linux with a `.deb` or `.rpm` install, open **Settings → General** and choose **Link** beside **Global ao command**. A new install makes this link by itself on first launch, when no `ao` is on your `PATH` yet and one of `/usr/local/bin`, `/opt/homebrew/bin` (macOS), `~/.local/bin` or `~/bin` is on your `PATH` and writable without a password. AppImage installs cannot be linked. See [Run the CLI](/cli#run-the-cli).
 
 Run `ao status` to confirm it works. Commands that act on projects and sessions need the desktop app open, because the app runs the daemon they talk to. To drive Orchestrator from a coding agent, see [Use Orchestrator from your coding agent](/agent-setup).
 

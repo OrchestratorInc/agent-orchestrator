@@ -280,7 +280,7 @@ import { planDaemonScope, raiseOomScoreAdj, type DaemonScopePlan } from "./main/
 import { createLifecycleLog, linuxProcessContext, markRunStarted, observeUnhandledRejections, type LifecycleRecord } from "./main/lifecycle-log";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readProcessStartMs } from "./main/process-start";
-import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { claimFirstRunExperimentExposure, cliLinkFirstLaunchPending, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, spendCliLinkFirstLaunch, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, isPrivacyGuideTarget, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyGuideApp, type PrivacyPane } from "./main/privacy-guide";
 import { appBundlePath, readAppPrivacy, requestAppPrivacy, type AppPrivacyGrants } from "./main/app-privacy";
@@ -3333,13 +3333,23 @@ async function restartDaemon(): Promise<DaemonStatus> {
 	return startDaemonForRestart();
 }
 
-registerCliLinkIpc({
+const linkCliOnFirstLaunch = registerCliLinkIpc({
 	isPackaged: () => app.isPackaged,
 	resourcesPath: process.resourcesPath,
 	appImage: process.env.APPIMAGE,
 	dataDir: desktopDataDir,
 	appVersion: app.getVersion(),
 	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
+	firstLaunch: {
+		pending: async () => {
+			const runFile = runFilePath();
+			return runFile ? cliLinkFirstLaunchPending(path.dirname(runFile)) : false;
+		},
+		spend: async () => {
+			const runFile = runFilePath();
+			if (runFile) await spendCliLinkFirstLaunch(path.dirname(runFile));
+		},
+	},
 });
 
 const CLI_SHADOW_SHELL_TIMEOUT_MS = 60_000;
@@ -5038,6 +5048,15 @@ app.whenReady().then(async () => {
 		await writeAppStateOnLaunch();
 	} catch (err) {
 		console.error("failed to write app-state marker:", err);
+	}
+	if (cliShadowEnabled(process.env, app.isPackaged) && (process.platform !== "darwin" || app.isInApplicationsFolder())) {
+		void ensureShellEnv()
+			.then(retryFailedEarlyShellEnvProbe)
+			.then(() => linkCliOnFirstLaunch(cachedShellEnv?.PATH))
+			.then((result) => {
+				if (result) console.log(result.ok ? `AO: first launch linked ao at ${result.linkPath}` : `AO: first launch did not link ao: ${result.message}`);
+			})
+			.catch((err) => console.error("AO: first launch ao link failed:", err));
 	}
 
 	const keybindingRunFile = runFilePath();
