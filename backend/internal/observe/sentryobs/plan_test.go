@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/getsentry/sentry-go"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 func TestPaidPlanSendsOutsideTheSampleAndTagsEveryEvent(t *testing.T) {
@@ -37,6 +39,20 @@ func TestPaidPlanSendsOutsideTheSampleAndTagsEveryEvent(t *testing.T) {
 	event := <-transport.events
 	if event.Tags["plan"] != "pro" || event.Tags["sample_rate"] != fatalErrorRate {
 		t.Fatalf("paid capture tags = %+v", event.Tags)
+	}
+
+	// The plan read at admission rides the event: a change before the send
+	// cannot split admission, the plan tag and sample_rate.
+	SetPlan("pro")
+	admitted, send := admitPlan(map[string]string{"component": "daemon"})
+	SetPlan("free")
+	if !send {
+		t.Fatal("pro event was not admitted")
+	}
+	capture(sentry.LevelError, admitted, "", telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, false)
+	event = <-transport.events
+	if event.Tags["plan"] != "pro" || event.Tags["sample_rate"] != fatalErrorRate {
+		t.Fatalf("snapshot tags = %+v", event.Tags)
 	}
 
 	SetPlan("Acme Corp")
