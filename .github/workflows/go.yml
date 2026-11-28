@@ -152,6 +152,33 @@ jobs:
       - name: Test Goose readiness and inventory
         run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|WarmReadinessAndFindInstalled|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
 
+  # TEMPORARY audit for #3687: the whole suite on Windows, to list the failures.
+  windows-full-audit:
+    if: inputs.windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    defaults:
+      run:
+        working-directory: backend
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Test
+        run: |
+          selected=$(go list ./... | awk -v shard=${{ matrix.shard }} '((NR - 1) % 4) == shard')
+          test -n "$selected"
+          printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=20m
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
