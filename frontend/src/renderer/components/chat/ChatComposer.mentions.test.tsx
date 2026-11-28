@@ -6,7 +6,7 @@ import { chatDraftScopeKey } from "../../lib/chat-drafts";
 import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
 import type { CloudCpMentionCandidates } from "../../lib/cloud-cp/types";
 import { useUiStore } from "../../stores/ui-store";
-import { lexicalEditorText, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
+import { deleteBackwardInLexicalEditor, lexicalEditorText, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatComposer, type ComposerMentionSource } from "./ChatComposer";
 
@@ -60,6 +60,24 @@ beforeEach(() => {
 });
 
 describe("the @ menu", () => {
+	it("turns a chip with letters typed against it into the plain text it reads as, and sends no mention of it", async () => {
+		const { field, onSend } = renderComposer({ mentions: mentions() });
+		await typeInLexicalEditor(field, "Ask @che");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="person"]')).not.toBeNull());
+		// The space after the chip goes, and letters follow it directly.
+		await deleteBackwardInLexicalEditor(field);
+		expect(lexicalEditorText(field)).toBe("Ask @Chen Wei");
+		await typeInLexicalEditor(field, "n");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="person"]')).toBeNull());
+		expect(lexicalEditorText(field)).toBe("Ask @Chen Wein");
+		act(() => field.focus());
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalled());
+		expect(onSend.mock.calls[0]![0]).toBe("Ask @Chen Wein");
+		expect(onSend.mock.calls[0]![7] ?? []).toEqual([]);
+	});
+
 	it("offers files but no people or teams while editing a queued message, whose edit carries no mentions", async () => {
 		const source = mentions();
 		const { field } = renderComposer({ mentions: source, editingQueuedTurnId: "turn-queued", draftSeed: { id: "turn-queued:owner", text: "" } });

@@ -91,7 +91,7 @@ export function mentionSplitter<T extends { name: string }>(mentions: readonly T
 		while (index < text.length) {
 			if (text[index] === "@" && (index === 0 || /\s/.test(text[index - 1]!))) {
 				const name = names.find((candidate) => text.startsWith(`@${candidate}`, index) &&
-					!continuesName(text, index + candidate.length + 1));
+					!continuesMentionName(text, index + candidate.length + 1));
 				if (name !== undefined) {
 					if (plain) parts.push(plain);
 					plain = "";
@@ -109,7 +109,7 @@ export function mentionSplitter<T extends { name: string }>(mentions: readonly T
 }
 
 /** Whether the character at index (a whole code point, so a letter outside the BMP counts) carries a name on. */
-function continuesName(text: string, index: number): boolean {
+export function continuesMentionName(text: string, index: number): boolean {
 	const point = text.codePointAt(index);
 	return point !== undefined && /[\p{L}\p{N}_]/u.test(String.fromCodePoint(point));
 }

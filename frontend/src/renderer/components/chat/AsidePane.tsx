@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ArrowUp, AtSign, CircleCheck, MoreHorizontal } from "@/components/app-icons";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCloudMeUserId } from "../../hooks/useCloudMeUserId";
 import { useCachedQueryData } from "../../hooks/useCloudScriptRuns";
 import {
 	asideIdOf,
@@ -890,6 +891,10 @@ export function CloudAsidePane({
 }) {
 	const { t } = useTranslation();
 	const { client, ready, baseUrl, userId } = useCloudCp();
+	// Who this person is to the control plane (GET /me): comments name their
+	// authors by its user ids, not by the sign-in's own id (the identity
+	// provider's). The sign-in's stands in only until /me answers.
+	const me = useCloudMeUserId() ?? userId;
 	// A message the conversation has not drawn (older than what it loaded, or a
 	// long chat's row out of view) is opened as a mention is: read in, then
 	// scrolled to. No notification text stands in for it.
@@ -1058,7 +1063,7 @@ export function CloudAsidePane({
 					authorName: reply.authorName,
 					createdAt: reply.createdAt,
 					edited: Boolean(reply.editedAt || reply.editedSequence),
-					own: Boolean(userId && reply.authorUserId === userId),
+					own: Boolean(me && reply.authorUserId === me),
 					...(reply.sequence !== undefined ? { sequence: reply.sequence } : {}),
 					...(version > 0 ? { version } : {}),
 					...(refusedSeen && (reply.sequence ?? 0) > lastSent && refusedSeen.get(reply.replyId) !== version ? { changed: true } : {}),
@@ -1069,7 +1074,7 @@ export function CloudAsidePane({
 			shown.push({ id: "reply:fallback", text: fallback.body, mentions: [], authorName: fallback.authorName, createdAt: fallback.createdAt });
 		}
 		return [...shown, ...pending];
-	}, [asideId, fallback, lastSent, live, liveChanges, pending, refusedSeen, removed, sent, thread.data, userId]);
+	}, [asideId, fallback, lastSent, live, liveChanges, me, pending, refusedSeen, removed, sent, thread.data]);
 
 	// "Also send to agent" sends the thread as this person read it: seen lists
 	// every comment shown, at the version shown (the newest copy's
@@ -1105,10 +1110,10 @@ export function CloudAsidePane({
 			const event = events[index]!;
 			if (event.sequence <= after) break;
 			const reply = asideReplyOf(event);
-			if (reply && reply.asideId === asideId && reply.authorUserId !== userId) return reply.replyId;
+			if (reply && reply.asideId === asideId && reply.authorUserId !== me) return reply.replyId;
 		}
 		return "";
-	}, [asideId, events, userId]);
+	}, [asideId, events, me]);
 	const markedKey = useRef("");
 	// A read the control plane refused is asked again a few times, later each time, while the thread is on screen.
 	const [readRetry, setReadRetry] = useState(0);
@@ -1215,7 +1220,7 @@ export function CloudAsidePane({
 	const setResolved = useCallback((next: boolean) => {
 		const before = aside ? { resolvedAt: aside.resolvedAt, resolvedBy: aside.resolvedBy } : undefined;
 		patchCachedAside(queryClient, orgId, sessionId, asideId, next
-			? { resolvedAt: new Date().toISOString(), ...(myName && userId ? { resolvedBy: { userId, name: myName } } : {}) }
+			? { resolvedAt: new Date().toISOString(), ...(myName && me ? { resolvedBy: { userId: me, name: myName } } : {}) }
 			: { resolvedAt: undefined, resolvedBy: undefined });
 		const request = next ? client.resolveSessionAside(orgId, sessionId, asideId) : client.reopenSessionAside(orgId, sessionId, asideId);
 		void request
@@ -1224,7 +1229,7 @@ export function CloudAsidePane({
 			.catch(() => { if (before) patchCachedAside(queryClient, orgId, sessionId, asideId, before); })
 			// It moves between the threads view's Open and Resolved.
 			.finally(() => invalidateCommentThreads(queryClient, baseUrl, userId));
-	}, [aside, asideId, baseUrl, client, myName, orgId, queryClient, sessionId, userId]);
+	}, [aside, asideId, baseUrl, client, me, myName, orgId, queryClient, sessionId, userId]);
 
 	const onReply = useCallback(async (text: string, mentions: ComposerMention[], sendToAgent: boolean) => {
 		const clientMessageId = crypto.randomUUID();
@@ -1373,6 +1378,8 @@ function useMentionSource(
 	workspaceName: string | undefined,
 ): AsideMentionSource | undefined {
 	const { client, ready, baseUrl, userId } = useCloudCp();
+	// The @ menu leaves out the person themselves, by the control plane's id for them.
+	const me = useCloudMeUserId() ?? userId;
 	const [settledQuery, setSettledQuery] = useState<string>();
 	useEffect(() => {
 		const timer = window.setTimeout(() => setSettledQuery(mentionQuery), mentionQuery ? 150 : 0);
@@ -1390,8 +1397,8 @@ function useMentionSource(
 		onQuery: setMentionQuery,
 		candidates: candidates.data,
 		workspaceName,
-		selfUserId: userId || undefined,
-	}, [candidates.data, ended, setMentionQuery, userId, workspaceName]);
+		selfUserId: me || undefined,
+	}, [candidates.data, ended, me, setMentionQuery, workspaceName]);
 }
 
 /**

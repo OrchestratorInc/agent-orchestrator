@@ -17,12 +17,16 @@ const cloudMocks = vi.hoisted(() => ({
 	listChatModels: vi.fn(),
 	listUserAgentModels: vi.fn(),
 	listMentionCandidates: vi.fn(),
+	me: vi.fn(),
 	chatProps: vi.fn(),
 }));
 const BASE = "https://cp.test";
+// The sign-in's own id; on a WorkOS deployment it is the identity provider's, not the control plane's.
+const signIn = vi.hoisted(() => ({ userId: "u-priya" }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: "u-priya" }),
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: signIn.userId }),
 }));
+const meAs = (id: string) => ({ user: { id, email: "someone@example.com", displayName: "Priya Shah", authProvider: "workos" }, organizations: [] });
 // The control plane offers mentions and comment threads unless a test says it does not.
 const offering = vi.hoisted(() => ({ features: ["mentions"] as string[] }));
 vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
@@ -99,6 +103,8 @@ function renderSurface(queryClient = new QueryClient({ defaultOptions: { queries
 
 beforeEach(() => {
 	localStorage.clear();
+	signIn.userId = "u-priya";
+	cloudMocks.me.mockReset().mockResolvedValue(meAs("u-priya"));
 	offering.features = ["mentions"];
 	activeOrg.displayName = "Northwind";
 	resetCloudInboxSupport();
@@ -264,6 +270,13 @@ describe("the @ menu's source", () => {
 		renderSurface();
 		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
 		expect(lastProps().composerMentions?.workspaceName).toBeUndefined();
+	});
+
+	it("leaves the person out of their own @ menu by the control plane's id for them, not the sign-in's", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		signIn.userId = "user_01SIGNIN";
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerMentions?.selfUserId).toBe("u-priya"));
 	});
 
 	it("offers them, as the control plane lists them, on one that has mentions", async () => {

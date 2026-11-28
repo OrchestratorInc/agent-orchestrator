@@ -4,6 +4,7 @@ import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCloudMeUserId } from "../../hooks/useCloudMeUserId";
 import { useCachedQueryData } from "../../hooks/useCloudScriptRuns";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
@@ -1729,9 +1730,11 @@ export function CloudSessionChatSurface({
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
 	const live = useCloudSessionLive(cloud?.orgId, session.id, Boolean(cloud && ready && session.isTerminated !== true));
-	// Who this person is, as the server sees them on the live stream; the
-	// remembered account only until the stream says.
-	const me = live?.you || userId;
+	// Who this person is, as the server sees them: on the live stream, else
+	// GET /me (its user ids name message and comment authors; the sign-in's
+	// own id is the identity provider's), the sign-in's only until either says.
+	const cloudMeId = useCloudMeUserId(Boolean(cloud));
+	const me = live?.you || cloudMeId || userId;
 	// The owner sets a shared session's model and settings; everyone else sees
 	// them read-only and their turns run with them.
 	const settingsLocked = Boolean(live && !live.canConfigure);

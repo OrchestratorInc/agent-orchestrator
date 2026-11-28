@@ -23,10 +23,14 @@ const mocks = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	openInSession: vi.fn(),
 	navigate: vi.fn(),
+	me: vi.fn(),
 }));
+// The sign-in's own id; on a WorkOS deployment it is the identity provider's, not the control plane's.
+const signIn = vi.hoisted(() => ({ userId: "u-priya" }));
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: mocks, baseUrl: "https://cp.test", userId: "u-priya" }),
+	useCloudCp: () => ({ ready: true, client: mocks, baseUrl: "https://cp.test", userId: signIn.userId }),
 }));
+const meAs = (id: string) => ({ user: { id, email: "someone@example.com", displayName: "Priya Shah", authProvider: "workos" }, organizations: [] });
 vi.mock("../hooks/useWindowAttention", () => ({ useWindowAttention: () => true }));
 vi.mock("./CloudMentionRuntime", () => ({ useOpenThreadInSession: () => mocks.openInSession }));
 // The control plane offers mentions and comment threads unless a test says it does not.
@@ -89,6 +93,8 @@ function renderView() {
 
 beforeEach(() => {
 	for (const mock of Object.values(mocks)) mock.mockReset();
+	signIn.userId = "u-priya";
+	mocks.me.mockResolvedValue(meAs("u-priya"));
 	offering.features = ["mentions"];
 	closeThreadInView();
 	mocks.listMyCommentThreads.mockResolvedValue(page([]));
@@ -452,6 +458,18 @@ describe("opening a thread from the list", () => {
 		await user.click(await within(pane).findByRole("checkbox", { name: "Also send to agent" }));
 		await user.click(within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" }));
 		expect(await within(pane).findByRole("alert")).toHaveTextContent("This thread has too many comments to send to the agent at once.");
+	});
+
+	it("offers Edit and Delete on your own comment when the sign-in's id is not the control plane's", async () => {
+		signIn.userId = "user_01SIGNIN";
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.getSessionAside.mockImplementation(async () => ({ ...thread("c-1"), replies: [...thread("c-1").replies, { replyId: "r-mine", asideId: "c-1", text: "Mine", mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: at, sequence: 60 }] }));
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByText("Mine")).toBeInTheDocument());
+		await waitFor(() => expect(within(pane.querySelector<HTMLElement>("[data-aside-entry='r-mine']")!).getByRole("button", { name: "Comment actions" })).toBeInTheDocument());
+		expect(within(pane.querySelector<HTMLElement>("[data-aside-entry='r-1']")!).queryByRole("button", { name: "Comment actions" })).toBeNull();
 	});
 
 	it("keeps a thread in an ended session read-only", async () => {

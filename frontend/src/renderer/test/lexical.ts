@@ -25,6 +25,27 @@ export async function typeInLexicalEditor(field: HTMLElement, text: string): Pro
 	});
 }
 
+/**
+ * Backspace at the end of the text: its last character goes. Lexical's own
+ * delete moves through the DOM selection, which JSDOM cannot, so the text
+ * node is changed directly.
+ */
+export async function deleteBackwardInLexicalEditor(field: HTMLElement): Promise<void> {
+	const editor = lexicalEditor(field);
+	await act(async () => {
+		field.focus();
+		editor.update(() => {
+			const last = $getRoot().getLastDescendant();
+			if ($isTextNode(last)) {
+				const text = last.getTextContent();
+				if (text.length <= 1) last.remove();
+				else last.setTextContent(text.slice(0, -1));
+			}
+			$getRoot().selectEnd();
+		}, { discrete: true });
+	});
+}
+
 /** Reproduce a key pressed before React paints Lexical's latest text update. */
 export async function typeAndPressInLexicalEditor(
 	field: HTMLElement,

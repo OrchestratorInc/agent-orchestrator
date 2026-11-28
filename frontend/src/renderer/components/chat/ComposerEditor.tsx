@@ -55,7 +55,7 @@ import {
 } from "react";
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
-import { mentionSplitter, mentionText, uniqueMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { continuesMentionName, mentionSplitter, mentionText, uniqueMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { cn } from "../../lib/utils";
 import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { MentionChip } from "./MentionChip";
@@ -381,13 +381,33 @@ function readMention(node: ComposerTokenNode): ComposerMention | undefined {
 	}
 }
 
-/** Every mention chip in the draft, in document order (a person named twice is there twice). */
+/**
+ * Whether a mention chip reads as its name where it stands, as a reader's copy
+ * draws mentions (splitByMentions): at the start or after a space, and not
+ * run on by a letter, digit or underscore.
+ */
+function $chipStandsAlone(node: ComposerTokenNode): boolean {
+	const before = node.getPreviousSibling()?.getTextContent() ?? "";
+	const after = node.getNextSibling()?.getTextContent() ?? "";
+	return (before === "" || /\s$/.test(before)) && !continuesMentionName(after, 0);
+}
+
+/** A mention chip as the plain text it reads as (its mention goes with it). */
+function $unchip(node: ComposerTokenNode): void {
+	node.replace($createTextNode(node.getTextContent()));
+}
+
+/**
+ * Every mention chip in the draft, in document order (a person named twice is
+ * there twice). A chip that does not read as its name where it stands (see
+ * $chipStandsAlone) is not one: what is sent mentions only what readers see.
+ */
 function $mentionChips(): ComposerMention[] {
 	const found: ComposerMention[] = [];
 	const visit = (node: LexicalNode) => {
 		if (node instanceof ComposerTokenNode) {
 			const mention = readMention(node);
-			if (mention) found.push(mention);
+			if (mention && $chipStandsAlone(node)) found.push(mention);
 			return;
 		}
 		if ($isElementNode(node)) for (const child of node.getChildren()) visit(child);
@@ -729,6 +749,15 @@ const EditorBridge = forwardRef<
 	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
+
+	// Letters typed right against a mention chip (`@Alex` then `andra`) make
+	// text that no longer reads as that name, for the sender or anyone who
+	// reads the message: the chip turns into that plain text, and its mention goes.
+	useEffect(() => editor.registerNodeTransform(TextNode, (node) => {
+		for (const side of [node.getPreviousSibling(), node.getNextSibling()]) {
+			if (side instanceof ComposerTokenNode && readMention(side) && !$chipStandsAlone(side)) $unchip(side);
+		}
+	}), [editor]);
 
 	// Links typed or pasted here load their site icons before they are sent.
 	useEffect(() => {

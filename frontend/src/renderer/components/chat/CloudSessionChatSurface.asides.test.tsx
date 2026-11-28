@@ -10,7 +10,7 @@ import { clearMentionFocus, mentionMessageId, mentionOpenTarget, peekMentionFocu
 import { cloudInboxQueryKey, resetCloudInboxSupport } from "../../lib/cloud-notifications";
 import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
-import { typeInLexicalEditor } from "../../test/lexical";
+import { deleteBackwardInLexicalEditor, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 import type { CommentMarkers } from "./AsideMarker";
 import { CloudSessionChatSurface, toSnapshot } from "./CloudSessionChatSurface";
@@ -32,13 +32,18 @@ const cloudMocks = vi.hoisted(() => ({
 	reopenSessionAside: vi.fn(),
 	editSessionAsideReply: vi.fn(),
 	deleteSessionAsideReply: vi.fn(),
+	me: vi.fn(),
 	chatProps: vi.fn(),
 	markers: undefined as CommentMarkers | undefined,
 }));
 const BASE = "https://cp.test";
+// The sign-in's own id; on a WorkOS deployment it is the identity provider's, not the control plane's.
+const signIn = vi.hoisted(() => ({ userId: "u-priya" }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: "u-priya" }),
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: signIn.userId }),
 }));
+/** GET /me: the control plane's own user id for the person signed in. */
+const meAs = (id: string) => ({ user: { id, email: "someone@example.com", displayName: "Priya Shah", authProvider: "workos" }, organizations: [] });
 // The control plane offers mentions and comment threads unless a test says it does not.
 const offering = vi.hoisted(() => ({ features: ["mentions"] as string[] }));
 vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
@@ -114,6 +119,8 @@ function renderSurface(queryClient = new QueryClient({ defaultOptions: { queries
 }
 
 beforeEach(() => {
+	signIn.userId = "u-priya";
+	cloudMocks.me.mockReset().mockResolvedValue(meAs("u-priya"));
 	localStorage.clear();
 	offering.features = ["mentions"];
 	resetCloudInboxSupport();
@@ -423,6 +430,24 @@ describe("replying", () => {
 		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
 		expect(cloudMocks.steerTurn).not.toHaveBeenCalled();
 		await waitFor(() => expect(pane.querySelectorAll("[data-aside-entry]")).toHaveLength(3));
+	});
+
+	it("sends no mention for a chip with letters typed against it, which reads as plain text", async () => {
+		const user = userEvent.setup();
+		openAside(session.id, "a-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		const box = within(pane).getByRole("combobox", { name: "Reply to the comment" });
+		await typeInLexicalEditor(box, "Ask @Pri");
+		await user.click(await within(pane).findByRole("option", { name: /Priya Nair/ }));
+		await waitFor(() => expect(box.querySelector('[data-composer-token="person"]')).not.toBeNull());
+		// The space after the chip goes, and letters follow it directly.
+		await deleteBackwardInLexicalEditor(box);
+		await typeInLexicalEditor(box, "x please");
+		await waitFor(() => expect(box.querySelector('[data-composer-token="person"]')).toBeNull());
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledTimes(1));
+		expect(cloudMocks.replyToSessionAside).toHaveBeenCalledWith("org-1", session.id, "a-1", { text: "Ask @Priya Nairx please", clientMessageId: expect.any(String) });
 	});
 
 	it("lets only people who can prompt the agent ask it about a selection", async () => {
@@ -979,6 +1004,22 @@ describe("comment threads", () => {
 		await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
 		await waitFor(() => expect(cloudMocks.deleteSessionAsideReply).toHaveBeenCalledWith("org-1", session.id, "c-1", "cr-3"));
 		await waitFor(() => expect(pane.querySelector("[data-aside-entry='cr-3']")).toBeNull());
+	});
+
+	it("knows your own comments by the control plane's id for you, not the sign-in's", async () => {
+		// WorkOS: the sign-in's id is "user_01...", while comments name their authors by the control plane's ids.
+		signIn.userId = "user_01SIGNIN";
+		cloudMocks.me.mockResolvedValue(meAs("u-priya"));
+		const own = { ...commentThread, replies: [{ ...commentThread.replies[0]!, authorUserId: "u-marco", authorName: "Marco Rossi" }, { replyId: "cr-3", asideId: "c-1", text: "Mine", mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: at }] };
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [commentAside] });
+		cloudMocks.getSessionAside.mockResolvedValue(own);
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByText("Mine")).toBeInTheDocument());
+		const mine = pane.querySelector<HTMLElement>("[data-aside-entry='cr-3']")!;
+		await waitFor(() => expect(within(mine).getByRole("button", { name: "Comment actions" })).toBeInTheDocument());
+		expect(within(pane.querySelector<HTMLElement>("[data-aside-entry='cr-1']")!).queryByRole("button", { name: "Comment actions" })).toBeNull();
 	});
 
 	it("keeps a mention in an edit only where its whole @Name is still written", async () => {
