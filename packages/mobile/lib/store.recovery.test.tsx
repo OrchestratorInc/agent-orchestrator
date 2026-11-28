@@ -111,3 +111,16 @@ it("keeps an incompatible machine on the slow pace: it answered", async () => {
 	await advance(60_000);
 	expect(state.resolve.mock.calls.length - before).toBeLessThanOrEqual(4);
 });
+
+it("counts a machine that stops answering after an incompatible answer as a new outage", async () => {
+	const { IncompatibleHostVersionError } = await import("./race");
+	await dropMachine();
+	await advance(6 * 60_000);
+	state.resolve.mockImplementation(async () => { throw new IncompatibleHostVersionError("update"); });
+	await advance(15_000);
+	state.resolve.mockImplementation(async () => null);
+	await advance(15_000);
+	const before = state.resolve.mock.calls.length;
+	await advance(2_000);
+	expect(state.resolve.mock.calls.length - before).toBe(1);
+});

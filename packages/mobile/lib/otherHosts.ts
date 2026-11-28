@@ -189,9 +189,12 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				record(incompatible ? "answered-error" : "no-answer");
 				update({ config: null, connection: "closed", loading: false, error: incompatible ? "Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine." : "Host is unreachable", errorStatus: incompatible ? 426 : null });
 				// An incompatible machine answered: it is not out, and trying sooner
-				// cannot change its version.
-				if (incompatible) schedule(RE_RACE_COOLDOWN_MS);
-				else retryAfterOutage();
+				// cannot change its version. If it stops answering later (restarting
+				// to update), that is a new outage.
+				if (incompatible) {
+					outageSince = 0;
+					schedule(RE_RACE_COOLDOWN_MS);
+				} else retryAfterOutage();
 				return;
 			}
 			runner.config = result.config;

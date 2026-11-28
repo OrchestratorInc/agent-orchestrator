@@ -837,8 +837,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				outageSince = Date.now();
 			}
 			// A machine that answered (an incompatible version) is not out, and
-			// trying sooner cannot change its answer.
-			const delay = linkTrackerRef.current.recent.at(-1) === "answered-error" ? RE_RACE_COOLDOWN_MS : recoveryDelayMs(Date.now() - outageSince);
+			// trying sooner cannot change its answer. If it stops answering later
+			// (restarting to update), that is a new outage.
+			const answered = linkTrackerRef.current.recent.at(-1) === "answered-error";
+			if (answered) outageSince = Date.now();
+			const delay = answered ? RE_RACE_COOLDOWN_MS : recoveryDelayMs(Date.now() - outageSince);
 			timer = setTimeout(async () => {
 				if (stopped) return;
 				if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {

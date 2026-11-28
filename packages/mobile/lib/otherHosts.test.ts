@@ -125,6 +125,26 @@ describe("another paired host's live runner", () => {
 		} finally { runner.stop(); }
 	});
 
+	it("counts a machine that stops answering after an incompatible answer as a new outage", async () => {
+		vi.useFakeTimers();
+		const { connectToHost } = await import("./connectRuntime");
+		let answer: "none-reachable" | "incompatible" = "none-reachable";
+		vi.mocked(connectToHost).mockImplementation(async () => ({ ok: false, reason: answer }) as never);
+		const { startOtherHost } = await import("./otherHosts");
+		const runner = startOtherHost(host, undefined, () => {});
+		try {
+			await runner.refresh();
+			await vi.advanceTimersByTimeAsync(6 * 60_000);
+			answer = "incompatible";
+			await vi.advanceTimersByTimeAsync(15_000);
+			answer = "none-reachable";
+			await vi.advanceTimersByTimeAsync(15_000);
+			const before = vi.mocked(connectToHost).mock.calls.length;
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(vi.mocked(connectToHost).mock.calls.length - before).toBe(1);
+		} finally { runner.stop(); }
+	});
+
 	it("keeps an incompatible machine on the slow pace: it answered", async () => {
 		vi.useFakeTimers();
 		const { connectToHost } = await import("./connectRuntime");
