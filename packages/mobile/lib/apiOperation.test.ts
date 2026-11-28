@@ -67,7 +67,7 @@ describe("apiOperation", () => {
 			const source = readFileSync(file, "utf8");
 			for (const [, path] of source.matchAll(/[`"](?:\$\{API\}|\/api\/v1)(\/[^`"?]*)/g)) add(path);
 			// Path helpers that take the route's tail as their second argument.
-			for (const [, path] of source.matchAll(/(?:sessionPath|conversationPath|reviewConversationPath)\([^,]+, [`"]([^`"]+)[`"]/g)) add(path);
+			for (const [, path] of source.matchAll(/(?:sessionPath|conversationPath|reviewConversationPath)\([^,]+, [`"']([^`"']+)[`"']/g)) add(path);
 		}
 		expect(words.size).toBeGreaterThan(40);
 		expect([...words].filter((word) => !API_ROUTE_WORDS.has(word)).sort()).toEqual([]);
