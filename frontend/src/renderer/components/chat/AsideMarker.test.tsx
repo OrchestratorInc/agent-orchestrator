@@ -236,6 +236,13 @@ describe("quoted passages", () => {
 		expect(messageExcerpt("x".repeat(250))).toHaveLength(200);
 	});
 
+	it("reads a line of inline code in triple backticks as text, not a fence", () => {
+		expect(messageExcerpt("```retry_delay``` is too short")).toBe("retry_delay is too short");
+		expect(markdownPreviewLines("```retry_delay```\nnext line")).toEqual(["retry_delay", "next line"]);
+		// A real fence with an info string still opens one.
+		expect(markdownPreviewLines("```python\nx = 1\n```")).toEqual(["x = 1"]);
+	});
+
 	it("keeps a shorter fence inside a longer one as code", () => {
 		expect(messageExcerpt("````md\n```js\nconst a = 1;\n```\n````")).toBe("```js");
 		expect(markdownPreviewLines("~~~\nline one\n```\nline two\n~~~\nAfter **it**.")).toEqual(["line one", "```", "line two", "After it."]);

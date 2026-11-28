@@ -238,7 +238,8 @@ export function markdownPreviewLines(markdown: string): string[] {
 	for (const line of markdown.split(/\r?\n/)) {
 		const marker = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
 		if (!fence) {
-			if (marker) {
+			// A backtick fence's info has no backtick (CommonMark): "```retry_delay```" is inline code.
+			if (marker && !(marker[1]![0] === "`" && marker[2]!.includes("`"))) {
 				fence = { char: marker[1]![0]!, length: marker[1]!.length };
 				continue;
 			}

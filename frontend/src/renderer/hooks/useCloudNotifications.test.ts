@@ -255,12 +255,26 @@ describe("the personal inbox (/me)", () => {
 		...overrides,
 	});
 
-	function renderInbox(client: Record<string, unknown>, options: { live?: boolean } = {}) {
+	function renderInbox(client: Record<string, unknown>, options: { live?: boolean; status?: "all" | "unread" | "read" } = {}) {
 		cloudCpMock.mockReturnValue({ client, ready: true, baseUrl: "https://cloud.test", userId: "user-1" });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: queryClient }, children);
-		return { queryClient, ...renderHook(() => useCloudNotifications("all", { live: options.live ?? false }), { wrapper }) };
+		return { queryClient, ...renderHook(() => useCloudNotifications(options.status ?? "all", { live: options.live ?? false }), { wrapper }) };
 	}
+
+	it("lists only the status asked for from the inbox it reads whole", async () => {
+		const read = cloudRow({ id: "cntf_read", status: "read" });
+		const listMyNotifications = vi.fn(async () => page([mention(), read]));
+		const unread = renderInbox({ listMyNotifications }, { status: "unread" });
+		await waitFor(() => expect(unread.result.current.mode).toBe("inbox"));
+		await waitFor(() => expect(unread.result.current.items.map((row) => row.id)).toEqual(["cntf_mention"]));
+		unread.unmount();
+		const readOnly = renderInbox({ listMyNotifications }, { status: "read" });
+		await waitFor(() => expect(readOnly.result.current.items.map((row) => row.id)).toEqual(["cntf_read"]));
+		readOnly.unmount();
+		const all = renderInbox({ listMyNotifications });
+		await waitFor(() => expect(all.result.current.items.map((row) => row.id)).toEqual(["cntf_mention", "cntf_read"]));
+	});
 
 	beforeEach(() => {
 		window.localStorage.clear();

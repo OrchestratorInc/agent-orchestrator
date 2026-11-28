@@ -5714,6 +5714,9 @@ export function Timeline({
 		}
 		pendingReading.current = undefined;
 		releaseFollow();
+		// A relatch armed by an earlier nudge would pull the view off the message it landed on.
+		window.clearTimeout(relatchTimer.current);
+		relatchTimer.current = undefined;
 		const sourceRect = source.getBoundingClientRect();
 		const viewport = node.getBoundingClientRect();
 		const inset = sourceRect.height > viewport.height - 24 ? 12 : (viewport.height - sourceRect.height) / 2;

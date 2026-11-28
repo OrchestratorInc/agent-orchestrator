@@ -4723,6 +4723,22 @@ describe("ChatWorkspace timeline", () => {
 		expect(log.scrollTop).toBeGreaterThanOrEqual(3200);
 	});
 
+	it("drops a pending resume when opening a message lands on it", async () => {
+		const view = render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.wheel(log, { deltaY: -150 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		const done = vi.fn();
+		view.rerender(<ChatWorkspace snapshot={chatFixture} focusMessage={{ messageId: "m-1", key: "landed" }} onFocusMessageDone={done} />);
+		await waitFor(() => expect(done).toHaveBeenCalledWith("landed"));
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
 	it("does not pull back a view that moved without the reader's own input", async () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
 		const log = screen.getByRole("log");

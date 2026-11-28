@@ -103,9 +103,11 @@ export function useCloudNotifications(
 	const clears = useSyncExternalStore(subscribeClears, () => readClearsRaw(storageKey));
 	const items = useMemo(() => {
 		const state = parseClears(clears);
-		// A resolved mention or aside reply is done: it leaves the bell.
-		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state) && activeCloudNotification(item) && (mentionsOffered || !mentionsNotification(item)));
-	}, [clears, loaded, mentionsOffered]);
+		// A resolved mention or aside reply is done: it leaves the bell. The inbox is
+		// read whole ("all"), so a status asked for is applied here.
+		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state) && activeCloudNotification(item) && (mentionsOffered || !mentionsNotification(item)) &&
+			(mode !== "inbox" || status === "all" || item.status === status));
+	}, [clears, loaded, mentionsOffered, mode, status]);
 	// The server's unread total, less the unread mention and thread rows it lists
 	// while mentions are not offered (they are not shown, so they are not counted).
 	// A resolved one is already out of the count (resolveInCache), so only open ones come off.

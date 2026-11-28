@@ -516,6 +516,11 @@ vi.mock("./chat/ReviewerChatSurface", () => ({
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>
 	),
 }));
+vi.mock("./chat/CloudReviewerChatSurface", () => ({
+	CloudReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
+		<div data-testid="reviewer-chat-surface">{reviewId}</div>
+	),
+}));
 vi.mock("./CenterPane", () => ({
 	CenterPane: ({
 		agentInputDisabled,
@@ -699,11 +704,18 @@ vi.mock("./SessionFileWorkspace", () => ({
 }));
 vi.mock("./CloudWorkspaceDiff", () => ({
 	CloudFileContentPane: ({ path }: { path: string }) => <div data-testid="cloud-file-workspace">{path}</div>,
-	CloudWorkspaceDiff: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) => (
+	CloudWorkspaceDiff: ({ isMaximized, onOpenFile, onToggleMaximized }: { isMaximized?: boolean; onOpenFile?: (path: string) => void; onToggleMaximized?: (next: boolean) => void }) => (
 		<>
 			<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
 			<button onClick={() => onOpenFile?.("src/other.ts")} type="button">open other cloud file</button>
+			{onToggleMaximized ? <button onClick={() => onToggleMaximized(!isMaximized)} type="button">{isMaximized ? "cloud files center" : "cloud files rail"}</button> : null}
 		</>
+	),
+}));
+// What the session view tells the cloud notification reader.
+vi.mock("./CloudSessionNotificationReader", () => ({
+	CloudSessionNotificationReader: ({ conversationShown = true }: { conversationShown?: boolean }) => (
+		<span data-conversation-shown={conversationShown ? "true" : "false"} data-testid="cloud-notification-reader" />
 	),
 }));
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
@@ -1442,6 +1454,32 @@ describe("SessionView", () => {
 		expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", undefined, false);
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("tells the cloud notification reader the conversation is covered while maximized Files or a reviewer chat is in front", () => {
+		const cloudSession: WorkspaceSession = { ...workerSession("sess-1"), workspaceId: "cloud-project", mode: "chat", cloud: { orgId: "cloud-org" } };
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		const shown = () => screen.getByTestId("cloud-notification-reader").getAttribute("data-conversation-shown");
+		expect(shown()).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		expect(shown()).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "cloud files rail" }));
+		expect(shown()).toBe("false");
+		fireEvent.click(screen.getByRole("button", { name: "cloud files center" }));
+		expect(shown()).toBe("true");
+		act(() => view.client.setQueryData(["session-reviews", "sess-1"], {
+			reviewerHandleId: "review-chat:review-1",
+			reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+			reviews: [], runs: [],
+		}));
+		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeInTheDocument();
+		expect(shown()).toBe("false");
 	});
 
 	it("polls the direct Cloud lookup only while the session list does not have it", () => {
