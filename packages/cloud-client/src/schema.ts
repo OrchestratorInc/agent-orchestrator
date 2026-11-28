@@ -982,6 +982,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's automations, newest first, each with its latest run. Every member sees every automation of the organization's projects, including those of a deleted project, which are turned off (disabledReason says why) until someone deletes them. Offered when offering.features lists automations; every /automations route answers 404 otherwise. */
+        get: operations["listAutomations"];
+        put?: never;
+        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness, and they are subscribed to its results. Before saving, it checks what a run needs (preflight), so a problem shows when it is saved rather than at its first run: 422 agent_provider_required without a validated credential for the harness; 422 repository_not_accessible when AO's GitHub App cannot reach the project's repository, or repository_unreachable when the caller's GitHub token cannot reach it with push rights (a project on a personal access token), while a standalone project (one with no repository) has no repository to check and its runs start in an empty folder; and, for an enabled automation, 402 PLAN_REQUIRED when the organization has no active plan, or the plan-limit refusal (such as 409 WORKER_SLOTS_FULL, with limit 0) or 409 SANDBOX_QUOTA_EXCEEDED only when that limit is zero, so no run could ever start. How full the organization or plan is when it is saved is not checked: each run's start checks it, and a full one skips its occurrence. Refused with 409 AUTOMATION_LIMIT_REACHED when the organization has as many as it may (a deleted project's automations do not count), 422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project (checked before the credential and repository checks), and 422 validation_error for an invalid field or schedule. */
+        post: operations["createAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        /** @description One automation of the organization, with its latest run. */
+        get: operations["getAutomation"];
+        put?: never;
+        post?: never;
+        /** @description Delete an automation and its run history. The session of a run in flight ends with it; every run's transcript and artifacts stay. Allowed to whoever may edit it. An automation whose project was deleted can still be deleted. */
+        delete: operations["deleteAutomation"];
+        options?: never;
+        head?: never;
+        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on when the caller is not already its runAs, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Such a change, and turning it on, runs the same preflight as createAutomation (repository access and, while enabled, an active plan whose limits are not zero). Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. Refused with 409 AUTOMATION_PROJECT_DELETED once the automation's project was deleted. */
+        patch: operations["updateAutomation"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        /** @description The automation's runs, newest occurrence first. */
+        get: operations["listAutomationRuns"];
+        put?: never;
+        /** @description Run the automation now, as the caller with their own credential for its harness (422 agent_provider_required without a validated one). Any member may. Refused with 409 AUTOMATION_RUN_ACTIVE while a run is in flight. The control plane does not replay this command for a reused Idempotency-Key: a retry while the run is in flight gets AUTOMATION_RUN_ACTIVE, and one after it finished starts another run. The run starts within seconds; follow it in the run list. Refused with 409 AUTOMATION_PROJECT_DELETED once the automation's project was deleted, and with 409 SESSION_MOVING while a session of the automation's runs is moving to another machine. */
+        post: operations["runAutomationNow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Be notified when the automation's runs finish or fail. */
+        put: operations["subscribeAutomation"];
+        post?: never;
+        delete: operations["unsubscribeAutomation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/chat-search": {
         parameters: {
             query?: never;
@@ -3476,12 +3559,14 @@ export interface components {
             sessionId?: string;
             /** @constant */
             source: "cloud";
+            /** @description What happened, such as needs_input or pr_merged. Clients show title and body for a type they do not know. An automation run that finished is automation_run_completed, one that failed or timed out automation_run_failed, and a skipped occurrence automation_run_skipped; each goes to the automation's subscribers, once per run. Repeated skips of one automation for the same reason are told once while that notice is unread and no run has happened since; every skip is still in the run list. A run whose end turns the automation off is told as automation_run_failed titled with the automation's name and "turned off". Its sessionId is the run's session or, for a run that got none, the session of the automation's latest run that had one (no notification when no run had one). */
             type: string;
             title: string;
             body: string;
             /** @enum {string} */
             status: "unread" | "read";
             eventId?: string;
+            /** @description Details by type. An automation run's notification carries automationId, runId, status (AutomationRunStatus) and errorCode (AutomationRun.errorCode, empty when it completed). */
             metadata: Record<string, never>;
             /** Format: date-time */
             resolvedAt?: string;
@@ -3680,7 +3765,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session.branch and session.transcriptImport for sessions moving here from another machine. Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), automations when cloud automations can be scheduled (createAutomation), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session.branch and session.transcriptImport for sessions moving here from another machine. Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -4031,6 +4116,161 @@ export interface components {
             lastPolledAt?: string;
             /** @description Why the last poll failed; absent when it did not. */
             lastError?: string;
+        };
+        /**
+         * @description Harnesses an automation can run: those with a Chat controller, whose opening turn tells the control plane the run finished.
+         * @enum {string}
+         */
+        AutomationHarness: "claude-code" | "codex" | "cursor";
+        /** @enum {string} */
+        AutomationMode: "standard" | "trusted";
+        /**
+         * @description pending, starting and running are in flight. completed means the run's turn finished: the opening turn of the session it started, or the turn its prompt started in the session it continued. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), a session of the automation's runs is moving to another machine (SESSION_MOVING: occurrences are skipped until the move finishes or is abandoned), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes. When the run reaches completed, failed or timed_out, its session ends with it only while the automation's deleteSessionOnComplete is on; otherwise the session stays (paused while idle) for the next run.
+         * @enum {string}
+         */
+        AutomationRunStatus: "pending" | "starting" | "running" | "completed" | "failed" | "skipped" | "timed_out";
+        AutomationRun: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            automationId: string;
+            /**
+             * Format: date-time
+             * @description The occurrence it ran for; the moment it was asked for, for a manual run.
+             */
+            scheduledFor: string;
+            /** @enum {string} */
+            trigger: "schedule" | "manual";
+            /**
+             * Format: uuid
+             * @description Who asked for a manual run.
+             */
+            triggeredByUserId?: string;
+            status: components["schemas"]["AutomationRunStatus"];
+            /**
+             * Format: uuid
+             * @description The session it ran in, once started. With the automation's deleteSessionOnComplete off, runs share one session: a run sends its prompt to the previous run's session when that is not deleted and when it is the session of the person the run runs as, still on the automation's harness and in Chat, and starts a new one otherwise. A session's agent runs on its creator's credential, so another member's Run now, the first run after someone else saved the automation, an agent switch or a move to the terminal starts a new session, and the earlier one ends, since it holds the shared branch. On, the session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay; it can be restored, and the next run ends a restored one again, since it holds the shared branch.
+             */
+            sessionId?: string;
+            attemptCount: number;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            /** @description Why a skipped, failed or timed_out run did not finish: a skip's code (AutomationRunStatus), TIMED_OUT, AGENT_FAILED (the run's turn failed), STOPPED (someone stopped the run's turn in its session), SESSION_ENDED (its session was deleted first), SESSION_MOVED (failed: someone moved the run's session to another machine before it finished; it does not count toward consecutiveFailures), SESSION_MOVING (skipped: a session of the automation's runs is moving to another machine), START_FAILED, or the create-session refusal's own code (such as agent_provider_required when the person it runs as has no valid credential for the harness, forbidden when they are no longer an active member of the organization, or PLAN_REQUIRED when the organization has no active plan). Clients show errorMessage for a code they do not know. */
+            errorCode?: string;
+            /** @description The reason in words, for a person to read. */
+            errorMessage?: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description A prompt a project's worker runs on a schedule in AO Cloud. A run's session is a worker of the project, started as runAs, which the project's orchestrator adopts as it adopts any worker. With deleteSessionOnComplete off (the default) the session stays when a run finishes, pauses when idle, and the next run sends its prompt there as a new message, which wakes it; on, the session is deleted when the run finishes and each run starts a new one. All runs share one branch and keep at most one open pull request per repository on it: a run updates the pull request an earlier run left open, and once that is merged or closed the next run moves to a new branch. Run sessions can be shared only to watch, with teams and by link. */
+        Automation: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            displayName: string;
+            prompt: string;
+            harness: components["schemas"]["AutomationHarness"];
+            model?: string;
+            reasoningEffort?: string;
+            mode: components["schemas"]["AutomationMode"];
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description The canonical rule, with its DTSTART anchor. */
+            rrule: string;
+            /** @description The IANA timezone the rule runs in. */
+            timezone: string;
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Absent while disabled.
+             */
+            nextRunAt?: string;
+            maxRuntimeMinutes: number;
+            /** @description Whether a run's session is deleted when the run finishes. Off, the session stays (paused while idle) and the next run continues in it. */
+            deleteSessionOnComplete: boolean;
+            /** @description The branch its runs work on. */
+            branch: string;
+            /** @description Whose credential its scheduled runs use: whoever last changed what it does or when, or turned it on. */
+            runAs: {
+                /** Format: uuid */
+                userId: string;
+                email?: string;
+                displayName?: string;
+            };
+            /** Format: uuid */
+            createdByUserId?: string;
+            /** @description Scheduled runs in a row that failed or timed out (a run failed with SESSION_MOVED, its session moved to another machine, does not count); a completed scheduled run resets it, and skipped and manual runs leave it. At 5 the automation is turned off. A scheduled run refused with agent_provider_required, forbidden or PLAN_REQUIRED turns it off at once. */
+            consecutiveFailures: number;
+            /** @description Why it was turned off automatically, such as after 5 scheduled runs in a row that failed or timed out, in words for a person to read. Absent while enabled or turned off by a person. A scheduled run refused because the person it runs as has no valid credential for the harness (agent_provider_required) or is no longer in the organization (forbidden), or because the organization has no active plan (PLAN_REQUIRED, whether it would start a new session or wake a kept one), turns the automation off at once. Deleting a project turns its automations off at once, with "Turned off: its project was deleted. Delete the automation, or move its prompt to another project."; such an automation can only be deleted (409 AUTOMATION_PROJECT_DELETED to a change or Run now). */
+            disabledReason?: string;
+            /** @description Whether the caller is notified of its runs. */
+            subscribed: boolean;
+            /** @description Whether the caller may change or delete it. */
+            canEdit: boolean;
+            latestRun?: components["schemas"]["AutomationRun"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Exactly one of rrule and cron. Occurrences must be at least an hour apart. */
+        CreateAutomationInput: {
+            /** Format: uuid */
+            projectId: string;
+            displayName: string;
+            /** @description At most 32768 bytes of UTF-8; maxLength counts characters, so a prompt with non-ASCII text can be refused (422 validation_error) under 32768 characters. */
+            prompt: string;
+            harness: components["schemas"]["AutomationHarness"];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /** @default trusted */
+            mode: components["schemas"]["AutomationMode"];
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description An RFC 5545 rule (FREQ=HOURLY or slower, no COUNT or UNTIL). */
+            rrule?: string;
+            /** @description "minute hour * * weekdays", the desktop presets' subset of cron; converted to a rule. */
+            cron?: string;
+            /** @description An IANA timezone, or UTC. */
+            timezone: string;
+            /** @default 60 */
+            maxRuntimeMinutes: number;
+            /** @default false */
+            deleteSessionOnComplete: boolean;
+            /** @default true */
+            enabled: boolean;
+        };
+        /** @description Fields to change. rrule or cron replaces the schedule; timezone alone moves the saved rule into the new zone. */
+        UpdateAutomationInput: {
+            displayName?: string;
+            /** @description At most 32768 bytes of UTF-8; maxLength counts characters, so a prompt with non-ASCII text can be refused (422 validation_error) under 32768 characters. */
+            prompt?: string;
+            harness?: components["schemas"]["AutomationHarness"];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["AutomationMode"];
+            /** @enum {string} */
+            requestedOutput?: "" | "artifact";
+            rrule?: string;
+            cron?: string;
+            timezone?: string;
+            maxRuntimeMinutes?: number;
+            deleteSessionOnComplete?: boolean;
+            enabled?: boolean;
+        };
+        AutomationList: {
+            items: components["schemas"]["Automation"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        AutomationRunList: {
+            items: components["schemas"]["AutomationRun"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        AutomationSubscription: {
+            subscribed: boolean;
         };
         /** @description One of a project's reusable quick actions, run into a session from the desktop's top bar. */
         Cue: {
@@ -5142,6 +5382,11 @@ export interface components {
             /** @description The session moved to another computer: it was deleted by the conditional delete (?moveId=) that finished its move, and continues there. It cannot be restored (restoreSession answers 409 SESSION_MOVED_AWAY). Absent or false for any other session. */
             movedAway?: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /**
+             * Format: uuid
+             * @description The automation run the session was started for. Such a session is shared only to watch (viewer access), with teams and by link; other shares are refused with AUTOMATION_SESSION_VIEW_ONLY.
+             */
+            automationRunId?: string;
             /**
              * Format: uuid
              * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
@@ -6842,6 +7087,7 @@ export interface components {
         /** @description The comment thread's ID. */
         ArtifactShareThreadId: string;
         AgentAccountId: string;
+        AutomationId: string;
         CueId: string;
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
@@ -8748,6 +8994,246 @@ export interface operations {
                         project: components["schemas"]["Project"];
                         session: components["schemas"]["Session"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAutomations: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of automations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAutomationInput"];
+            };
+        };
+        responses: {
+            /** @description Automation created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The automation with its latest run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Automation deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAutomationInput"];
+            };
+        };
+        responses: {
+            /** @description Automation updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAutomationRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationRunList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    runAutomationNow: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["AutomationRun"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    subscribeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscribed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSubscription"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    unsubscribeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unsubscribed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSubscription"];
                 };
             };
             default: components["responses"]["Error"];

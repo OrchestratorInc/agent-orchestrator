@@ -1134,6 +1134,47 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ decisionId: "approve" }));
   });
+
+  it("routes cloud automations to the organization's automation resources", async () => {
+    const automation = { id: "auto 1" };
+    const run = { id: "run", automationId: "auto 1", status: "pending" };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      if (init?.method === "DELETE" && String(input).endsWith("/automations/auto%201")) return new Response(null, { status: 204 });
+      return jsonResponse({ items: [], page: { hasMore: false }, automation, run, subscribed: init?.method === "PUT" });
+    });
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock as typeof fetch });
+    const base = "https://cloud.test/api/cloud/v1/orgs/org%2F1/automations";
+
+    await client.listAutomations("org/1", { projectId: "project", limit: 100, cursor: "next" });
+    await expect(client.getAutomation("org/1", "auto 1")).resolves.toMatchObject({ automation });
+    await client.createAutomation("org/1", {
+      projectId: "project", displayName: "Nightly debt", prompt: "List debt.", harness: "codex",
+      rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata",
+      mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: false, enabled: true,
+    });
+    await client.updateAutomation("org/1", "auto 1", { enabled: false });
+    await expect(client.deleteAutomation("org/1", "auto 1")).resolves.toBeUndefined();
+    await client.listAutomationRuns("org/1", "auto 1", { limit: 20 });
+    await expect(client.runAutomationNow("org/1", "auto 1", { idempotencyKey: "run-now-1" })).resolves.toMatchObject({ run });
+    await expect(client.setAutomationSubscription("org/1", "auto 1", true)).resolves.toMatchObject({ subscribed: true });
+    await client.setAutomationSubscription("org/1", "auto 1", false);
+
+    const calls = fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method ?? "GET"]);
+    expect(calls).toEqual([
+      [`${base}?cursor=next&limit=100&projectId=project`, "GET"],
+      [`${base}/auto%201`, "GET"],
+      [base, "POST"],
+      [`${base}/auto%201`, "PATCH"],
+      [`${base}/auto%201`, "DELETE"],
+      [`${base}/auto%201/runs?limit=20`, "GET"],
+      [`${base}/auto%201/runs`, "POST"],
+      [`${base}/auto%201/subscription`, "PUT"],
+      [`${base}/auto%201/subscription`, "DELETE"],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({ harness: "codex", timezone: "Asia/Kolkata" });
+    expect(fetchMock.mock.calls[3]?.[1]?.body).toBe(JSON.stringify({ enabled: false }));
+    expect(new Headers(fetchMock.mock.calls[6]?.[1]?.headers).get("Idempotency-Key")).toBe("run-now-1");
+  });
 });
 
 describe("WorkerClient", () => {
