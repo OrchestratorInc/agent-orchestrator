@@ -8,6 +8,10 @@ describe("apiOperation", () => {
 		expect(apiOperation("post", "/api/v1/sessions/agent-orchestrator-mo-402/send")).toBe("POST /api/v1/sessions/:id/send");
 		expect(apiOperation(undefined, "/api/v1/prs/12/merge")).toBe("GET /api/v1/prs/:id/merge");
 		expect(apiOperation("GET", "/api/v1/notifications/read-all")).toBe("GET /api/v1/notifications/read-all");
+		expect(apiOperation("POST", "/api/v1/prs/12/details")).toBe("POST /api/v1/prs/:id/details");
+		expect(apiOperation("POST", "/api/v1/sessions/s1/conversation/turns/t1/rollback"))
+			.toBe("POST /api/v1/sessions/:id/conversation/turns/:id/rollback");
+		expect(apiOperation("POST", "/api/v1/sessions/s1/conversation/mcp/reload")).toBe("POST /api/v1/sessions/:id/conversation/mcp/reload");
 	});
 
 	it("drops the query string", () => {
@@ -62,7 +66,8 @@ describe("apiOperation", () => {
 		for (const file of sourceFiles(join(__dirname, ".."))) {
 			const source = readFileSync(file, "utf8");
 			for (const [, path] of source.matchAll(/[`"](?:\$\{API\}|\/api\/v1)(\/[^`"?]*)/g)) add(path);
-			for (const [, path] of source.matchAll(/sessionPath\([^,]+, "([^"]+)"/g)) add(path);
+			// Path helpers that take the route's tail as their second argument.
+			for (const [, path] of source.matchAll(/(?:sessionPath|conversationPath|reviewConversationPath)\([^,]+, [`"]([^`"]+)[`"]/g)) add(path);
 		}
 		expect(words.size).toBeGreaterThan(40);
 		expect([...words].filter((word) => !API_ROUTE_WORDS.has(word)).sort()).toEqual([]);

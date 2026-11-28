@@ -8,19 +8,19 @@
 
 const ROUTE_WORDS = new Set([
 	"api", "v1",
-	"accounts", "agents", "approvals", "artifact-files", "artifact-versions", "artifacts", "attachments", "auto-inject-ci",
-	"auto-inject-review", "auto-review", "blob", "branches", "browser", "button", "cancel", "chat",
-	"chat-view", "cleanup", "clone", "close", "codex", "comments", "config-options",
-	"conversation", "delegate", "details", "device", "devices", "diffs", "dirs", "endpoints",
-	"file", "files", "fork", "fork-options", "fs", "github-availability", "github-owners",
-	"history", "identity", "imports", "initialize", "inputs", "interface-transition",
-	"interrupt", "kill", "live", "manifest", "merge", "messages", "models", "notice-acknowledgement",
-	"notifications", "open", "orchestrators", "pairings", "pin", "pr", "prepare",
-	"prepare-git", "prewarm", "preview", "projects", "provider-switch", "prs", "push",
-	"quality", "read-all", "refresh", "released", "remote-host", "account-token",
-	"renders", "rerequest", "resolve", "restore", "resume-agent", "reviews", "revision",
-	"screenshot", "search", "selection", "send", "sessions", "settings", "shell-terminals", "skills", "steer-or-send",
-	"switch", "sync", "telemetry", "tree", "trigger", "validate", "workspace",
+	"account-token", "accounts", "agents", "approvals", "artifact-files", "artifact-versions", "artifacts",
+	"attachments", "auto-inject-ci", "auto-inject-review", "auto-resume", "auto-review", "blob", "branches",
+	"browser", "button", "cancel", "chat", "chat-view", "cleanup", "clone", "close", "codex", "comments",
+	"compact", "config-options", "conversation", "delegate", "details", "device", "devices", "diffs", "dirs",
+	"edit", "endpoints", "file", "files", "fork", "fork-options", "fs", "github-availability", "github-owners",
+	"history", "identity", "imports", "initialize", "inputs", "interface-transition", "interrupt", "kill",
+	"live", "manifest", "mcp", "merge", "messages", "models", "notice-acknowledgement", "notifications", "open",
+	"orchestrators", "pairings", "pin", "pr", "prepare", "prepare-git", "preview", "prewarm", "projects",
+	"provider-switch", "prs", "push", "quality", "read-all", "refresh", "released", "reload", "remote-host",
+	"renders", "rerequest", "resolve", "restore", "resume-agent", "retry", "reviews", "revision", "rollback",
+	"screenshot", "search", "selection", "send", "sessions", "settings", "shell-terminals", "skills", "steer",
+	"steer-or-send", "switch", "sync", "telemetry", "title", "tree", "trigger", "turns", "validate",
+	"workspace",
 ]);
 
 // After these, the rest of the path is a file the user's workspace holds, even
