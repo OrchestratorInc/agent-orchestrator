@@ -610,22 +610,32 @@ describe("SessionChatSurface startup check", () => {
 		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ continuation: true }), expect.any(Promise));
 	});
 
-	it("refreshes a remote host's sessions until its check is over", async () => {
-		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
-		conversationCommandState.send = vi.fn().mockResolvedValue({});
-		const client = new QueryClient();
-		let readiness: WorkspaceSession["statusReadiness"] = "checking";
-		await client.prefetchQuery({
-			queryKey: ["remote-workspaces", "h_air"],
-			queryFn: () => [{ id: session.workspaceId, sessions: [{ ...session, statusReadiness: readiness }] }],
-		});
-		render(<Wrapper client={client}><SessionChatSurface session={checking} hostId="h_air" /></Wrapper>);
-		await act(async () => {
-			await sideMocks.workspaceSend?.("go on", undefined, "held-1");
-		});
-		const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void>;
-		readiness = "ready";
-		await act(async () => { await whenReady; });
+	it("refreshes a remote host's sessions only while its check runs", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+			conversationCommandState.send = vi.fn().mockResolvedValue({});
+			const client = new QueryClient();
+			let readiness: WorkspaceSession["statusReadiness"] = "checking";
+			const read = vi.fn(async () => [{ id: session.workspaceId, sessions: [{ ...session, statusReadiness: readiness }] }]);
+			await client.prefetchQuery({ queryKey: ["remote-workspaces", "h_air"], queryFn: read });
+			render(<Wrapper client={client}><SessionChatSurface session={checking} hostId="h_air" /></Wrapper>);
+			await act(async () => {
+				await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+			});
+			const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void>;
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(read).toHaveBeenCalledTimes(2);
+			readiness = "ready";
+			await act(async () => {
+				vi.advanceTimersByTime(1_000);
+				await whenReady;
+			});
+			await act(async () => { vi.advanceTimersByTime(5_000); });
+			expect(read).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

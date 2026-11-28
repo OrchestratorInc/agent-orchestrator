@@ -994,9 +994,10 @@ function whenSessionRecovered(queryClient: QueryClient, sessionId: string, hostI
 	const workspacesKey = workspaceQueryKeyForHost(hostId);
 	const resumeKey = ["resume-agent", hostId ?? "local", sessionId];
 	let resumeSettled = false;
+	const cached = () => queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
+		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === sessionId);
 	const recovered = () => {
-		const session = queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
-			?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === sessionId);
+		const session = cached();
 		return session?.statusReadiness !== "checking" && queryClient.isMutating({ mutationKey: resumeKey }) === 0 &&
 			(resumeSettled || !canResumeAgent(session));
 	};
@@ -1006,8 +1007,8 @@ function whenSessionRecovered(queryClient: QueryClient, sessionId: string, hostI
 			? setInterval(() => void queryClient.refetchQueries({ queryKey: workspacesKey, exact: true }, { cancelRefetch: false }), 1_000)
 			: undefined;
 		const settle = () => {
+			if (cached()?.statusReadiness !== "checking") clearInterval(poll);
 			if (!recovered()) return;
-			clearInterval(poll);
 			stopQueries();
 			stopMutations();
 			resolve();

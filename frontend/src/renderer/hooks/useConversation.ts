@@ -1693,7 +1693,10 @@ export function useConversationCommands(
 			// send's does, and goes out only after the restore or the wait, so it lands
 			// after it. A failed restore sent nothing: the composer gets the draft back
 			// with the reason, and the session stays archived.
-			const echo = sendLocalEcho(clientMessageId, normalizedInput);
+			const echo = {
+				...sendLocalEcho(clientMessageId, normalizedInput),
+				providerSwitch: switchEcho(normalizedInput.switchDisplay, normalizedInput.providerSwitch?.targetHarness, newestCachedSequence(queryClient, sessionId, hostId)),
+			};
 			addConversationLocalEcho(queryClient, stateKey(sessionId), whenReady ? { ...echo, delivery: "held" } : echo);
 			return (whenReady ?? resume.mutateAsync()).then(
 				() => send.mutateAsync(variables),
