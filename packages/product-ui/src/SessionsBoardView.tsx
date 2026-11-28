@@ -1,6 +1,7 @@
 import {
 	Fragment,
 	forwardRef,
+	useState,
 	type HTMLAttributes,
 	type ReactNode,
 } from "react";
@@ -119,8 +120,10 @@ export type BoardUsagePresentation = {
 };
 
 export type BoardPullRequestLabels = {
+	more?: (count: number) => string;
 	progress?: (progress: BoardPullRequestProgress) => string;
 	short: string;
+	showLess?: string;
 	states: Record<BoardPullRequestState, string>;
 };
 
@@ -376,7 +379,11 @@ export function SessionCardView({
 			</span>
 		</>
 	);
-	const prGroups = groupBoardPullRequests(prs).flatMap((group) => {
+	const [prsExpanded, setPrsExpanded] = useState(false);
+	const limitedPrs = limitBoardPullRequests(prs);
+	const hasOverflowPrs = limitedPrs.hiddenCount > 0;
+	const visiblePrs = prsExpanded || !hasOverflowPrs ? prs : limitedPrs.visible;
+	const prGroups = groupBoardPullRequests(visiblePrs).flatMap((group) => {
 		const compactGroup = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
 		const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);
 		return [
@@ -391,6 +398,22 @@ export function SessionCardView({
 			labels={labels.pr}
 		/>
 	));
+	const prOverflowToggle = hasOverflowPrs ? (
+		<button
+			aria-expanded={prsExpanded}
+			className="self-start rounded-sm py-0.5 text-2xs text-muted-foreground hover:text-foreground hover:underline"
+			data-testid="session-pr-overflow-toggle"
+			onClick={(event) => {
+				event.stopPropagation();
+				setPrsExpanded((current) => !current);
+			}}
+			type="button"
+		>
+			{prsExpanded
+				? (labels.pr.showLess ?? "Show less")
+				: (labels.pr.more ? labels.pr.more(limitedPrs.hiddenCount) : `+${limitedPrs.hiddenCount} more`)}
+		</button>
+	) : null;
 	const branchRow = showBranch ? (
 		<>
 			{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
@@ -471,7 +494,10 @@ export function SessionCardView({
 							</div>
 						</div>
 						{prGroups.length > 0 ? (
-							<div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">{prGroups}</div>
+							<div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">
+								{prGroups}
+								{prOverflowToggle}
+							</div>
 						) : null}
 					</div>
 				) : showBranch ? (
@@ -493,6 +519,7 @@ export function SessionCardView({
 				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
 					<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
 						{prGroups}
+						{prOverflowToggle}
 					</div>
 				</div>
 			)}
@@ -650,6 +677,74 @@ function BoardPullRequestGroup({
 function PullRequestLifecycleIcon({ state }: { state: BoardPullRequestState }) {
 	const className = cn("size-icon-sm shrink-0", lifecycleClassName(state));
 	return <GitPullRequestIcon aria-hidden="true" className={className} />;
+}
+
+export const BOARD_MERGED_PR_LIMIT = 3;
+export const BOARD_TOTAL_PR_LIMIT = 6;
+
+export type LimitedBoardPullRequests<T extends { state: BoardPullRequestState }> = {
+	hiddenCount: number;
+	visible: T[];
+};
+
+/**
+ * Caps how many pull requests a session card shows at once so long-lived
+ * sessions with many merged or stacked PRs do not take over the card.
+ * Actionable PRs (open, draft) keep priority; settled PRs (merged, closed)
+ * are capped independently and keep their most recent entries.
+ */
+export function limitBoardPullRequests<T extends { state: BoardPullRequestState }>(
+	prs: readonly T[],
+	options: { mergedLimit?: number; totalLimit?: number } = {},
+): LimitedBoardPullRequests<T> {
+	const mergedLimit = Math.max(0, options.mergedLimit ?? BOARD_MERGED_PR_LIMIT);
+	const totalLimit = Math.max(0, options.totalLimit ?? BOARD_TOTAL_PR_LIMIT);
+
+	const open: T[] = [];
+	const draft: T[] = [];
+	const merged: T[] = [];
+	const closed: T[] = [];
+	for (const pr of prs) {
+		switch (pr.state) {
+			case "open":
+				open.push(pr);
+				break;
+			case "draft":
+				draft.push(pr);
+				break;
+			case "merged":
+				merged.push(pr);
+				break;
+			case "closed":
+				closed.push(pr);
+				break;
+		}
+	}
+
+	if (prs.length <= totalLimit && merged.length + closed.length <= mergedLimit) {
+		return { hiddenCount: 0, visible: [...prs] };
+	}
+
+	let remaining = totalLimit;
+	const visibleOpen = open.slice(0, remaining);
+	remaining -= visibleOpen.length;
+
+	const visibleDraft = draft.slice(0, remaining);
+	remaining -= visibleDraft.length;
+
+	let settledBudget = Math.min(mergedLimit, remaining);
+	const mergedTake = Math.min(merged.length, settledBudget);
+	const visibleMerged = mergedTake > 0 ? merged.slice(-mergedTake) : [];
+	settledBudget -= visibleMerged.length;
+
+	const closedTake = Math.min(closed.length, settledBudget);
+	const visibleClosed = closedTake > 0 ? closed.slice(-closedTake) : [];
+
+	const visible = [...visibleOpen, ...visibleDraft, ...visibleMerged, ...visibleClosed];
+	return {
+		hiddenCount: prs.length - visible.length,
+		visible,
+	};
 }
 
 export function groupBoardPullRequests(

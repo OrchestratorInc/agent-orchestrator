@@ -1,3 +1,4 @@
+import { limitBoardPullRequests } from "@aoagents/product-ui";
 import { BrowserIcon } from "./icons";
 import { mediaCrossOrigin } from "../lib/file-media";
 import { useMemo, useState } from "react";
@@ -114,6 +115,7 @@ function compactPRStatus(
 function SessionCardBody({ session, detail }: { session: WorkspaceSession; detail?: string }) {
 	const { t } = useTranslation();
 	const prs = useMemo(() => sessionPRDisplaySummaries(session), [session]);
+	const { visible: visiblePRs, hiddenCount: hiddenPRCount } = useMemo(() => limitBoardPullRequests(prs), [prs]);
 	const status = session.statusReadiness === "unavailable"
 		? t("session.statusUnavailable")
 		: session.needsResume && !session.isTerminated
@@ -141,7 +143,7 @@ function SessionCardBody({ session, detail }: { session: WorkspaceSession; detai
 				<div className="border-t border-border pt-1.5">
 					<p className="sr-only">{t("pr.count", { count: prs.length })}</p>
 					<div className="space-y-1">
-						{prs.map((pr) => {
+						{visiblePRs.map((pr) => {
 							const status = compactPRStatus(pr, t);
 							const tone = prToneClasses[status.tone];
 							return (
@@ -152,6 +154,11 @@ function SessionCardBody({ session, detail }: { session: WorkspaceSession; detai
 								</div>
 							);
 						})}
+						{hiddenPRCount > 0 && (
+							<p className="text-caption text-muted-foreground">
+								{t("pr.checks.more", { count: hiddenPRCount })}
+							</p>
+						)}
 					</div>
 				</div>
 			)}

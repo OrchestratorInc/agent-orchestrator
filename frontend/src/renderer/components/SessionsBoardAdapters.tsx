@@ -735,8 +735,10 @@ function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessi
 
 function pullRequestLabels(t: TFunction): BoardPullRequestLabels {
 	return {
+		more: (count) => t("pr.checks.more", { count }),
 		progress: (progress) => pullRequestProgressLabel(progress, t),
 		short: t("pr.short"),
+		showLess: t("shell.showLess"),
 		states: {
 			closed: t("pr.state.closed"),
 			draft: t("pr.state.draft"),
