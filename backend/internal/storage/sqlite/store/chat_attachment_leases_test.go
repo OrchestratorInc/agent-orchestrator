@@ -259,8 +259,8 @@ func TestChatAttachmentReclaimedImageReferenceRefused(t *testing.T) {
 	if got := releasedNames(t, s, session); len(got) != 0 {
 		t.Fatalf("released = %v, want the sent image committed", got)
 	}
-	if err := s.UpdateQueuedTurnMessage(ctx, conversation, "turn-2", "look again", image(leasedDropped), 0, at.Add(2*time.Second), domain.ConversationQueuedEditDelivery{}); err == nil {
-		t.Fatal("a queued edit adding a reclaimed file's image was accepted")
+	if err := s.UpdateQueuedTurnMessage(ctx, conversation, "turn-2", "look again", image(leasedDropped), 0, at.Add(2*time.Second), domain.ConversationQueuedEditDelivery{}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
+		t.Fatalf("queued edit adding a reclaimed file's image = %v, want ErrChatAttachmentDiscarded", err)
 	}
 
 	link := domain.ConversationMessage{ID: "m3", Text: "see .ao/attachments/" + leasedDropped, Origin: domain.MessageOriginHuman,

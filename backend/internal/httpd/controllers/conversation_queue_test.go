@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -97,6 +98,7 @@ func TestEditQueuedTurnRouteRefusals(t *testing.T) {
 	}{
 		{"empty", chatsvc.ErrQueuedTurnTextRequired, http.StatusBadRequest, "CHAT_QUEUED_TEXT_REQUIRED"},
 		{"invalid content", chatsvc.ErrQueuedContentInvalid, http.StatusBadRequest, "CHAT_QUEUED_CONTENT_INVALID"},
+		{"discarded image file", fmt.Errorf("%w: aborted", store.ErrChatAttachmentDiscarded), http.StatusBadRequest, "CHAT_QUEUED_CONTENT_INVALID"},
 		{"stale revision", chatsvc.ErrQueuedEditConflict, http.StatusConflict, "CHAT_QUEUED_EDIT_CONFLICT"},
 		{"reused recovery key", store.ErrQueuedEditDeliveryConflict, http.StatusConflict, "CHAT_QUEUED_EDIT_IDEMPOTENCY_CONFLICT"},
 		{"already dispatched", store.ErrQueuedTurnNotAvailable, http.StatusConflict, "CHAT_TURN_NOT_QUEUED"},

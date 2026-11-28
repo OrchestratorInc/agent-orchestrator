@@ -105,6 +105,11 @@ func writeQueuedTurnMutationError(w http.ResponseWriter, r *http.Request, err er
 	case errors.Is(err, chatsvc.ErrQueuedContentInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_QUEUED_CONTENT_INVALID", "queued message attachments are invalid", nil)
+	case errors.Is(err, store.ErrChatAttachmentDiscarded):
+		// Refused before the edit's receipt was written: nothing changed, so the
+		// person can remove or replace the image and try again.
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_QUEUED_CONTENT_INVALID", "a queued image's file was discarded; remove or replace it", nil)
 	case errors.Is(err, store.ErrQueuedEditDeliveryConflict):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_QUEUED_EDIT_IDEMPOTENCY_CONFLICT", "queued edit recovery key belongs to a different request", nil)
