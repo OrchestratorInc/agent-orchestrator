@@ -355,6 +355,28 @@ func TestSanitizeCopilotLoadedModeFailsWhenSetterOmitsCatalog(t *testing.T) {
 		t.Fatalf("err = %v, want 'provider did not report the resulting mode'", err)
 	}
 }
+func TestPermissionConfigOptionsMapsAgyAcceptEditsOntoApprovalTier(t *testing.T) {
+	for _, value := range []string{"accept-edits", "auto_edit"} {
+		input := []ports.ChatConfigOption{{
+			ID:      "mode",
+			Current: ports.ChatConfigOptionValue{Select: value},
+			Choices: []ports.ChatConfigOptionChoice{
+				{Value: "default", Name: "Default"},
+				{Value: value, Name: "Auto Edit"},
+			},
+		}}
+		got := permissionConfigOptions(domain.HarnessAgy, input)
+		choice := got[0].Choices[1]
+		if choice.PermissionMode != domain.PermissionModeAcceptEdits || choice.Name != "Accept edits" {
+			t.Fatalf("%q mapping = (%q, %q), want (%q, %q)", value, choice.PermissionMode, choice.Name, domain.PermissionModeAcceptEdits, "Accept edits")
+		}
+		settings, _ := settingsFromConfigOptions(domain.ConversationSettings{}, got)
+		if settings.ApprovalMode != domain.PermissionModeAcceptEdits {
+			t.Fatalf("%q settings approval = %q, want accept edits", value, settings.ApprovalMode)
+		}
+	}
+}
+
 func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
 	input := []ports.ChatConfigOption{{
 		ID:      "mode",
