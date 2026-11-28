@@ -4772,6 +4772,8 @@
 	"sessionImport.importChats_one": "导入 {{count}} 个对话",
 	"sessionImport.importChats_other": "导入 {{count}} 个对话",
 	"sessionImport.agentSignedOut": "登录后继续",
+	"sessionImport.continuesIn": "在 {{agent}} 中继续",
+	"sessionImport.fromApp": "来自 {{app}}",
 	"sessionImport.agentMissing": "未安装",
 	"sessionImport.foldersTitle": "导入项目及其对话",
 	"sessionImport.foldersDescription": "你选择的每个文件夹都会成为一个项目，并带上它以前的对话。",

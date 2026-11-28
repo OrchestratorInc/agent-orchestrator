@@ -4773,6 +4773,8 @@
 	"sessionImport.importChats_one": "Import {{count}} chat",
 	"sessionImport.importChats_other": "Import {{count}} chats",
 	"sessionImport.agentSignedOut": "Sign in to continue",
+	"sessionImport.continuesIn": "Continues in {{agent}}",
+	"sessionImport.fromApp": "From {{app}}",
 	"sessionImport.agentMissing": "Not installed",
 	"sessionImport.foldersTitle": "Import projects and their chats",
 	"sessionImport.foldersDescription": "Each folder you pick becomes a project with its earlier chats.",

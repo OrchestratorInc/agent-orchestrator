@@ -64,6 +64,18 @@ it("lists OMP chats for import", async () => {
 	renderPanel("omp");
 	expect(await screen.findByRole("checkbox", { name: "Import OMP chat" })).toBeInTheDocument();
 });
+it("lists Cursor editor chats under Cursor and says where they continue", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [
+			{ ...chat, id: "editor", title: "Real estate options", projectId: "project", harness: "claude-code", source: "cursor" },
+			{ ...chat, id: "claude", title: "Fix parser", projectId: "project", harness: "claude-code" },
+		] },
+	});
+	renderPanel("cursor");
+	const row = (await screen.findByRole("checkbox", { name: "Import Real estate options" })).closest("label");
+	expect(row).toHaveTextContent("Continues in Claude Code");
+	expect(screen.queryByText("Fix parser")).not.toBeInTheDocument();
+});
 it("lists only this agent's chats, preselects the ones not imported and imports only the selection", async () => {
 	renderPanel();
 	const recent = await screen.findByRole("checkbox", { name: "Import Fix parser" });

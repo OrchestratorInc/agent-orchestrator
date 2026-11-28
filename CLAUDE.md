@@ -12,7 +12,10 @@ app-data location. The read exceptions are an explicit user-initiated import
 from a validated Chrome, Firefox, or Safari profile: read known source files
 without modifying them and keep snapshots and results under `~/.ao`; and chat
 import reading Conductor's `com.conductor.app/conductor.db` with SQLite
-`mode=ro`, never writing or checkpointing it. The sole
+`mode=ro`, never writing or checkpointing it; and chat import reading the
+Cursor editor's `Cursor/User/globalStorage/state.vscdb` the same way, querying
+only a chat's exact `cursorDiskKV` keys and `ItemTable`'s
+`composer.composerHeaders`. The sole
 write exception is Chrome mode's native-messaging host manifest, which Chrome
 only reads from its own `NativeMessagingHosts` directory: written only by an
 explicit `ao browser chrome setup`, removed by `remove`, pointing at a wrapper

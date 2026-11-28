@@ -4773,6 +4773,8 @@
 	"sessionImport.importChats_one": "{{count}} sohbeti içe aktar",
 	"sessionImport.importChats_other": "{{count}} sohbeti içe aktar",
 	"sessionImport.agentSignedOut": "Devam etmek için oturum açın",
+	"sessionImport.continuesIn": "{{agent}} içinde devam eder",
+	"sessionImport.fromApp": "{{app}} kaynaklı",
 	"sessionImport.agentMissing": "Yüklü değil",
 	"sessionImport.foldersTitle": "Projeleri ve sohbetlerini içe aktar",
 	"sessionImport.foldersDescription": "Seçtiğiniz her klasör, önceki sohbetleriyle birlikte bir proje olur.",
