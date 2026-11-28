@@ -4356,39 +4356,6 @@ func TestExitAgentPreservesSessionAndMapsExitedReadModel(t *testing.T) {
 	}
 }
 
-func TestSpawnGenericOrchestratorReturnsExistingActiveSession(t *testing.T) {
-	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
-	st.sessions["mer-orch"] = domain.SessionRecord{
-		ID:        "mer-orch",
-		ProjectID: "mer",
-		Kind:      domain.KindOrchestrator,
-		Harness:   domain.HarnessCodex,
-	}
-	fc := &fakeCommander{}
-	svc := &Service{manager: fc, store: st}
-
-	got, promptBytes, systemPromptBytes, err := svc.Spawn(context.Background(), ports.SpawnConfig{
-		ProjectID:   "mer",
-		Kind:        domain.KindOrchestrator,
-		Harness:     domain.HarnessClaudeCode,
-		Prompt:      "start another orchestrator",
-		DisplayName: "duplicate",
-	})
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
-	if got.ID != "mer-orch" {
-		t.Fatalf("returned id = %q, want existing orchestrator mer-orch", got.ID)
-	}
-	if promptBytes != 0 || systemPromptBytes != 0 {
-		t.Fatalf("prompt sizes = (%d, %d), want zero for reused session", promptBytes, systemPromptBytes)
-	}
-	if fc.spawned {
-		t.Fatal("manager.Spawn must not be called when an active orchestrator already exists")
-	}
-}
-
 // A scheduled orchestrator must never be falsely linked to an unrelated
 // interactive orchestrator. It stays retryable until the active one exits.
 func TestSpawnAutomationOrchestratorConflictsWithUnrelatedActiveSession(t *testing.T) {
@@ -4514,15 +4481,30 @@ func TestSpawnGenericOrchestratorSerializesConcurrentRequests(t *testing.T) {
 	close(results)
 	close(errs)
 
+	// Exactly one request creates the orchestrator; the other is rejected
+	// rather than silently handed the session the first one created.
+	var conflicts int
 	for err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent Spawn: %v", err)
+		if err == nil {
+			continue
+		}
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "ORCHESTRATOR_ALREADY_EXISTS" {
+			t.Fatalf("concurrent Spawn: %v, want nil or ORCHESTRATOR_ALREADY_EXISTS", err)
+		}
+		conflicts++
+	}
+	if conflicts != 1 {
+		t.Fatalf("conflicts = %d, want 1", conflicts)
+	}
+	var created int
+	for session := range results {
+		if session.ID == "mer-orch" {
+			created++
 		}
 	}
-	for session := range results {
-		if session.ID != "mer-orch" {
-			t.Fatalf("returned id = %q, want mer-orch", session.ID)
-		}
+	if created != 1 {
+		t.Fatalf("sessions returned = %d, want 1", created)
 	}
 	if fc.spawnCalls != 1 {
 		t.Fatalf("manager.Spawn calls = %d, want 1", fc.spawnCalls)
@@ -6872,5 +6854,25 @@ func TestResumeAgentShowsImportVersionMessage(t *testing.T) {
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_IMPORT_RESUME_FAILED" || apiErr.Message != versionErr.Message {
 		t.Fatalf("err = %#v, want SESSION_IMPORT_RESUME_FAILED with the version message", err)
+	}
+}
+
+func TestSpawnRejectsSecondActiveOrchestrator(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+
+	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, DisplayName: "second"})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "ORCHESTRATOR_ALREADY_EXISTS" || apiErr.Kind != apierr.KindConflict {
+		t.Fatalf("err = %v, want ORCHESTRATOR_ALREADY_EXISTS conflict", err)
+	}
+	if !strings.Contains(apiErr.Message, "mer-1") {
+		t.Fatalf("message %q should name the existing orchestrator", apiErr.Message)
+	}
+	if fc.spawned {
+		t.Fatal("must not spawn when an orchestrator already exists")
 	}
 }
