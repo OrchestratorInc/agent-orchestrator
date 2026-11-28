@@ -25727,6 +25727,14 @@ components:
           type: string
         attribution:
           $ref: '#/components/schemas/AttributionConfig'
+        autoInjectCI:
+          type:
+          - "null"
+          - boolean
+        autoInjectReview:
+          type:
+          - "null"
+          - boolean
         autoReview:
           type: boolean
         canonicalRepoURL:

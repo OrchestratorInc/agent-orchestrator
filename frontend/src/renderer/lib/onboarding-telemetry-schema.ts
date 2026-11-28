@@ -22,7 +22,9 @@ export const ONBOARDING_OUTCOMES = ["finished", "skipped_setup", "superseded"] a
 export type OnboardingOutcome = (typeof ONBOARDING_OUTCOMES)[number];
 
 /** already_done: passed over because there was nothing to do; user: the person moved on without doing it; dismissed: the tour was closed. */
-export const ONBOARDING_SKIP_REASONS = ["already_done", "user", "dismissed"] as const;
+export const ONBOARDING_SKIP_REASONS = ["already_done", "user", "dismissed", "activated", "expired"] as const;
+/** Which version of the post-setup funnel sent a `tour_*` / `first_task` / activation event. */
+export const ONBOARDING_FUNNEL_VARIANTS = ["unguided"] as const;
 export type OnboardingSkipReason = (typeof ONBOARDING_SKIP_REASONS)[number];
 
 /** left: onboarding ended, or the window closed, with the attempt still running, so nothing will see how it ends. */
@@ -139,11 +141,13 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 				safe.time_bucket = activationBucket(since);
 			}
 			if (typeof p?.during_tour === "boolean") safe.during_tour = p.during_tour;
+			set(safe, "funnel_variant", oneOf(p?.funnel_variant, ONBOARDING_FUNNEL_VARIANTS));
 			return safe;
 		}
 	}
 	stepFields(safe, p);
 	set(safe, "run_kind", oneOf(p?.run_kind, ONBOARDING_RUN_KINDS));
+	set(safe, "funnel_variant", oneOf(p?.funnel_variant, ONBOARDING_FUNNEL_VARIANTS));
 	switch (event) {
 		case "ao.onboarding.step_viewed":
 			set(safe, "missing", missingList(p?.missing));
@@ -157,6 +161,13 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			set(safe, "project_source", oneOf(p?.project_source, ONBOARDING_PROJECT_SOURCES));
 			set(safe, "agents_ready", boundedInt(p?.agents_ready, 0, 100));
 			if (typeof p?.gh_ready === "boolean") safe.gh_ready = p.gh_ready;
+			for (const key of ["archive_on_merge", "auto_review", "assigned_issues", "fix_checks", "fix_review_comments"] as const) {
+				if (typeof p?.[key] === "boolean") safe[key] = p[key];
+			}
+			// The agent picked on work_defaults: registry ids, nothing else.
+			for (const key of ["orchestrator_agent", "worker_agent"] as const) {
+				if (typeof p?.[key] === "string" && TARGET_PATTERN.test(p[key])) safe[key] = p[key];
+			}
 			break;
 		case "ao.onboarding.step_abandoned":
 			set(safe, "time_on_step_ms", duration(p?.time_on_step_ms));

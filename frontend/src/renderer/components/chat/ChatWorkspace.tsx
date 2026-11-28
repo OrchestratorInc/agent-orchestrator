@@ -58,7 +58,7 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { ArrowDown, Bug, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles, Wrench } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -1494,8 +1494,8 @@ function ChatWorkspaceContent({
 		},
 		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
-	// Messages and steers this composer sent that the guided tour waits to see
-	// arrive (GuidedTour): the chat holding one is what counts as delivered.
+	// Messages and steers this composer sent that the onboarding funnel waits to see
+	// arrive (FirstTaskFunnel): the chat holding one is what counts as delivered.
 	const tourAwaitedIds = useRef(new Set<string>());
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
@@ -2157,6 +2157,14 @@ function ChatWorkspaceContent({
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
 	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
+	const welcomeKind: WelcomeKind = artifactSession ? "artifact" : sessionRole === "orchestrator" ? "orchestrator" : "chat";
+	// An orchestrator's empty chat asks in orchestration terms; its surface says
+	// "first task" instead while the project has no workers (welcomeHeading).
+	const emptyChatHeading = welcomeHeading ?? t(
+		welcomeKind === "artifact" ? "chat.welcome.artifactHeading"
+		: welcomeKind === "orchestrator" ? "chat.welcome.orchestratorHeading"
+		: "chat.welcome.heading",
+	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
 	// disappears on the first send, and sliding from the dock's top would make the
@@ -2501,20 +2509,19 @@ function ChatWorkspaceContent({
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
 								) : null}
-								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
 									className="relative z-10"
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
-									data-tour="composer"
+									data-chat-composer-box=""
 								>
 									{conversationEmpty ? (
 										<WelcomeStack
-											heading={welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											heading={emptyChatHeading}
 											// While an orchestrator starts the prompts stay put, disabled, so they don't
 											// pop in at the handoff. Other fenced chats keep them hidden.
 											promptsOpen={composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
-											artifact={artifactSession}
+											kind={welcomeKind}
 											unavailable={newWorkDisabled || pendingInPlaceStart}
 											onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 											onRoom={setWelcomeRoom}
@@ -2525,7 +2532,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											{emptyChatHeading}
 										</h1>
 									) : null}
 									<McpServerBanner
@@ -2640,7 +2647,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : sessionRole === "orchestrator" ? t("chat.welcome.orchestratorPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
 										skills={skills}
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
@@ -2679,7 +2686,7 @@ function ChatWorkspaceContent({
 										parkUnsentSends={parkUnsentSends}
 									/>}
 								</div>
-								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center" data-tour="composer-tray">{composerTray}</div> : null}
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 								{draftNotice}
 							</div>
@@ -8568,6 +8575,20 @@ const CHAT_PROMPTS = [
 	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
+/** An orchestrator's: each one fans out into workers, so the first task shows what it does. */
+const ORCHESTRATOR_PROMPTS = [
+	{ prompt: "chat.welcome.orchestratorPrompt.refine", chip: "chat.welcome.chip.refine", icon: Wrench },
+	{ prompt: "chat.welcome.orchestratorPrompt.bug", chip: "chat.welcome.chip.bug", icon: Bug },
+	{ prompt: "chat.welcome.orchestratorPrompt.tests", chip: "chat.welcome.chip.tests", icon: FlaskConical },
+] as const;
+
+const WELCOME_PROMPTS = {
+	chat: { label: "chat.welcome.prompts", prompts: CHAT_PROMPTS },
+	artifact: { label: "chat.welcome.artifactPrompts", prompts: ARTIFACT_PROMPTS },
+	orchestrator: { label: "chat.welcome.orchestratorPrompts", prompts: ORCHESTRATOR_PROMPTS },
+} as const;
+type WelcomeKind = keyof typeof WELCOME_PROMPTS;
+
 /** The heading settling into the space the sample prompts leave: a soft deceleration. */
 const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
 
@@ -8581,10 +8602,10 @@ const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
  * an opacity, so the animation that starts on the first keystroke never relays out
  * the page while the user types.
  */
-function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
+function WelcomeStack({ heading, promptsOpen, kind, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; kind: WelcomeKind; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
+	const { label, prompts } = WELCOME_PROMPTS[kind];
 	// The prompts sit out of the flow, pinned to the composer's top edge, and this
 	// spacer holds their room. When they leave, the spacer closes at once and the
 	// prompts travel down with the heading, tucking behind the composer's top edge
@@ -8641,7 +8662,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
 				// Anchored on the composer box alone: a group-has variant would restyle the app
 				// on every DOM change (style-invalidation.test.ts).
-				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-chat-composer-box]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
 			>
 				{heading}
 			</motion.h1>
@@ -8660,8 +8681,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 						// Sink with the heading; the fade finishes before they reach the composer.
 						exit={{ opacity: 0, y: promptsHeight, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.2, ease: [0.4, 0, 1, 1] } } }}
 					>
-						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
-						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
+						<ul aria-label={t(label)} className="flex flex-wrap justify-center gap-2 pb-4">
 							{chips(onPick)}
 						</ul>
 					</motion.div>

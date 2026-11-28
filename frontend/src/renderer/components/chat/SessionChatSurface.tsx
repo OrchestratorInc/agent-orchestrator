@@ -59,7 +59,8 @@ import type { Theme } from "../../stores/ui-store";
 import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, workerSessions, type WorkspaceSession, type WorkspaceSummary } from "../../types/workspace";
+import { workspaceQueryKeyForHost } from "../../hooks/useWorkspaceQuery";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
@@ -224,6 +225,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const currentTurn = snapshot ? activeTurn(snapshot) : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(currentTurn), currentTurn?.id);
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
+	// An orchestrator's empty chat asks for the project's first task, unless the
+	// project list (read from the shell's cache, never fetched here) shows it
+	// already has workers: a replaced orchestrator on a busy project gets the
+	// usual heading. Until the list is known it stays on "first task", so a
+	// project just added never switches heading as the list arrives.
+	const { data: cachedProjects } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), enabled: false });
+	const orchestratorProject = session.kind === "orchestrator" ? cachedProjects?.find((project) => project.id === session.workspaceId) : undefined;
+	const orchestratorHeading = session.kind === "orchestrator" && !(orchestratorProject && workerSessions(orchestratorProject.sessions).length > 0)
+		? t("chat.welcome.orchestratorFirstHeading")
+		: undefined;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it
@@ -761,6 +772,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				hostLocalLinks={loopbackReach && sessionIsActive(session)}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
+				welcomeHeading={orchestratorHeading}
 				sessionRole={session.kind}
 				session={session}
 				onSessionRenamed={onSessionRenamed}

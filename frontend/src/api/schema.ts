@@ -9020,6 +9020,8 @@ export interface components {
             agentRules?: string;
             agentRulesFile?: string;
             attribution?: components["schemas"]["AttributionConfig"];
+            autoInjectCI?: null | boolean;
+            autoInjectReview?: null | boolean;
             autoReview?: boolean;
             canonicalRepoURL?: string;
             containerReap?: components["schemas"]["ContainerReapConfig"];
