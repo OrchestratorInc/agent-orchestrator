@@ -8,6 +8,7 @@ import {
 	clampBoundsToWindow,
 	createBrowserViewHost,
 	isAllowedBrowserURL,
+	isBrowserPermissionAllowed,
 	normalizeBrowserURL,
 	sanitizeBrowserTitle,
 	sanitizeBrowserURL,
@@ -33,6 +34,30 @@ import { parseAgentBrowserJSON } from "./agent-browser-runtime";
 vi.mock("electron", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("electron")>();
 	return { ...actual, net: { fetch: vi.fn() } };
+});
+
+describe("browser permission policy", () => {
+	it.each([
+		"local-network",
+		"local-network-access",
+		"loopback-network",
+		"storage-access",
+		"top-level-storage-access",
+		"persistent-storage",
+	])("allows the ordinary browser capability %s", (permission) => {
+		expect(isBrowserPermissionAllowed(permission)).toBe(true);
+	});
+
+	it.each(["camera", "media", "geolocation", "notifications", "hid", "serial", "usb"])(
+		"denies the sensitive device capability %s",
+		(permission) => {
+			expect(isBrowserPermissionAllowed(permission)).toBe(false);
+		},
+	);
+
+	it("fails closed when Chromium introduces an unclassified permission", () => {
+		expect(isBrowserPermissionAllowed("future-browser-capability")).toBe(false);
+	});
 });
 
 describe("browser URL sanitization", () => {
@@ -3836,7 +3861,7 @@ describe("agent browser runtime", () => {
 		expect(result).toMatchObject({ text: "t1" });
 	});
 
-	it("allows browser clipboard writes while denying reads and other permissions", async () => {
+	it("allows ordinary browser permissions and clipboard writes while denying reads and devices", async () => {
 		const { host, setPermissionCheckHandler, setPermissionRequestHandler, webContents } = setupHost();
 		await host.execute("sess-1", "tabs");
 		await webContents.loadURL("https://example.com/page");
@@ -3851,6 +3876,16 @@ describe("agent browser runtime", () => {
 		expect(checkPermission(webContents, "clipboard-sanitized-write", "https://malicious.example", crossOriginDetails)).toBe(false);
 		expect(checkPermission(webContents, "clipboard-read", "https://example.com", mainFrameDetails)).toBe(false);
 		expect(checkPermission(webContents, "camera", "https://example.com", mainFrameDetails)).toBe(false);
+		// Ordinary browser capabilities are allowed in any frame, the way a
+		// regular browser behaves; security challenges exercise these while
+		// scoring the browser.
+		expect(checkPermission(webContents, "storage-access", "https://example.com", mainFrameDetails)).toBe(true);
+		expect(checkPermission(webContents, "storage-access", "https://example.com", iframeDetails)).toBe(true);
+		expect(checkPermission(webContents, "local-network", "https://example.com", mainFrameDetails)).toBe(true);
+		expect(checkPermission(webContents, "fullscreen", "https://example.com", mainFrameDetails)).toBe(true);
+		expect(checkPermission(webContents, "persistent-storage", "https://example.com", mainFrameDetails)).toBe(true);
+		// Unknown future permissions fail closed.
+		expect(checkPermission(webContents, "future-browser-capability", "https://example.com", mainFrameDetails)).toBe(false);
 
 		const requestPermission = setPermissionRequestHandler.mock.calls[0][0];
 		const callback = vi.fn();
@@ -3864,6 +3899,8 @@ describe("agent browser runtime", () => {
 		expect(callback).toHaveBeenLastCalledWith(false);
 		requestPermission(webContents, "camera", callback, mainFrameDetails);
 		expect(callback).toHaveBeenLastCalledWith(false);
+		requestPermission(webContents, "storage-access", callback, iframeDetails);
+		expect(callback).toHaveBeenLastCalledWith(true);
 	});
 
 	it("rounds every native browser tab view to match the renderer shell", async () => {

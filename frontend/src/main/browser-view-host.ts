@@ -441,6 +441,40 @@ type BrowserWebContents = Pick<
 
 type BrowserElectronSession = NonNullable<BrowserWebContents["session"]>;
 
+type BrowserPermission = Parameters<
+  NonNullable<Parameters<Session["setPermissionCheckHandler"]>[0]>
+>[1];
+
+// Electron approves every permission by default, while AO previously denied
+// every permission but same-origin clipboard writes. Both extremes are wrong
+// for a person-facing browser: the former exposes devices and location, while
+// the latter breaks ordinary web platform behavior, including the storage and
+// network capability checks that security challenges such as Cloudflare
+// Turnstile run while scoring the browser. Explicitly permit the capabilities
+// expected from AO's development browser; macOS still applies its app-level
+// local-network consent. Fail closed for sensitive device access and for
+// newly introduced Chromium permission types.
+const ALLOWED_BROWSER_PERMISSION_LIST = [
+  "background-fetch",
+  "background-sync",
+  "clipboard-sanitized-write",
+  "fullscreen",
+  "local-network",
+  "local-network-access",
+  "loopback-network",
+  "periodic-background-sync",
+  "persistent-storage",
+  "storage-access",
+  "top-level-storage-access",
+] as const satisfies readonly BrowserPermission[];
+const ALLOWED_BROWSER_PERMISSIONS: ReadonlySet<string> = new Set(
+  ALLOWED_BROWSER_PERMISSION_LIST,
+);
+
+export function isBrowserPermissionAllowed(permission: string): boolean {
+  return ALLOWED_BROWSER_PERMISSIONS.has(permission);
+}
+
 function canWriteBrowserClipboard(
   webContents: Pick<WebContents, "getURL"> | null,
   permission: string,
@@ -1296,26 +1330,32 @@ export function createBrowserViewHost(
     options.mainWindow.contentView.addChildView(view);
     options.onNativeViewAdded?.();
     view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
-    // Main-frame sites use this permission for actions such as "Copy link".
-    // Keep embedded frames, clipboard reads, and every other permission denied.
+    // Ordinary browser capabilities come from the allowlist so pages behave
+    // like they do in a regular browser. Clipboard writes stay tighter:
+    // main-frame and same-origin only, for actions such as "Copy link".
+    // Devices, location, clipboard reads, and unknown permissions stay denied.
     view.webContents.session?.setPermissionCheckHandler?.(
       (contents, permission, _origin, details) =>
-        canWriteBrowserClipboard(
-          contents,
-          permission,
-          details.requestingUrl,
-          details.isMainFrame,
-        ),
-    );
-    view.webContents.session?.setPermissionRequestHandler?.(
-      (contents, permission, callback, details) =>
-        callback(
+        isBrowserPermissionAllowed(permission) &&
+        (permission !== "clipboard-sanitized-write" ||
           canWriteBrowserClipboard(
             contents,
             permission,
             details.requestingUrl,
             details.isMainFrame,
-          ),
+          )),
+    );
+    view.webContents.session?.setPermissionRequestHandler?.(
+      (contents, permission, callback, details) =>
+        callback(
+          isBrowserPermissionAllowed(permission) &&
+            (permission !== "clipboard-sanitized-write" ||
+              canWriteBrowserClipboard(
+                contents,
+                permission,
+                details.requestingUrl,
+                details.isMainFrame,
+              )),
         ),
     );
     // Remote app previews are HTTPS on loopback with AO's own certificate,
