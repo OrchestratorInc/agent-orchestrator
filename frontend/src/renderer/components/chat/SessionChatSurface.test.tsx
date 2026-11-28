@@ -563,7 +563,7 @@ describe("SessionChatSurface startup check", () => {
 		});
 		const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void> | undefined;
 		let released = false;
-		void whenReady?.then(() => { released = true; });
+		void whenReady?.then(() => { released = true; }, () => {});
 		await act(async () => {});
 		return { client, view, whenReady, released: () => released };
 	};
@@ -591,6 +591,23 @@ describe("SessionChatSurface startup check", () => {
 		expect(released()).toBe(false);
 		await act(async () => { listed(client, { ...session, statusReadiness: "ready", activity: { state: "idle", lastActivityAt: "2026-08-08T00:00:00Z" } }); });
 		expect(released()).toBe(true);
+	});
+
+	it("waits on the session's own lookup when the list has no row for it", async () => {
+		const { client, released } = await sendDuringCheck(checking, { ...session, id: "another" });
+		expect(released()).toBe(false);
+		await act(async () => { client.setQueryData(["session", session.id], checking); });
+		expect(released()).toBe(false);
+		await act(async () => { client.setQueryData(["session", session.id], { ...session, statusReadiness: "ready" }); });
+		expect(released()).toBe(true);
+	});
+
+	it("hands the message back when a new chat takes over the session's id", async () => {
+		const held = { ...checking, createdAt: "2026-11-28T00:00:00Z" };
+		const { client, whenReady } = await sendDuringCheck(held);
+		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready", createdAt: "2026-11-28T01:00:00Z" }); });
+		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
 	});
 
 	it("sends at once when the check is already over", async () => {

@@ -614,7 +614,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			: undefined);
 	const startupHold = statusReadiness === "checking" && sessionIsActive(session) && renderSnapshot?.controller.state === "stopped";
 	const sendWhenReady = (input: Parameters<typeof commands.send>[0]) => startupHold
-		? commands.send(input, whenSessionRecovered(queryClient, session.id, hostId))
+		? commands.send(input, whenSessionRecovered(queryClient, session, hostId))
 		: commands.send(input);
 	// A held search match is applied to the conversation the daemon holds. An
 	// orchestrator with nothing cached, and a switch from the terminal, first
@@ -993,31 +993,48 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 });
 
-function whenSessionRecovered(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
+function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, hostId?: string): Promise<void> {
 	const workspacesKey = workspaceQueryKeyForHost(hostId);
-	const resumeKey = ["resume-agent", hostId ?? "local", sessionId];
+	const directKey = ["session", held.id];
+	const resumeKey = ["resume-agent", hostId ?? "local", held.id];
 	let resumeSettled = false;
-	const cached = () => queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
-		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === sessionId);
+	const listed = () => queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
+		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === held.id);
+	const cached = () => listed() ?? (hostId ? undefined : queryClient.getQueryData<WorkspaceSession>(directKey));
+	const replaced = () => {
+		const session = cached();
+		return Boolean(session && session.createdAt !== held.createdAt);
+	};
 	const recovered = () => {
 		const session = cached();
-		return session?.statusReadiness !== "checking" && queryClient.isMutating({ mutationKey: resumeKey }) === 0 &&
+		return Boolean(session) && session?.statusReadiness !== "checking" && queryClient.isMutating({ mutationKey: resumeKey }) === 0 &&
 			(resumeSettled || !canResumeAgent(session));
 	};
-	return new Promise((resolve) => {
+	const replacedError = () => Object.assign(new Error("This chat was replaced, so the message was not sent."), { code: "SESSION_NOT_FOUND" });
+	return new Promise((resolve, reject) => {
+		if (replaced()) return reject(replacedError());
 		if (recovered()) return resolve();
-		const poll = hostId
-			? setInterval(() => void queryClient.refetchQueries({ queryKey: workspacesKey, exact: true }, { cancelRefetch: false }), 1_000)
-			: undefined;
-		const settle = () => {
-			if (cached()?.statusReadiness !== "checking") clearInterval(poll);
-			if (!recovered()) return;
+		const poll = setInterval(() => {
+			if (hostId) void queryClient.refetchQueries({ queryKey: workspacesKey, exact: true }, { cancelRefetch: false });
+			else if (!listed()) void queryClient.refetchQueries({ queryKey: directKey, exact: true }, { cancelRefetch: false });
+		}, 1_000);
+		const stop = () => {
+			clearInterval(poll);
 			stopQueries();
 			stopMutations();
+		};
+		const settle = () => {
+			if (replaced()) {
+				stop();
+				return reject(replacedError());
+			}
+			if (cached()?.statusReadiness !== "checking") clearInterval(poll);
+			if (!recovered()) return;
+			stop();
 			resolve();
 		};
 		const stopQueries = queryClient.getQueryCache().subscribe((event) => {
-			if (event.query.queryHash === hashKey(workspacesKey)) settle();
+			if (event.query.queryHash === hashKey(workspacesKey) || event.query.queryHash === hashKey(directKey)) settle();
 		});
 		const stopMutations = queryClient.getMutationCache().subscribe((event) => {
 			if (!event.mutation || hashKey(event.mutation.options.mutationKey ?? []) !== hashKey(resumeKey)) return;
