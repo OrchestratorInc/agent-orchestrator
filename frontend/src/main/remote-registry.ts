@@ -6,6 +6,7 @@ export type ConnectedHostView = {
 	label: string;
 	url: string;
 	base: string;
+	ipv6Loopback?: boolean;
 };
 
 type StartProxy = (entry: RemoteEntry) => Promise<ActiveProxy>;
@@ -42,7 +43,7 @@ export class RemoteRegistry {
 				await connected.proxy.close();
 			}
 			const proxy = await this.start(entry);
-			const view = { hostId: entry.hostId, label: entry.label, url: entry.url, base: proxy.base };
+			const view = { hostId: entry.hostId, label: entry.label, url: entry.url, base: proxy.base, ipv6Loopback: proxy.ipv6Loopback };
 			this.live.set(entry.url, { view, proxy, password: entry.password });
 			return view;
 		});

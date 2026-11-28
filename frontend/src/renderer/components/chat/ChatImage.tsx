@@ -12,6 +12,7 @@
  * Images mixed into a sentence stay in the sentence.
  */
 
+import { chatImageHostUrl } from "../../lib/host-clients";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ExtraProps } from "react-markdown";
@@ -117,7 +118,7 @@ export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 	// The failed URL rather than a boolean: a new URL deserves its own attempt.
 	const [failedSrc, setFailedSrc] = useState<string | null>(null);
 	const rawUrl = typeof src === "string" ? src : undefined;
-	const url = useChatImageSrc(rawUrl);
+	const url = chatImageHostUrl(useChatImageSrc(rawUrl));
 	const label = alt ?? "";
 
 	if (!url || url === failedSrc)

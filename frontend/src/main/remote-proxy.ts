@@ -39,6 +39,7 @@ import type { RemoteEntry } from "./remotes-store";
 export type ActiveProxy = {
 	base: string;
 	listeningAddress?: string;
+	ipv6Loopback?: boolean;
 	previewUrl: (sessionId: string, sourceUrl: string) => string;
 	resolvePreviewUrl: (sessionId: string, viewedUrl: string) => string;
 	/** The host's agent browser for a session's agent tab; "" when the host has none. */
@@ -213,6 +214,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	// lands on whatever else that vhost serves at /api/v1.
 	const prefix = upstream.pathname.replace(/\/+$/, "");
 	const server: Server = createServer();
+	const server6: Server = createServer();
 	const previewHosts = new Map<string, PreviewTarget>(); // by hostname: see previewPath
 	const artifactHosts = new Map<string, { host: string; sourceHref: string }>();
 	const renderHosts = new Map<string, string>();
@@ -220,6 +222,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	const tunnels = new Set<() => void>();
 	// Allow slow uploads; SSE response timeouts are disabled on the upstream request below.
 	server.requestTimeout = 0;
+	server6.requestTimeout = 0;
 
 	const stripToken = (rawUrl: string | undefined): string | null => {
 		if (!rawUrl || !rawUrl.startsWith("/")) return null;
@@ -842,8 +845,10 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		});
 	};
 
-	server.on("request", (req, res) => void handleRequest(req, res, "http"));
-	server.on("upgrade", (req, socket: Socket, head: Buffer) => handleUpgrade(req, socket, head, "http"));
+	for (const plain of [server, server6]) {
+		plain.on("request", (req, res) => void handleRequest(req, res, "http"));
+		plain.on("upgrade", (req, socket: Socket, head: Buffer) => handleUpgrade(req, socket, head, "http"));
+	}
 
 	// Previews are served over HTTPS too, so the browser panel speaks HTTP/2 to
 	// them (see preview-certificate.ts). HTTP/1.1 stays on for WebSockets.
@@ -860,10 +865,19 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const { address: listeningAddress, port } = server.address() as AddressInfo;
-	log(`started on 127.0.0.1:${port} (previews on ${securePort}) for ${upstream.host}`);
+	const ipv6Loopback = await new Promise<boolean>((resolve) => {
+		const failed = () => resolve(false);
+		server6.once("error", failed);
+		server6.listen(port, "::1", () => {
+			server6.off("error", failed);
+			resolve(true);
+		});
+	});
+	log(`started on 127.0.0.1:${port}${ipv6Loopback ? " and [::1]" : ""} (previews on ${securePort}) for ${upstream.host}`);
 	return {
 		base: `http://127.0.0.1:${port}/${token}`,
 		listeningAddress,
+		ipv6Loopback,
 		previewUrl: (sessionId, sourceUrl) => {
 			if (!sessionId || sessionId.length > 256) throw new Error("invalid preview session");
 			const raw = sourceUrl.trim();
@@ -988,15 +1002,17 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				closing = true;
 				for (const drop of tunnels) drop();
 				server.closeAllConnections();
+				server6.closeAllConnections();
 				for (const socket of secureSockets) socket.destroy();
 				void upstreamSession?.then((session) => session.destroy(), () => undefined);
-				let open = 2;
+				let open = 3;
 				const closed = () => {
 					if (--open > 0) return;
 					log(`stopped on 127.0.0.1:${port} for ${upstream.host}`);
 					resolve();
 				};
 				server.close(closed);
+				server6.close(closed);
 				secureServer.close(closed);
 			}),
 	};

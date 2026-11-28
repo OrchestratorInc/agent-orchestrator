@@ -13,6 +13,7 @@ describe("connected remote hosts", () => {
 		let closed = 0;
 		const registry = new RemoteRegistry(async () => ({
 			base: "http://127.0.0.1:7654/token",
+			ipv6Loopback: true,
 			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
 			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
 			agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url) => url,
@@ -21,7 +22,7 @@ describe("connected remote hosts", () => {
 		await registry.connect(workbox);
 		await registry.disconnectAll();
 		expect(closed).toBe(1);
-		await expect(registry.connect(workbox)).resolves.toMatchObject({ hostId: workbox.hostId });
+		await expect(registry.connect(workbox)).resolves.toMatchObject({ hostId: workbox.hostId, ipv6Loopback: true });
 		await registry.closeAll();
 		expect(closed).toBe(2);
 	});

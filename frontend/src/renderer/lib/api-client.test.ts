@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	chatImageUrl,
 	eventStreamBaseUrl,
 	apiClient,
 	apiErrorDetails,
@@ -275,6 +276,42 @@ describe("eventStreamBaseUrl", () => {
 	it("leaves other bases alone", () => {
 		expect(eventStreamBaseUrl("https://box-a.example.ts.net:8443/", true)).toBe("https://box-a.example.ts.net:8443");
 		expect(eventStreamBaseUrl("", true)).toBe("");
+	});
+});
+
+describe("chatImageUrl", () => {
+	const base = "http://127.0.0.1:3001";
+	const file = "/api/v1/sessions/s1/preview/files/.ao/attachments/attachment-1.png?v=1";
+
+	afterEach(() => setApiDaemonStatus({ state: "stopped" }));
+
+	it("moves daemon images to the image host on the same port while it serves [::1]", () => {
+		expect(chatImageUrl(`${base}${file}`, base, true)).toBe(`http://ao-images.localhost:3001${file}`);
+		expect(chatImageUrl(`${base}${file}`, `${base}/`, true)).toBe(`http://ao-images.localhost:3001${file}`);
+	});
+
+	it("keeps images on 127.0.0.1 unless the daemon serves [::1] too", () => {
+		expect(chatImageUrl(`${base}${file}`, base, false)).toBe(`${base}${file}`);
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 1, ipv6Loopback: true });
+		expect(chatImageUrl(`${base}${file}`, base)).toBe(`http://ao-images.localhost:3001${file}`);
+		setApiDaemonStatus({ state: "stopped", ipv6Loopback: true });
+		expect(chatImageUrl(`${base}${file}`, base)).toBe(`${base}${file}`);
+	});
+
+	it("leaves images from anywhere but the daemon alone", () => {
+		for (const src of [
+			"http://127.0.0.1:5173/shot.png",
+			"http://127.0.0.1:30010/shot.png",
+			"https://example.com/shot.png",
+			"http://ao-remote-1.localhost:3001/shot.png",
+			"data:image/png;base64,AAAA",
+			"blob:app://renderer/1",
+			file,
+		]) {
+			expect(chatImageUrl(src, base, true)).toBe(src);
+		}
+		expect(chatImageUrl(undefined, base, true)).toBeUndefined();
+		expect(chatImageUrl(`${base}${file}`, "", true)).toBe(`${base}${file}`);
 	});
 });
 
