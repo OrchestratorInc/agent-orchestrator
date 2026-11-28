@@ -4283,6 +4283,63 @@ func TestSendOnce_NoNudgeWhenBlockedAppearsBeforeSend(t *testing.T) {
 	}
 }
 
+// wedgedMessenger hangs every send to its wedged session until that send's
+// context ends, like a pane write stuck on a hung agent, and reports every
+// other delivery on sent.
+type wedgedMessenger struct {
+	wedged  domain.SessionID
+	entered chan struct{}
+	sent    chan domain.SessionID
+}
+
+func (w *wedgedMessenger) Send(ctx context.Context, id domain.SessionID, _ string) error {
+	if id == w.wedged {
+		close(w.entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	w.sent <- id
+	return nil
+}
+
+// The SCM observer runs different sessions' reactions side by side, so one
+// session's wedged nudge must not hold up another session's.
+func TestSendOnce_WedgedSendDoesNotDelayAnotherSessionsNudge(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	st.sessions["mer-2"] = working("mer-2")
+	messenger := &wedgedMessenger{wedged: "mer-1", entered: make(chan struct{}), sent: make(chan domain.SessionID, 1)}
+	m := New(st, messenger)
+	conflicting := func(url string) ports.PRObservation {
+		return ports.PRObservation{Fetched: true, URL: url, Mergeability: domain.MergeConflicting}
+	}
+
+	wedgedCtx, release := context.WithCancel(ctx)
+	defer release()
+	wedged := make(chan error, 1)
+	go func() { wedged <- m.ApplyPRObservation(wedgedCtx, "mer-1", conflicting("pr1")) }()
+	<-messenger.entered
+
+	healthy := make(chan error, 1)
+	go func() { healthy <- m.ApplyPRObservation(ctx, "mer-2", conflicting("pr2")) }()
+	select {
+	case err := <-healthy:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		release()
+		t.Fatal("a wedged session's nudge held up another session's")
+	}
+	if got := <-messenger.sent; got != "mer-2" {
+		t.Fatalf("delivered to %s, want mer-2", got)
+	}
+	release()
+	if err := <-wedged; !errors.Is(err, context.Canceled) {
+		t.Fatalf("wedged nudge err = %v, want context.Canceled", err)
+	}
+}
+
 func TestPRObservation_NudgesSuppressedWhileBlocked(t *testing.T) {
 	// A blocked session must not receive automated CI/review nudges: injected
 	// text could interact with the pending permission dialog.
@@ -4479,6 +4536,123 @@ func TestSCMObservation_AnchoredBotReviewNudgesAgent(t *testing.T) {
 	}
 	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "src/App.tsx:42") || !strings.Contains(msg.msgs[0], "avoid this pattern") {
 		t.Fatalf("anchored bot feedback was not delivered through scm lifecycle: %v", msg.msgs)
+	}
+}
+
+// fakeReviewThreads answers the send-time review re-read with fixed threads.
+type fakeReviewThreads struct {
+	review ports.SCMReviewObservation
+	err    error
+	calls  int
+}
+
+func (f *fakeReviewThreads) ReviewThreads(context.Context, ports.SCMObservation) (ports.SCMReviewObservation, error) {
+	f.calls++
+	return f.review, f.err
+}
+
+// The poll stored both threads unresolved. By send time the provider reports
+// T1 resolved and leaves T2 out of its partial window: only T1 is dropped.
+func TestSCMObservation_ReviewFeedbackSkipsThreadsResolvedSinceThePoll(t *testing.T) {
+	m, st, msg := newManager()
+	m.SetReviewThreadReader(&fakeReviewThreads{review: ports.SCMReviewObservation{Partial: true, Threads: []ports.SCMReviewThreadObservation{{ID: "T1", Resolved: true}}}})
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "resolved since", AutoInjectReview: true},
+		{ID: "2", ThreadID: "T2", Author: "alice", File: "b.go", Line: 2, Body: "still open", AutoInjectReview: true},
+	}
+	obs := ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: "pr1"}}
+
+	if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "still open") {
+		t.Fatalf("relayed %v, want only the thread still open at the provider", msg.msgs)
+	}
+}
+
+// One re-read reports T1 resolved; the next partial window leaves T1 out while
+// the stored row still says unresolved. The stale comment stays unrelayed.
+func TestSCMObservation_ReviewFeedbackKeepsResolutionAcrossPartialRereads(t *testing.T) {
+	m, st, msg := newManager()
+	threads := &fakeReviewThreads{review: ports.SCMReviewObservation{Partial: true, Threads: []ports.SCMReviewThreadObservation{{ID: "T1", Resolved: true}}}}
+	m.SetReviewThreadReader(threads)
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "resolved since", AutoInjectReview: true}}
+	obs := ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: "pr1"}}
+
+	if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	threads.review = ports.SCMReviewObservation{Partial: true}
+	if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("relayed %v, want the thread seen resolved to stay dropped", msg.msgs)
+	}
+	if threads.calls != 2 {
+		t.Fatalf("re-read threads %d times, want twice", threads.calls)
+	}
+}
+
+// blockingReviewThreads stalls the re-read until its context ends.
+type blockingReviewThreads struct{}
+
+func (blockingReviewThreads) ReviewThreads(ctx context.Context, _ ports.SCMObservation) (ports.SCMReviewObservation, error) {
+	<-ctx.Done()
+	return ports.SCMReviewObservation{}, ctx.Err()
+}
+
+// A stalled re-read gives up on its own timeout, leaving the poll's context
+// live for the sends, which fall back to the stored threads.
+func TestSCMObservation_ReviewFeedbackRereadHasItsOwnTimeout(t *testing.T) {
+	prev := reviewThreadRereadTimeout
+	reviewThreadRereadTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { reviewThreadRereadTimeout = prev })
+	m, st, msg := newManager()
+	m.SetReviewThreadReader(blockingReviewThreads{})
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "fix this", AutoInjectReview: true}}
+	obs := ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: "pr1"}}
+
+	pollCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	if err := m.ApplySCMObservation(pollCtx, "mer-1", obs); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("re-read held the poll for %v, want about %v", elapsed, reviewThreadRereadTimeout)
+	}
+	if pollCtx.Err() != nil {
+		t.Fatalf("re-read spent the poll budget: %v", pollCtx.Err())
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "fix this") {
+		t.Fatalf("relayed %v, want the stored feedback after the re-read timed out", msg.msgs)
+	}
+}
+
+// Delivered feedback is not re-read on later polls, and a failed re-read
+// relays the stored threads as before.
+func TestSCMObservation_ReviewFeedbackRereadOnlyWhileDue(t *testing.T) {
+	m, st, msg := newManager()
+	threads := &fakeReviewThreads{err: errors.New("github unavailable")}
+	m.SetReviewThreadReader(threads)
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "fix this", AutoInjectReview: true}}
+	obs := ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: "pr1"}}
+
+	for range 2 {
+		if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "fix this") {
+		t.Fatalf("relayed %v, want the stored feedback once", msg.msgs)
+	}
+	if threads.calls != 1 {
+		t.Fatalf("re-read threads %d times, want once", threads.calls)
 	}
 }
 
