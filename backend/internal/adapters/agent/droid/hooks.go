@@ -35,11 +35,12 @@ var droidManagedHooks = []hooksjson.HookSpec{
 
 // droidHooks manages AO's hooks in the workspace-local .factory/hooks.json file.
 var droidHooks = hooksjson.Manager{
-	Label:         "droid",
-	CommandPrefix: droidHookCommandPrefix,
-	Timeout:       droidHookTimeout,
-	Path:          droidHooksPath,
-	Managed:       droidManagedHooks,
+	TopLevelEvents: true,
+	Label:          "droid",
+	CommandPrefix:  droidHookCommandPrefix,
+	Timeout:        droidHookTimeout,
+	Path:           droidHooksPath,
+	Managed:        droidManagedHooks,
 }
 
 func droidHooksPath(workspacePath string) string {

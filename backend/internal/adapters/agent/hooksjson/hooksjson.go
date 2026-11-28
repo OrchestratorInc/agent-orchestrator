@@ -1,7 +1,8 @@
 // Package hooksjson implements the matcher-group hooks file that several agents
-// (claude-code, goose, qwen, agy, droid, kimchi) share byte-for-byte in shape.
-// Each file is a JSON object with a "hooks" sub-map keyed by native event name,
-// whose values are matcher groups ({matcher?, hooks:[{type,command,timeout}]}). The
+// (claude-code, goose, qwen, agy, droid, kimchi) share in shape. Each file maps
+// native event names to matcher groups ({matcher?, hooks:[{type,command,timeout}]}),
+// either under a "hooks" sub-map or, for standalone files such as Droid's
+// hooks.json, directly at the top level. The
 // adapters differed only in the file path, the AO command prefix, the per-hook
 // timeout, and which events they install, so they describe those with a Manager
 // and share the install/uninstall/detect logic here.
@@ -167,6 +168,10 @@ type HookSpec struct {
 type Manager struct {
 	// Flat selects native event arrays of command entries without matcher groups.
 	Flat bool
+	// TopLevelEvents keys native events at the file's top level instead of under
+	// a "hooks" object. Droid's standalone hooks.json uses this shape and ignores
+	// a "hooks" wrapper, so a wrapper left by an older AO is migrated on install.
+	TopLevelEvents bool
 	// Label prefixes error messages, e.g. "claude-code" or "goose", so the
 	// wrapped error reads "<label>.GetAgentHooks: ...".
 	Label string
@@ -198,7 +203,7 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 	}
 
 	hooksPath := m.Path(workspacePath)
-	topLevel, rawHooks, err := readHooksFile(hooksPath)
+	topLevel, rawHooks, err := m.readHooksFile(hooksPath)
 	if err != nil {
 		return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 	}
@@ -224,7 +229,7 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 		}
 	}
 
-	if err := writeHooksFile(hooksPath, topLevel, rawHooks); err != nil {
+	if err := m.writeHooksFile(hooksPath, topLevel, rawHooks); err != nil {
 		return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 	}
 	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(hooksPath), filepath.Base(hooksPath)); err != nil {
@@ -274,7 +279,7 @@ func (m Manager) Uninstall(ctx context.Context, workspacePath string) error {
 	if _, err := os.Stat(hooksPath); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	topLevel, rawHooks, err := readHooksFile(hooksPath)
+	topLevel, rawHooks, err := m.readHooksFile(hooksPath)
 	if err != nil {
 		return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
 	}
@@ -290,7 +295,7 @@ func (m Manager) Uninstall(ctx context.Context, workspacePath string) error {
 		}
 	}
 
-	if err := writeHooksFile(hooksPath, topLevel, rawHooks); err != nil {
+	if err := m.writeHooksFile(hooksPath, topLevel, rawHooks); err != nil {
 		return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
 	}
 	return nil
@@ -310,7 +315,7 @@ func (m Manager) AreInstalled(ctx context.Context, workspacePath string) (bool, 
 	if _, err := os.Stat(hooksPath); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	_, rawHooks, err := readHooksFile(hooksPath)
+	_, rawHooks, err := m.readHooksFile(hooksPath)
 	if err != nil {
 		return false, fmt.Errorf("%s.AreHooksInstalled: %w", m.Label, err)
 	}
@@ -354,10 +359,11 @@ func (m Manager) managedEvents() []string {
 	return events
 }
 
-// readHooksFile loads the file into a top-level raw map plus the decoded "hooks"
-// sub-map, preserving every key AO doesn't manage. A missing or empty file
-// yields empty maps.
-func readHooksFile(hooksPath string) (topLevel, rawHooks map[string]json.RawMessage, err error) {
+// readHooksFile loads the file into a top-level raw map plus the decoded event
+// map, preserving every key AO doesn't manage. A missing or empty file yields
+// empty maps. With TopLevelEvents, every top-level key is an event and a legacy
+// "hooks" wrapper is merged into them.
+func (m Manager) readHooksFile(hooksPath string) (topLevel, rawHooks map[string]json.RawMessage, err error) {
 	topLevel = map[string]json.RawMessage{}
 	rawHooks = map[string]json.RawMessage{}
 
@@ -374,6 +380,13 @@ func readHooksFile(hooksPath string) (topLevel, rawHooks map[string]json.RawMess
 	if err := json.Unmarshal(data, &topLevel); err != nil {
 		return nil, nil, fmt.Errorf("parse %s: %w", hooksPath, err)
 	}
+	if m.TopLevelEvents {
+		rawHooks, err = mergeWrappedEvents(topLevel)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse hooks in %s: %w", hooksPath, err)
+		}
+		return map[string]json.RawMessage{}, rawHooks, nil
+	}
 	if hooksRaw, ok := topLevel["hooks"]; ok {
 		if err := json.Unmarshal(hooksRaw, &rawHooks); err != nil {
 			return nil, nil, fmt.Errorf("parse hooks in %s: %w", hooksPath, err)
@@ -388,10 +401,52 @@ func readHooksFile(hooksPath string) (topLevel, rawHooks map[string]json.RawMess
 	return topLevel, rawHooks, nil
 }
 
+// mergeWrappedEvents returns the top-level event map of a standalone hooks
+// file, folding the matcher groups of a "hooks" wrapper into the same events
+// after any top-level groups.
+func mergeWrappedEvents(topLevel map[string]json.RawMessage) (map[string]json.RawMessage, error) {
+	events := map[string]json.RawMessage{}
+	for key, value := range topLevel {
+		events[key] = value
+	}
+	wrapped, ok := events["hooks"]
+	if !ok {
+		return events, nil
+	}
+	delete(events, "hooks")
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(wrapped, &legacy); err != nil {
+		return nil, err
+	}
+	for event, groups := range legacy {
+		existing, ok := events[event]
+		if !ok {
+			events[event] = groups
+			continue
+		}
+		var merged, extra []json.RawMessage
+		if err := json.Unmarshal(existing, &merged); err != nil {
+			return nil, fmt.Errorf("parse %s hooks: %w", event, err)
+		}
+		if err := json.Unmarshal(groups, &extra); err != nil {
+			return nil, fmt.Errorf("parse %s hooks: %w", event, err)
+		}
+		combined, err := json.Marshal(append(merged, extra...))
+		if err != nil {
+			return nil, fmt.Errorf("encode %s hooks: %w", event, err)
+		}
+		events[event] = combined
+	}
+	return events, nil
+}
+
 // writeHooksFile folds rawHooks back into topLevel and writes the file
-// atomically. An empty hooks map drops the "hooks" key entirely.
-func writeHooksFile(hooksPath string, topLevel, rawHooks map[string]json.RawMessage) error {
-	if len(rawHooks) == 0 {
+// atomically. An empty hooks map drops the "hooks" key entirely. With
+// TopLevelEvents, the event map is the whole file.
+func (m Manager) writeHooksFile(hooksPath string, topLevel, rawHooks map[string]json.RawMessage) error {
+	if m.TopLevelEvents {
+		topLevel = rawHooks
+	} else if len(rawHooks) == 0 {
 		delete(topLevel, "hooks")
 	} else {
 		hooksJSON, err := json.Marshal(rawHooks)
