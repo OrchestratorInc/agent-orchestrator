@@ -56,12 +56,12 @@ function pendingLogin() {
 
 function renderPanel(agent: CloudHarness = "claude-code", account?: CloudHarnessLoginAccount) {
 	const onClose = vi.fn();
-	render(
+	const view = render(
 		<QueryClientProvider client={new QueryClient()}>
 			<CloudHarnessLoginPanel agent={agent} account={account} onClose={onClose} />
 		</QueryClientProvider>,
 	);
-	return { onClose };
+	return { onClose, unmount: view.unmount };
 }
 
 describe("CloudHarnessLoginPanel", () => {
@@ -102,7 +102,8 @@ describe("CloudHarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		const { onClose } = renderPanel();
 		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
-		expect(screen.getByRole("button", { name: "Waiting for browser…" })).toBeDisabled();
+		expect(screen.getByRole("status")).toHaveTextContent("Waiting for browser…");
+		expect(screen.queryByRole("button", { name: "Log in with Anthropic" })).toBeNull();
 
 		await user.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -110,6 +111,45 @@ describe("CloudHarnessLoginPanel", () => {
 		expect(await screen.findByRole("button", { name: "Log in with Anthropic" })).toBeEnabled();
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("abandons a waiting browser login when the panel leaves the page, and closes nothing later", async () => {
+		let resolve: () => void = () => {};
+		bridgeMocks.connectProviderAuth.mockImplementation(() => new Promise<void>((res) => { resolve = res; }));
+		const user = userEvent.setup();
+		const { onClose, unmount } = renderPanel();
+		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
+
+		unmount();
+		expect(bridgeMocks.cancelProviderAuth).toHaveBeenCalledTimes(1);
+		// Should the login still finish, the panel that left closes nothing.
+		resolve();
+		await new Promise((done) => setTimeout(done, 0));
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("reports a waiting browser login and its end, so the page keeps its harness open meanwhile", async () => {
+		pendingLogin();
+		const onPendingChange = vi.fn();
+		const user = userEvent.setup();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudHarnessLoginPanel agent="claude-code" onClose={vi.fn()} onPendingChange={onPendingChange} />
+			</QueryClientProvider>,
+		);
+		expect(onPendingChange).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
+		expect(onPendingChange).toHaveBeenLastCalledWith(true);
+
+		await user.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(false));
+		expect(onPendingChange).toHaveBeenCalledTimes(2);
+	});
+
+	it("leaves nothing to cancel when the panel leaves before any browser login", () => {
+		const { unmount } = renderPanel();
+		unmount();
+		expect(bridgeMocks.cancelProviderAuth).not.toHaveBeenCalled();
 	});
 
 	it("still shows a real login failure", async () => {
@@ -150,7 +190,7 @@ describe("CloudHarnessLoginPanel", () => {
 		expect(screen.getByPlaceholderText("Paste your OpenCode API key")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "OpenRouter API key" }));
 		await user.type(screen.getByPlaceholderText("Paste your OpenRouter API key"), "or-key");
-		await user.click(screen.getByRole("button", { name: "Connect" }));
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("opencode", { credentialType: "openrouter_api_key", secret: "or-key" });
 	});
@@ -171,7 +211,7 @@ describe("CloudHarnessLoginPanel", () => {
 		const { onClose } = renderPanel("cursor");
 		expect(screen.queryByText("Or use")).toBeNull();
 		await user.type(screen.getByPlaceholderText("Paste your Cursor API key"), " cursor-key ");
-		await user.click(screen.getByRole("button", { name: "Connect" }));
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("cursor", { credentialType: "api_key", secret: "cursor-key" });
 		await waitFor(() => expect(onClose).toHaveBeenCalled());

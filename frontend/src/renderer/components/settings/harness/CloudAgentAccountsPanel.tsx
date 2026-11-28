@@ -13,7 +13,12 @@ import { HarnessDetailGroup } from "./harness-ui";
 /** One harness's Cloud accounts, as the local Account tab lists a CLI's: each
  * login or key, the default one new tasks run on, signing one in again, and
  * adding or removing one. A session moves between them in its Summary. */
-export function CloudAgentAccountsPanel({ agent, addFirst = false }: { agent: CloudHarness; addFirst?: boolean }) {
+export function CloudAgentAccountsPanel({ agent, addFirst = false, onLoginPendingChange }: {
+	agent: CloudHarness;
+	addFirst?: boolean;
+	/** Whether one of its logins is waiting on the browser, so the page keeps the harness open. */
+	onLoginPendingChange?: (pending: boolean) => void;
+}) {
 	const { t } = useTranslation();
 	const accounts = useCloudAgentAccounts();
 	const actions = useCloudAgentAccountActions();
@@ -36,7 +41,7 @@ export function CloudAgentAccountsPanel({ agent, addFirst = false }: { agent: Cl
 		}
 	};
 	const loginPanel = (id: string) => login === id
-		? <div className="px-3 py-2.5"><CloudHarnessLoginPanel agent={agent} account={{ id, credentialType: rows.find((row) => row.id === id)?.credentialType }} onClose={() => setLogin(null)} /></div>
+		? <CloudHarnessLoginPanel agent={agent} account={{ id, credentialType: rows.find((row) => row.id === id)?.credentialType }} onClose={() => setLogin(null)} onPendingChange={onLoginPendingChange} />
 		: null;
 
 	return <>

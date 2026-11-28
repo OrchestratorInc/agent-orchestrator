@@ -23,6 +23,7 @@ import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
+import { CloudModelCatalogWarmer } from "../components/CloudModelCatalogWarmer";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
 import { GuidedTour } from "../components/onboarding/GuidedTour";
@@ -1694,6 +1695,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonIsReady && harnessUpdateChecksDue} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
+				{/* Logged-in Cloud harnesses' model lists, ready before any picker or the Models tab asks. */}
+				<CloudModelCatalogWarmer />
 				{isDragActive ? (
 					<div
 						aria-hidden="true"

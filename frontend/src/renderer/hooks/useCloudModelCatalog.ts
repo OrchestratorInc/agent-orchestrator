@@ -1,11 +1,12 @@
-import { focusManager, queryOptions, useQuery, type Query, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { focusManager, queryOptions, useQueries, useQuery, type Query, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { cloudModelLabel } from "../lib/agent-model-choices";
-import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
+import { CLOUD_AGENT_PROVIDERS, CLOUD_CATALOG_HARNESSES } from "../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClient, CloudCpProviderConnection } from "../lib/cloud-cp";
 import type { AgentModelCatalog } from "./useAgentModelsQuery";
 import { cloudModelCatalogGap, type CloudModelCatalog, type CloudModelCatalogGap } from "../lib/cloud-model-catalog";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudOrg } from "./useCloudOrg";
 import { useProviderConnections } from "./useProviderConnections";
 
 /** Every Cloud model list query starts with this. */
@@ -129,6 +130,35 @@ export function useCloudAgentCatalogOptions(orgId: string | undefined) {
 			select: (catalog: CloudModelCatalog) => cloudCatalogAsAgentCatalog(agent, catalog),
 		};
 	}, [baseUrl, client, connections.data, orgId, userId]);
+}
+
+/**
+ * Loads the model list of every Cloud harness the signed-in person has logged
+ * in to, into the one query each picker reads, and keeps it there: right after
+ * a harness login (the new credential changes its query key) and when the app
+ * starts signed in. The Harness page's Models tab, New Task and the agent
+ * switch then list models at once. It only holds the lists: their refresh on
+ * focus and while still the release list stays with the pickers showing them.
+ */
+export function useWarmCloudModelCatalogs(enabled = true): void {
+	const { client, baseUrl, userId, ready } = useCloudCp(enabled);
+	const { org } = useCloudOrg(enabled);
+	const connections = useProviderConnections(enabled);
+	const orgId = org?.id;
+	useQueries({
+		queries: CLOUD_AGENT_PROVIDERS.map((agent) => {
+			const connection = agentConnection(connections.data, agent);
+			return {
+				...cloudModelCatalogQueryOptions({ client, baseUrl, userId, orgId: orgId ?? "", agent, connection }),
+				// Only harnesses Cloud keeps a list for: asking for OpenCode's always fails.
+				enabled: enabled && ready && Boolean(orgId) && connection !== undefined && CLOUD_CATALOG_HARNESSES.has(agent),
+				refetchOnWindowFocus: false,
+				refetchInterval: false as const,
+				// Nothing renders the lists here, so their arrival re-renders nothing.
+				notifyOnChangeProps: [],
+			};
+		}),
+	});
 }
 
 export interface CloudModelCatalogState {

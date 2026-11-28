@@ -16,6 +16,12 @@ vi.mock("../../hooks/useCloudHarnessVersions", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudHarnessVersions")>();
 	return { ...actual, useCloudHarnessVersions: () => cloud.value! };
 });
+// jsdom has no layout width; a test turns on the side-by-side layout here.
+const layout = vi.hoisted(() => ({ wide: false }));
+vi.mock("./harness/harness-ui", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./harness/harness-ui")>();
+	return { ...actual, useWideLayout: () => layout.wide };
+});
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true, localEnabled: true, client: "", loading: false }) }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" }, isLoading: false, error: null, ready: true }) }));
 // The signed-in person's saved credentials (GET /me/providers), as the hook would return them.
@@ -25,13 +31,14 @@ vi.mock("../../hooks/useProviderConnections", async (importOriginal) => {
 	return { ...actual, useProviderConnections: () => ({ data: providerConnections.value, isSuccess: true }) };
 });
 const deleteGitHubPAT = vi.hoisted(() => vi.fn(async (): Promise<void> => undefined));
+const listUserAgentModels = vi.hoisted(() => vi.fn(async (): Promise<unknown> => ({ models: [] })));
 vi.mock("../../hooks/useCloudCp", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudCp")>();
 	return {
 		...actual,
 		useCloudCp: (...args: Parameters<typeof actual.useCloudCp>) => {
 			const cp = actual.useCloudCp(...args);
-			return { ...cp, client: { ...cp.client, deleteGitHubPAT } };
+			return { ...cp, client: { ...cp.client, deleteGitHubPAT, listUserAgentModels } };
 		},
 	};
 });
@@ -231,8 +238,34 @@ describe("Cloud harness tab", () => {
 		cloud.value = cloudHarnessVersions({ editable: true, agents: [] });
 		providerConnections.value = [];
 		deleteGitHubPAT.mockClear();
+		listUserAgentModels.mockReset();
+		listUserAgentModels.mockResolvedValue({ models: [] });
+		layout.wide = false;
 	});
 	afterEach(() => cleanup());
+
+	it("keeps the open page on a harness the search still lists, side by side", async () => {
+		layout.wide = true;
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const content = (search: string) => <QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search={search} /></TooltipProvider></QueryClientProvider>;
+		const openPage = () => document.querySelector<HTMLElement>("div[data-agent]")?.dataset.agent;
+		const view = render(content(""));
+
+		// The first harness opens beside the list; another stays open while the search lists it.
+		await waitFor(() => expect(openPage()).toBe("claude-code"));
+		fireEvent.click(document.querySelector<HTMLElement>('button[data-agent="codex"]')!);
+		await waitFor(() => expect(openPage()).toBe("codex"));
+		view.rerender(content("cod"));
+		expect(openPage()).toBe("codex");
+
+		// A search that leaves it out opens the first match instead, or no page at all.
+		view.rerender(content("cursor"));
+		await waitFor(() => expect(openPage()).toBe("cursor"));
+		view.rerender(content("no-such-harness"));
+		await waitFor(() => expect(openPage()).toBeUndefined());
+		expect(screen.getByText("No harnesses match your search.")).toBeInTheDocument();
+	});
 
 	it("still lets a person remove a GitHub token they saved before, and offers nothing to save one", async () => {
 		// A token saved before the GitHub App, still marked valid: the control plane keeps it
@@ -276,6 +309,120 @@ describe("Cloud harness tab", () => {
 		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
 		expect(await within(row).findByRole("alert")).toHaveTextContent("Could not remove the GitHub token.");
 		expect(invalidate).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens a harness on a page with only Account and Models, its models read from Cloud", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		let answer: (value: unknown) => void = () => {};
+		listUserAgentModels.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+		const catalog = { source: "worker", models: [
+			{ id: "gpt-5.5", displayName: "GPT-5.5", default: true, efforts: ["low", "high"] },
+			{ id: "gpt-5.5-mini", displayName: "GPT-5.5 mini", default: false },
+		] };
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("codex");
+		expect(within(page).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Account", "Models"]);
+		expect(within(page).getByText("Connected")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		// Until Cloud answers, the tab says it is loading.
+		expect(await within(page).findByRole("status")).toHaveTextContent("Loading models…");
+		answer(catalog);
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		expect(within(page).queryByText("Loading models…")).toBeNull();
+		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+		expect(within(list).getByText("Default")).toBeInTheDocument();
+		expect(within(list).getByText("Effort: low · high")).toBeInTheDocument();
+		// Cloud pickers list every model, so there is nothing to switch off.
+		expect(within(page).queryByRole("switch")).toBeNull();
+		expect(listUserAgentModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
+	});
+
+	it("explains, without an error, that Cloud keeps no model list for OpenCode", async () => {
+		providerConnections.value = [{ id: "oc-1", provider: "opencode", label: "default", validationState: "valid" }];
+		// Cloud pins no OpenCode CLI, so it has no list to give.
+		listUserAgentModels.mockRejectedValue(new CloudCpError("no catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("opencode");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("Cloud has no model list for OpenCode. Choose its model when you start a Cloud task.")).toBeInTheDocument();
+		expect(within(page).queryByRole("alert")).toBeNull();
+		expect(within(page).queryByText("Could not load models.")).toBeNull();
+		// Cloud keeps no list for it, so nothing asks for one.
+		expect(listUserAgentModels).not.toHaveBeenCalled();
+	});
+
+	it("reads a 404 without an error envelope as a failure, not as an older control plane", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockRejectedValue(new CloudCpError("not found", { status: 404 }));
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByRole("alert")).toHaveTextContent("Could not load models.");
+		expect(within(page).queryByText(/Cloud has no model list/)).toBeNull();
+	});
+
+	it("says when the list is Cloud's default one, and that it is the default account's among several", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockResolvedValue({ source: "release", models: [{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }] });
+		const { CloudHarnessModelsPanel } = await import("./harness/CloudHarnessModelsPanel");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const panel = (multiAccount: boolean) => <QueryClientProvider client={client}><CloudHarnessModelsPanel agentId="codex" orgId="org-1" connected multiAccount={multiAccount} onOpenAccount={() => undefined} /></QueryClientProvider>;
+		const view = render(panel(false));
+
+		expect(await screen.findByText("Cloud's default list for Codex. Your account's own models replace it once Cloud has read them.")).toBeInTheDocument();
+		expect(screen.queryByText("Models for your default account.")).toBeNull();
+		view.rerender(panel(true));
+		expect(screen.getByText("Models for your default account.")).toBeInTheDocument();
+	});
+
+	it("leaves the caption out once the list is the account's own", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockResolvedValue({ source: "worker", models: [{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }] });
+		const { CloudHarnessModelsPanel } = await import("./harness/CloudHarnessModelsPanel");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><CloudHarnessModelsPanel agentId="codex" orgId="org-1" connected onOpenAccount={() => undefined} /></QueryClientProvider>);
+
+		expect(await screen.findByRole("list", { name: "Available models" })).toBeInTheDocument();
+		expect(screen.queryByText(/Cloud's default list/)).toBeNull();
+	});
+
+	it("still reports a Cloud model list that failed to load", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockRejectedValue(new CloudCpError("unavailable", { status: 503, code: "unavailable" }));
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByRole("alert")).toHaveTextContent("Could not load models.");
+		expect(within(page).queryByText(/Cloud has no model list/)).toBeNull();
+	});
+
+	it("asks to log in before listing a harness's Cloud models", async () => {
+		// Cloud answers any account with its release list; it must not stand in for a login.
+		listUserAgentModels.mockResolvedValue({ source: "release", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("claude-code");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("Log in to Claude Code to load its models.")).toBeInTheDocument();
+		expect(within(page).queryByRole("list", { name: "Available models" })).toBeNull();
+		expect(listUserAgentModels).not.toHaveBeenCalled();
+		await userEvent.click(within(page).getByRole("button", { name: "Account" }));
+		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("data-state", "active");
+		expect(within(page).getByRole("button", { name: "Login" })).toBeInTheDocument();
 	});
 
 	it("offers no GitHub personal access token: Cloud reaches private repositories through the GitHub App", async () => {
