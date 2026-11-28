@@ -246,6 +246,17 @@ type ChangeLog struct {
 	CreatedAt time.Time
 }
 
+type ChatAttachmentLease struct {
+	SessionID      string
+	Name           string
+	CreatedAtMs    int64
+	RenewedAtMs    int64
+	ReleasedAtMs   sql.NullInt64
+	ReclaimingAtMs sql.NullInt64
+	ReclaimedAtMs  sql.NullInt64
+	Accepting      int64
+}
+
 type CodexAccountSwitch struct {
 	ID                     string
 	SourceAccountID        string

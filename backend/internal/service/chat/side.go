@@ -1812,11 +1812,20 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 		content = append(content, domain.SideContent{
 			Type: item.Type, MIMEType: item.MIMEType, Data: item.Data, URI: item.URI, Name: item.Name, Text: item.Text})
 	}
+	texts := []string{text}
+	for _, item := range content {
+		texts = append(texts, item.URI, item.Name, item.Text)
+	}
+	settleAttachments, err := s.holdSideAttachments(ctx, session, texts)
+	if err != nil {
+		return domain.SideTurn{}, err
+	}
 	question := domain.SideTurn{
 		ID: s.newID(), SideID: sideID, ClientMessageID: msg.ClientMessageID, Text: text, Content: content,
 		References: references, CreatedAt: s.now()}
 	if starting {
 		turn, err := s.sides.store.ReserveSideStart(ctx, side, question, s.sides.launchID())
+		settleAttachments(err == nil)
 		if err != nil {
 			return domain.SideTurn{}, err
 		}
@@ -1834,6 +1843,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 		return turn, nil
 	}
 	turn, created, err := s.sides.store.ReserveSideTurn(ctx, question, s.sides.launchID())
+	settleAttachments(err == nil)
 	if err != nil {
 		return domain.SideTurn{}, err
 	}
@@ -1842,6 +1852,69 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 		s.sides.announce(sideID)
 	}
 	return turn, nil
+}
+
+// chatAttachmentLeaseHolder commits draft-staged files named by a message
+// accepted outside the conversation tables.
+type chatAttachmentLeaseHolder interface {
+	HoldChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) ([]string, error)
+	SettleChatAttachmentHolds(ctx context.Context, id domain.SessionID, names []string, accepted bool) error
+}
+
+// holdSideAttachments commits the draft-staged files a side question names.
+// Side transcripts are not stored in conversation tables, so the lease
+// triggers never see them. The files are held before the question is
+// recorded: a held file is never claimed for deletion, and a file already
+// claimed refuses the question, so a recorded question never names a deleted
+// file. The returned settle must be called with whether the question was
+// recorded: true commits the files for good, false drops only this hold, so a
+// file the draft still holds can be given up again while a file another
+// message accepted meanwhile stays committed. If settling fails, the files
+// stay held and are kept until their session is deleted.
+func (s *Service) holdSideAttachments(ctx context.Context, session domain.SessionID, texts []string) (func(accepted bool), error) {
+	leases, ok := s.store.(chatAttachmentLeaseHolder)
+	if !ok {
+		return func(bool) {}, nil
+	}
+	held, err := leases.HoldChatAttachmentLeases(ctx, session, texts)
+	if err != nil {
+		return nil, fmt.Errorf("commit side question attachments: %w", err)
+	}
+	return func(accepted bool) {
+		if len(held) == 0 {
+			return
+		}
+		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		err := settleSideAttachmentHolds(settleCtx, leases, session, held, accepted)
+		if err != nil && s.log != nil {
+			s.log.Warn("side question attachment holds could not be settled", "sessionID", session, "accepted", accepted, "error", err)
+		}
+	}, nil
+}
+
+// sideAttachmentSettleBackoff spaces the retries of a failed settle. A hold
+// that is never settled keeps its files until the session is deleted, so a
+// transient write failure is retried rather than only logged.
+var sideAttachmentSettleBackoff = []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
+
+// settleSideAttachmentHolds settles holds, retrying a failed write until ctx
+// ends. Each attempt is one transaction, so a failed attempt left nothing
+// half-settled.
+func settleSideAttachmentHolds(ctx context.Context, leases chatAttachmentLeaseHolder, session domain.SessionID, held []string, accepted bool) error {
+	err := leases.SettleChatAttachmentHolds(ctx, session, held, accepted)
+	for _, wait := range sideAttachmentSettleBackoff {
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(wait):
+		}
+		err = leases.SettleChatAttachmentHolds(ctx, session, held, accepted)
+	}
+	return err
 }
 
 // EditQueuedSideQuestion replaces the text of a queued side question.
@@ -1855,7 +1928,13 @@ func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.Ses
 	if strings.TrimSpace(text) == "" {
 		return ErrSideQuestionInvalid
 	}
-	if err := s.sides.store.EditQueuedSideTurn(ctx, sideID, turnID, text); err != nil {
+	settleAttachments, err := s.holdSideAttachments(ctx, session, []string{text})
+	if err != nil {
+		return err
+	}
+	err = s.sides.store.EditQueuedSideTurn(ctx, sideID, turnID, text)
+	settleAttachments(err == nil)
+	if err != nil {
 		return err
 	}
 	s.sides.announce(sideID)

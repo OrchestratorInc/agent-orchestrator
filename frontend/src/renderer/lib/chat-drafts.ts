@@ -926,6 +926,24 @@ export function loadChatSessionDraft(
 	};
 }
 
+/**
+ * Every staged attachment path a saved draft still names: a send in flight, an
+ * unsent message, a queued edit, and, when asked, the composer's own chips.
+ * A file named here must not be released while the draft holds it.
+ */
+export function draftStagedPaths(draft: ChatSessionDraft, { composer }: { composer: boolean }): Set<string> {
+	const paths = new Set<string>();
+	const add = (attachments: readonly { path?: string }[] | undefined) => {
+		for (const attachment of attachments ?? []) if (attachment.path) paths.add(attachment.path);
+	};
+	if (composer) add(draft.composer.attachments);
+	add(draft.composer.delivery?.draft?.attachments);
+	add(draft.unsent?.draft?.attachments);
+	add(draft.queuedEdit?.stagedAttachments);
+	add(draft.queuedEdit?.attachments);
+	return paths;
+}
+
 export function readChatSessionDraft(
 	scope: ChatDraftScopeInput,
 	storage: DraftStorage | undefined = rendererStorage(),
