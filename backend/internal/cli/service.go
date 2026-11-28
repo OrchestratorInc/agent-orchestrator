@@ -482,7 +482,11 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		// systemd may already resolve this name to a unit elsewhere (such as
 		// /etc/systemd/user); writing ours would take it over on restart.
 		out, err := c.deps.CommandOutput(ctx, "systemctl", "--user", "show", "-p", "FragmentPath", "--value", spec.Name+".service")
-		if frag := strings.TrimSpace(string(out)); err == nil && frag != "" && canonicalPath(frag) != canonicalPath(spec.File) {
+		if err != nil {
+			// Unknown is not "free": a local unit would take over the name.
+			return serviceStatus{}, fmt.Errorf("check for an existing %s.service: systemctl --user show: %w: %s (is a systemd user session running?)", spec.Name, err, strings.TrimSpace(string(out)))
+		}
+		if frag := strings.TrimSpace(string(out)); frag != "" && canonicalPath(frag) != canonicalPath(spec.File) {
 			return serviceStatus{}, fmt.Errorf("a systemd user unit named %s.service already exists at %s; leaving it alone", spec.Name, frag)
 		}
 	}

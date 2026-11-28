@@ -1680,3 +1680,21 @@ func TestServiceInstallFindsMarkerBesideCanonicalRunFile(t *testing.T) {
 		t.Fatalf("install did not find the marker beside the canonical run file: %v", err)
 	}
 }
+
+// A failed unit-identity query stops install before it writes anything.
+func TestServiceSystemdStopsWhenUnitQueryFails(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user show": true})
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "check for an existing") {
+		t.Fatalf("err = %v, want the failed query reported", err)
+	}
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("install wrote %s although it could not check the name", spec.File)
+	}
+}
