@@ -948,8 +948,13 @@ func TestOutsideBootAfterAnUnwatchedAOBootIsCaught(t *testing.T) {
 	p.run = simctlBoots(&boot, &mu)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := p.Boot(ctx, ports.DeviceInfo{ID: "UDID-1", Name: "Lab", Platform: ports.DevicePlatformIOS}); err != nil {
+	booted, err := p.Boot(ctx, ports.DeviceInfo{ID: "UDID-1", Name: "Lab", Platform: ports.DevicePlatformIOS})
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The device service records it as the boot AO started.
+	if booted.BootID != "boot-ao" {
+		t.Fatalf("Boot returned boot %q, want boot-ao", booted.BootID)
 	}
 	p.mu.Lock()
 	recorded, expected := p.bootIDs["UDID-1"], p.ownBoots["UDID-1"]
@@ -1153,5 +1158,89 @@ func TestBootRecordsTheBootItsHelperWasMadeFor(t *testing.T) {
 	p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: "boot-outside"})
 	if n := replacementsSeen(replaced); n != 1 {
 		t.Fatalf("a reboot during Boot's finish replaced the hub %d times, want 1", n)
+	}
+}
+
+// Each run of a lease's command records itself, and a device that was put to
+// sleep is started again (through `ao device open`) before the command runs.
+func TestLeaseCommandRecordsUseAndWakesASleepingDevice(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "log")
+	ao := filepath.Join(dir, "ao")
+	p := New(Config{DataDir: t.TempDir(), AOCommand: ao})
+	asleep := filepath.Join(p.leaseDir("aa-47"), leaseAsleepFile)
+	shim := filepath.Join(dir, "shim")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\necho \"shim $1\" >> '"+logPath+"'\n"), 0o755); err != nil { //nolint:gosec // test fixture must be executable
+		t.Fatal(err)
+	}
+	wakingAO := "#!/bin/sh\necho \"ao $AO_SESSION_ID $*\" >> '" + logPath + "'\nrm -f '" + asleep + "'\n"
+	if err := os.WriteFile(ao, []byte(wakingAO), 0o755); err != nil { //nolint:gosec // test fixture must be executable
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.ShimPath()), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shim, p.ShimPath()); err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := p.AgentControl(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS}, "aa-47")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.AgentLastUsed("aa-47").IsZero() {
+		t.Fatal("used before the command ever ran")
+	}
+	before := time.Now().Add(-time.Second)
+	if out, err := exec.Command(ctl.Command, "snapshot").CombinedOutput(); err != nil { //nolint:gosec // test runs the wrapper it just wrote
+		t.Fatalf("run awake: %v %s", err, out)
+	}
+	if used := p.AgentLastUsed("aa-47"); used.Before(before) {
+		t.Fatalf("last used %v, want the run just now", used)
+	}
+	if raw, _ := os.ReadFile(logPath); string(raw) != "shim snapshot\n" {
+		t.Fatalf("awake run logged %q, want only the shim", raw)
+	}
+
+	if err := p.SetAgentAsleep("aa-47", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(ctl.Command, "snapshot").CombinedOutput() //nolint:gosec // test runs the wrapper it just wrote
+	if err != nil {
+		t.Fatalf("run asleep: %v %s", err, out)
+	}
+	if raw, _ := os.ReadFile(logPath); string(raw) != "ao aa-47 device open\nshim snapshot\n" {
+		t.Fatalf("asleep run logged %q, want the device opened, then the shim", raw)
+	}
+	if !strings.Contains(string(out), "shut down while unused") {
+		t.Fatalf("asleep run said %q, want why it waits", out)
+	}
+
+	// An open that leaves the device asleep stops the command rather than
+	// trying again forever.
+	if err := os.WriteFile(ao, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // test fixture must be executable
+		t.Fatal(err)
+	}
+	if err := p.SetAgentAsleep("aa-47", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec.Command(ctl.Command, "snapshot").CombinedOutput() //nolint:gosec // test runs the wrapper it just wrote
+	if err == nil || !strings.Contains(string(out), "did not start again") {
+		t.Fatalf("run with a device that stays asleep: err=%v out=%q", err, out)
+	}
+	if raw, _ := os.ReadFile(logPath); len(raw) != 0 {
+		t.Fatalf("the shim ran on a sleeping device: %q", raw)
+	}
+
+	if err := p.RevokeControl("aa-47"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(asleep); !os.IsNotExist(err) {
+		t.Fatalf("revoking left the asleep mark: %v", err)
 	}
 }

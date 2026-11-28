@@ -77,6 +77,13 @@ not run setup yourself unless the user asked for device support.
    minute, and a simulator or emulator AO started is powered off then unless
    another session has taken it. One that was already running stays on.
 
+A device AO started that nobody uses for 15 minutes (less when the machine
+is low on memory) is shut down to free memory, and so may one unused for a
+few minutes when another session needs the room. This session keeps it: `ao device open`, `install`, `launch`,
+`screenshot`, and the agent-device command all start it again first, which
+takes up to a minute. An emulator may come back under a new serial: use the
+`Device id:` the latest `ao device open` printed.
+
 ## Other commands
 
 - `ao device status` lists platform availability, simulators, emulators and
@@ -85,6 +92,9 @@ not run setup yourself unless the user asked for device support.
   tools under the AO data directory and starts the device hub.
 - Every command accepts `--json`.
 
-If `ao device open` answers `NO_DEVICE_AVAILABLE` or `NO_FREE_DEVICE`, report
+If `ao device open` answers `NO_DEVICE_ROOM`, the devices running now fill
+the machine's room for them: wait a minute and run it again (another device
+may go idle and make room), and tell the user which sessions hold them if it
+keeps failing. If it answers `NO_DEVICE_AVAILABLE` or `NO_FREE_DEVICE`, report
 its message to the user: it says what is missing (Xcode, the Android SDK, a
-free device) and what they can do.
+free device, or a machine low on memory) and what they can do.

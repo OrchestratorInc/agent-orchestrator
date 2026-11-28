@@ -44,7 +44,8 @@ type deviceLeaseDTO struct {
 		Command string   `json:"command"`
 		Args    []string `json:"args"`
 	} `json:"agentDevice"`
-	OpenedAt time.Time `json:"openedAt"`
+	OpenedAt  time.Time `json:"openedAt"`
+	Suspended bool      `json:"suspended,omitempty"`
 }
 
 type deviceStatusDTO struct {
@@ -311,17 +312,29 @@ func writeDeviceStatus(w io.Writer, s deviceStatusDTO, jsonOutput bool) error {
 			return err
 		}
 	}
-	held := map[string]string{}
+	// A stopped emulator is listed by its AVD name while its lease still holds
+	// the serial it ran under, so Android leases match by name too.
+	held := map[string]deviceLeaseDTO{}
 	for _, l := range s.Leases {
-		held[l.Device.ID] = l.SessionID
+		held[l.Device.ID] = l
+		if l.Device.Platform == "android" && l.Device.Name != "" {
+			held["android:"+l.Device.Name] = l
+		}
 	}
 	for _, d := range s.Devices {
 		state := "off"
 		if d.Booted {
 			state = "booted"
 		}
-		if owner := held[d.ID]; owner != "" {
-			state += ", leased to " + owner
+		l, ok := held[d.ID]
+		if !ok && d.Platform == "android" {
+			l, ok = held["android:"+d.Name]
+		}
+		if ok {
+			if l.Suspended {
+				state = "asleep"
+			}
+			state += ", leased to " + l.SessionID
 		}
 		if _, err := fmt.Fprintf(w, "  %-8s %s %s [%s] %s\n", d.Platform, d.Name, d.Version, state, d.ID); err != nil {
 			return err

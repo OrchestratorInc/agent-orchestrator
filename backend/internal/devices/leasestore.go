@@ -31,6 +31,8 @@ type storedLease struct {
 	Command   string       `json:"agentDeviceCommand,omitempty"`
 	Args      []string     `json:"agentDeviceArgs,omitempty"`
 	OpenedAt  time.Time    `json:"openedAt"`
+	// Suspended marks a lease whose device was shut down for going unused.
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 type leaseFile struct {
@@ -38,6 +40,9 @@ type leaseFile struct {
 	// Owned lists the devices this service booted, which a later session may
 	// reuse (see Service.owned).
 	Owned []string `json:"owned,omitempty"`
+	// OwnedBoots holds, by device, the boot an owned device was started on
+	// (see Service.ownedBoot).
+	OwnedBoots map[string]string `json:"ownedBoots,omitempty"`
 	// Parked lists the owned devices no session holds, each with the session
 	// that last held it (see Service.parked).
 	Parked []storedParked `json:"parked,omitempty"`
@@ -59,16 +64,17 @@ func fromStored(d storedDevice) ports.DeviceInfo {
 func leasesPath(dataDir string) string { return filepath.Join(dataDir, "devices", "leases.json") }
 
 // loadLeases reads the record a previous daemon left. A missing or unreadable
-// file is an empty one: the worst case is the old behaviour.
-func loadLeases(dataDir string) (map[domain.SessionID]Lease, map[string]bool, map[string]parkedDevice) {
-	leases, owned, parked := map[domain.SessionID]Lease{}, map[string]bool{}, map[string]parkedDevice{}
+// file is an empty one: the worst case is the old behaviour. Parked devices
+// count as parked since now: how long they waited before is not recorded.
+func loadLeases(dataDir string, now time.Time) (map[domain.SessionID]Lease, map[string]bool, map[string]string, map[string]parkedDevice) {
+	leases, owned, ownedBoot, parked := map[domain.SessionID]Lease{}, map[string]bool{}, map[string]string{}, map[string]parkedDevice{}
 	raw, err := os.ReadFile(leasesPath(dataDir))
 	if err != nil {
-		return leases, owned, parked
+		return leases, owned, ownedBoot, parked
 	}
 	var file leaseFile
 	if json.Unmarshal(raw, &file) != nil {
-		return leases, owned, parked
+		return leases, owned, ownedBoot, parked
 	}
 	for _, l := range file.Leases {
 		if l.SessionID == "" || l.Device.ID == "" {
@@ -81,19 +87,23 @@ func loadLeases(dataDir string) (map[domain.SessionID]Lease, map[string]bool, ma
 			Reason:       l.Reason,
 			AgentControl: ports.DeviceAgentControl{Command: l.Command, Args: l.Args},
 			OpenedAt:     l.OpenedAt,
+			Suspended:    l.Suspended,
 		}
 	}
 	for _, id := range file.Owned {
 		owned[id] = true
+		if boot := file.OwnedBoots[id]; boot != "" {
+			ownedBoot[id] = boot
+		}
 	}
 	for _, p := range file.Parked {
 		device := fromStored(p.Device)
 		if p.SessionID == "" || device.ID == "" || !owned[deviceKey(device)] {
 			continue
 		}
-		parked[deviceKey(device)] = parkedDevice{session: domain.SessionID(p.SessionID), device: device}
+		parked[deviceKey(device)] = parkedDevice{session: domain.SessionID(p.SessionID), device: device, at: now}
 	}
-	return leases, owned, parked
+	return leases, owned, ownedBoot, parked
 }
 
 // saveLocked writes the current leases. Callers hold s.mu. A failed write is
@@ -109,10 +119,17 @@ func (s *Service) saveLocked() {
 			Command:   l.AgentControl.Command,
 			Args:      l.AgentControl.Args,
 			OpenedAt:  l.OpenedAt,
+			Suspended: l.Suspended,
 		})
 	}
 	for id := range s.owned {
 		file.Owned = append(file.Owned, id)
+		if boot := s.ownedBoot[id]; boot != "" {
+			if file.OwnedBoots == nil {
+				file.OwnedBoots = map[string]string{}
+			}
+			file.OwnedBoots[id] = boot
+		}
 	}
 	for _, p := range s.parked {
 		file.Parked = append(file.Parked, storedParked{SessionID: string(p.session), Device: toStored(p.device)})

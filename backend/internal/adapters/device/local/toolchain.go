@@ -156,30 +156,68 @@ func writeRevokedWrapper(path string) error {
 		"# Written by AO: this session's device lease has ended.\n" +
 		"echo 'This session has no device lease; run `ao device open` for a new one.' >&2\n" +
 		"exit 1\n"
-	return os.WriteFile(path, []byte(script), 0o755) //nolint:gosec // The wrapper must stay executable so it can say why it refuses.
+	return writeExecutable(path, script)
 }
+
+// Files next to a lease's command: the command touches leaseUsedFile on every
+// run, and leaseAsleepFile marks a device shut down for going unused.
+const (
+	leaseUsedFile   = "used"
+	leaseAsleepFile = "asleep"
+)
 
 // writeLeaseWrapper writes the command one lease's agent runs: the pinned
 // agent-device with the lease's platform, device and session flags appended
 // after the agent's own arguments (agent-device takes flags in any position).
-func writeLeaseWrapper(path, shim string, flags []string) error {
-	for _, part := range append([]string{shim}, flags...) {
+// Each run records itself in leaseUsedFile, so a device the agent drives is
+// never taken for unused. While leaseAsleepFile is there, the device was shut
+// down for going unused: the command starts it again with `ao device open`
+// and then runs itself afresh, since a restarted emulator comes back under a
+// new serial and the open rewrites this command for it.
+func writeLeaseWrapper(path, shim string, flags []string, aoCommand, sessionID string) error {
+	dir := filepath.Dir(path)
+	for _, part := range append([]string{shim, path, aoCommand, sessionID}, flags...) {
 		if strings.ContainsAny(part, "'\n") {
 			return errors.New("lease wrapper arguments must not contain quotes or newlines")
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create lease dir: %w", err)
 	}
 	quoted := make([]string, len(flags))
 	for i, f := range flags {
 		quoted[i] = "'" + f + "'"
 	}
+	used, asleep := filepath.Join(dir, leaseUsedFile), filepath.Join(dir, leaseAsleepFile)
 	// help and version take no device flags (agent-device rejects them there),
 	// so they pass through unbound.
 	script := "#!/bin/sh\n" +
 		"# Written by AO: agent-device bound to one session's device.\n" +
 		"case \"$1\" in help|--help|-h|version|--version) exec '" + shim + "' \"$@\" ;; esac\n" +
+		": > '" + used + "' 2>/dev/null\n" +
+		"if [ -e '" + asleep + "' ]; then\n" +
+		"  if [ -n \"$AO_DEVICE_WOKEN\" ]; then\n" +
+		"    echo \"This session's device did not start again. Run \\`ao device open\\` to start it.\" >&2\n" +
+		"    exit 1\n" +
+		"  fi\n" +
+		"  echo \"Starting this session's device again: it was shut down while unused.\" >&2\n" +
+		"  AO_SESSION_ID='" + sessionID + "' '" + aoCommand + "' device open >/dev/null || exit 1\n" +
+		"  AO_DEVICE_WOKEN=1 exec '" + path + "' \"$@\"\n" +
+		"fi\n" +
 		"exec '" + shim + "' \"$@\" " + strings.Join(quoted, " ") + "\n"
-	return os.WriteFile(path, []byte(script), 0o755) //nolint:gosec // The wrapper must be executable by the agent.
+	return writeExecutable(path, script)
+}
+
+// writeExecutable replaces a command in one step: the agent may be running the
+// old one (a shell reads its script as it goes), and an edit in place would
+// change it under that run.
+func writeExecutable(path, script string) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(script), 0o755); err != nil { //nolint:gosec // The command must be executable by the agent.
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return errors.Join(err, os.Remove(tmp))
+	}
+	return nil
 }

@@ -130,15 +130,14 @@ func TestDetectPlatforms(t *testing.T) {
 	}
 }
 
-// A full machine says what is full (how many devices run at once, not every
-// simulator) and which sessions hold them.
-func TestResolveFullMachineNamesTheCapAndTheHolders(t *testing.T) {
+// A full machine passes on what the memory budget says fills it.
+func TestResolveFullMachineSaysWhatFillsIt(t *testing.T) {
+	full := "Devices on this machine already use about 12 GB of the 12 GB AO lets them use: iPhone (session ao-1). Release one of them, or end its session, to open another."
 	got := Resolve(ResolveInput{
 		Requested: ports.DevicePlatformIOS, Local: []ports.DevicePlatformAvailability{{Platform: ports.DevicePlatformIOS, Available: true}},
-		LocalSlotFree: false, LocalCap: 3, LocalHolders: []string{"ao-1", "ao-2", "ao-3"},
+		LocalSlotFree: false, LocalFull: full,
 	})
-	want := "This machine already runs 3 devices for other sessions, the most it runs at once (ao-1, ao-2, ao-3). Release one of them, or end its session, to open another."
-	if got.OK() || got.Fallback != want {
-		t.Fatalf("Resolve() = %+v, want fallback %q", got, want)
+	if got.OK() || got.Fallback != full {
+		t.Fatalf("Resolve() = %+v, want fallback %q", got, full)
 	}
 }

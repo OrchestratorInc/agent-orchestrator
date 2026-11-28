@@ -1,11 +1,9 @@
 package devices
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -23,12 +21,10 @@ type ResolveInput struct {
 	ProjectPlatforms []ports.DevicePlatform
 	// Local is the local provider's platform availability.
 	Local []ports.DevicePlatformAvailability
-	// LocalSlotFree is false when local devices are at capacity.
+	// LocalSlotFree is false when the machine's devices fill its memory
+	// budget, and LocalFull then says what fills it and who to ask.
 	LocalSlotFree bool
-	// LocalCap is how many local devices run at once, and LocalHolders the
-	// sessions holding them, so a full machine says who to ask.
-	LocalCap     int
-	LocalHolders []string
+	LocalFull     string
 	// RemoteHosts and CloudProviders list configured providers by platform.
 	RemoteHosts    map[ports.DevicePlatform][]string
 	CloudProviders map[ports.DevicePlatform][]string
@@ -69,13 +65,11 @@ func Resolve(in ResolveInput) Decision {
 		return Decision{Platform: platform, Provider: clouds[0], Reason: "No local or remote device; using " + clouds[0]}
 	}
 	if local.Available && !in.LocalSlotFree {
-		// The machine has free simulators; what is full is how many run at
-		// once (each holds several GB of memory). Say so, and who holds them.
-		msg := fmt.Sprintf("This machine already runs %d devices for other sessions, the most it runs at once", in.LocalCap)
-		if len(in.LocalHolders) > 0 {
-			msg += " (" + strings.Join(in.LocalHolders, ", ") + ")"
+		msg := in.LocalFull
+		if msg == "" {
+			msg = "This machine runs as many devices as its memory allows. Release one of them, or end its session, to open another."
 		}
-		return Decision{Platform: platform, Fallback: msg + ". Release one of them, or end its session, to open another."}
+		return Decision{Platform: platform, Fallback: msg}
 	}
 	missing := local.Reason
 	return Decision{

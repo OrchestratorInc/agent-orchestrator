@@ -33,10 +33,6 @@ const (
 	SetupError      SetupState = "error"
 )
 
-// defaultMaxLocalLeases caps concurrent local devices; each simulator or
-// emulator holds several GB of RAM.
-const defaultMaxLocalLeases = 3
-
 // Lease is one session's device.
 type Lease struct {
 	SessionID    domain.SessionID
@@ -45,6 +41,11 @@ type Lease struct {
 	Reason       string
 	AgentControl ports.DeviceAgentControl
 	OpenedAt     time.Time
+	// Suspended is set while the device is shut down for going unused: the
+	// lease still holds it, and the next use starts it again.
+	Suspended bool
+	// Starting is set, in a live lease, while AO boots the device.
+	Starting bool
 }
 
 // Status is the device picture shown in the Device tab.
@@ -84,8 +85,14 @@ type Config struct {
 	// that ended. Nil skips both.
 	Sessions SessionLookup
 	Log      *slog.Logger
-	// MaxLocalLeases defaults to 3.
-	MaxLocalLeases int
+	// MemoryBudget is how much memory running devices may hold together, in
+	// bytes; zero is half the machine's memory.
+	MemoryBudget int64
+	// IdleSuspendAfter is how long a leased device may go unused before it is
+	// shut down; zero is defaultIdleSuspendAfter. Memory pressure shortens it.
+	IdleSuspendAfter time.Duration
+	// MemoryPressure reads the machine's memory pressure; nil reads the OS.
+	MemoryPressure func() MemoryPressure
 	Now            func() time.Time
 }
 
@@ -103,6 +110,11 @@ type Service struct {
 	// later session may reuse. A device someone else booted is not assumed
 	// free to take.
 	owned map[string]bool
+	// ownedBoot holds, for an owned simulator, the boot AO started it on (its
+	// BootID). A device someone shut down and started again outside AO is on
+	// another boot: it is theirs now, and AO no longer sleeps, parks, evicts or
+	// powers it off (forgetRebootedLocked).
+	ownedBoot map[string]string
 	// parked holds the owned devices (by deviceKey) whose lease ended with the
 	// device still running, and the session that last held each. A parked
 	// device waits for another session to take it; once its session has ended
@@ -141,6 +153,14 @@ type Service struct {
 	// available is the Developer mode gate, off on every daemon boot until the
 	// desktop app turns it on.
 	available atomic.Bool
+	// used is when each session last used its device through the daemon, and
+	// viewers how many stream and touch connections watch it now; together
+	// with the agent's own command they tell an unused device (suspendIdle).
+	used    map[domain.SessionID]time.Time
+	viewers map[domain.SessionID]int
+	// bootDone holds, per deviceKey, a channel closed when the boot under way
+	// ends (see boot).
+	bootDone map[string]chan struct{}
 }
 
 // errUnavailable refuses device work while the desktop app's Developer mode is off.
@@ -161,6 +181,9 @@ type leaseWatch struct {
 type parkedDevice struct {
 	session domain.SessionID
 	device  ports.DeviceInfo
+	// at is when it was parked (or, after a daemon restart, when the daemon
+	// started): a parked device unused for the idle timeout is powered off.
+	at time.Time
 }
 
 // retireTimeout bounds one reaper pass of powering off parked devices: a
@@ -212,9 +235,15 @@ func (s *Service) endLeaseLocked(id domain.SessionID) (Lease, bool) {
 		s.releasing = map[string]bool{}
 	}
 	s.releasing[deviceKey(l.Device)] = true
-	// In the same save as the lease removal: a daemon that stops before
-	// finishRelease must still power the device off once the session ends.
-	s.parkLocked(id, l.Device)
+	if l.Suspended {
+		// Shut down already: nothing to park or power off, and whoever boots
+		// it next owns it.
+		s.disownLocked(deviceKey(l.Device))
+	} else {
+		// In the same save as the lease removal: a daemon that stops before
+		// finishRelease must still power the device off once the session ends.
+		s.parkLocked(id, l.Device)
+	}
 	s.saveLocked()
 	return l, true
 }
@@ -230,7 +259,74 @@ func (s *Service) parkLocked(id domain.SessionID, device ports.DeviceInfo) {
 	if s.parked == nil {
 		s.parked = map[string]parkedDevice{}
 	}
-	s.parked[key] = parkedDevice{session: id, device: device}
+	s.parked[key] = parkedDevice{session: id, device: device, at: s.cfg.Now()}
+}
+
+// disownLocked forgets that this service booted the device under key.
+// Callers hold s.mu and save.
+func (s *Service) disownLocked(key string) {
+	delete(s.owned, key)
+	delete(s.ownedBoot, key)
+}
+
+// noteOwnBootLocked records the boot this service just started the owned
+// device under key on. Callers hold s.mu and save.
+func (s *Service) noteOwnBootLocked(key string, booted ports.DeviceInfo) {
+	if booted.BootID == "" {
+		return
+	}
+	if s.ownedBoot == nil {
+		s.ownedBoot = map[string]string{}
+	}
+	s.ownedBoot[key] = booted.BootID
+}
+
+// forgetRebootedLocked disowns each listed device that runs on another boot
+// than the one this service started it on: shut down and started again
+// outside AO (by its user in Xcode, or by another tool), it is not AO's to
+// put to sleep or power off any more. A lease on it stays, as on any device
+// AO did not boot. Devices an open or release is busy with are skipped: their
+// boot is AO's own and is recorded when it ends. Callers hold s.mu.
+func (s *Service) forgetRebootedLocked(devices []ports.DeviceInfo) {
+	changed := false
+	for _, d := range devices {
+		key := deviceKey(d)
+		own, recorded := s.ownedBoot[key]
+		if !recorded || !d.Booted || d.BootID == "" || d.BootID == own || s.busyLocked(key) {
+			continue
+		}
+		s.log.Info("leave a device restarted outside AO running", "device", d.ID)
+		s.disownLocked(key)
+		delete(s.parked, key)
+		changed = true
+	}
+	if changed {
+		s.saveLocked()
+	}
+}
+
+// forgetOrphansLocked disowns devices that no lease or parked record holds,
+// which nothing would ever release: an older daemon saved them so. Left
+// owned, a session later handed one that someone else started meanwhile
+// would put it to sleep. Callers hold s.mu.
+func (s *Service) forgetOrphansLocked() {
+	held := map[string]bool{}
+	for _, l := range s.leases {
+		held[deviceKey(l.Device)] = true
+	}
+	for key := range s.parked {
+		held[key] = true
+	}
+	changed := false
+	for key := range s.owned {
+		if !held[key] {
+			s.disownLocked(key)
+			changed = true
+		}
+	}
+	if changed {
+		s.saveLocked()
+	}
 }
 
 // stopWatchLocked closes the hub connections opened under the session's lease.
@@ -263,7 +359,7 @@ func (s *Service) finishRelease(ctx context.Context, id domain.SessionID, device
 	switch {
 	case shutdown && err == nil:
 		// Off now: whoever boots it next owns it, not this service.
-		delete(s.owned, key)
+		s.disownLocked(key)
 		delete(s.parked, key)
 	case s.owned[key]:
 		s.parkLocked(id, device)
@@ -279,14 +375,26 @@ func New(cfg Config) *Service {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
 	}
-	if cfg.MaxLocalLeases <= 0 {
-		cfg.MaxLocalLeases = defaultMaxLocalLeases
+	if cfg.MemoryBudget <= 0 {
+		cfg.MemoryBudget = defaultMemoryBudget()
+	}
+	if cfg.IdleSuspendAfter <= 0 {
+		cfg.IdleSuspendAfter = defaultIdleSuspendAfter
+	}
+	if cfg.MemoryPressure == nil {
+		cfg.MemoryPressure = readMemoryPressure
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	leases, owned, parked := loadLeases(cfg.DataDir)
-	s := &Service{cfg: cfg, log: cfg.Log, state: SetupOff, leases: leases, owned: owned, parked: parked}
+	leases, owned, ownedBoot, parked := loadLeases(cfg.DataDir, cfg.Now())
+	s := &Service{cfg: cfg, log: cfg.Log, state: SetupOff, leases: leases, owned: owned, ownedBoot: ownedBoot, parked: parked}
+	s.forgetOrphansLocked()
+	// When each device was last used is not saved: a restart (an app update)
+	// counts as a use, so it does not put every device in use to sleep.
+	for id := range leases {
+		s.touchLocked(id)
+	}
 	if cfg.Sessions != nil {
 		// A killed or archived session frees its device within half a minute
 		// even when nobody opens the Device tab or another device.
@@ -308,6 +416,9 @@ func (s *Service) reap(ctx context.Context, every time.Duration) {
 			pass, cancel := context.WithTimeout(ctx, every)
 			s.pruneEnded(pass)
 			cancel()
+			suspend, cancel := context.WithTimeout(ctx, retireTimeout)
+			s.suspendIdle(suspend)
+			cancel()
 			// Here, not in pruneEnded: shutting a simulator down takes seconds,
 			// and Status and Open must not wait for it.
 			retire, cancel := context.WithTimeout(ctx, retireTimeout)
@@ -317,8 +428,8 @@ func (s *Service) reap(ctx context.Context, every time.Duration) {
 	}
 }
 
-// retireParked powers off the parked devices whose session ended and that no
-// other session took since. A device that is already off is only forgotten.
+// retireParked powers off the parked devices whose session ended, or that
+// stayed parked for the idle timeout, and that no other session took since. A device that is already off is only forgotten.
 // It needs the provider up to list and shut devices down, so until setup is
 // ready the devices wait. A failed shutdown is retried on the next pass.
 func (s *Service) retireParked(ctx context.Context) {
@@ -338,7 +449,15 @@ func (s *Service) retireParked(ctx context.Context) {
 	}
 	s.mu.Unlock()
 	var ended []parkedDevice
+	now := s.cfg.Now()
+	after := s.idleAfter(s.cfg.MemoryPressure())
 	for _, p := range candidates {
+		// Parked past the idle timeout, nobody took it back: it is only
+		// holding memory, whether or not its session lives on.
+		if now.Sub(p.at) >= after {
+			ended = append(ended, p)
+			continue
+		}
 		if info, err := s.cfg.Sessions(ctx, p.session); sessionGone(info, err) {
 			ended = append(ended, p)
 		}
@@ -359,6 +478,9 @@ func (s *Service) retireParked(ctx context.Context) {
 				failed[platform] = true
 			} else {
 				lists[platform] = devices
+				s.mu.Lock()
+				s.forgetRebootedLocked(devices)
+				s.mu.Unlock()
 			}
 		}
 		if failed[platform] {
@@ -375,14 +497,14 @@ func (s *Service) retireParked(ctx context.Context) {
 			}
 		}
 		s.mu.Lock()
-		if cur, still := s.parked[key]; !still || cur.session != p.session || !s.idleLocked(key) {
+		if cur, still := s.parked[key]; !still || cur.session != p.session || !cur.at.Equal(p.at) || !s.idleLocked(key) {
 			s.mu.Unlock()
 			continue
 		}
 		if !running {
 			// Already off (or deleted): nothing to power off, only forget.
 			delete(s.parked, key)
-			delete(s.owned, key)
+			s.disownLocked(key)
 			s.listed = nil
 			s.saveLocked()
 			s.mu.Unlock()
@@ -400,16 +522,16 @@ func (s *Service) retireParked(ctx context.Context) {
 		delete(s.releasing, key)
 		if err == nil {
 			delete(s.parked, key)
-			delete(s.owned, key)
+			s.disownLocked(key)
 			s.listed = nil
 			s.saveLocked()
 		}
 		s.mu.Unlock()
 		if err != nil {
-			s.log.Warn("power off a device whose session ended", "session", p.session, "device", listed.ID, "err", err)
+			s.log.Warn("power off a parked device", "session", p.session, "device", listed.ID, "err", err)
 			continue
 		}
-		s.log.Info("powered off a device whose session ended", "session", p.session, "device", listed.ID)
+		s.log.Info("powered off a parked device", "session", p.session, "device", listed.ID)
 	}
 }
 
@@ -670,15 +792,8 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 	s.pruneEnded(ctx)
 	s.mu.Lock()
 	existing, has := s.leases[id]
-	localInUse := len(s.leases)
-	holders := make([]string, 0, len(s.leases))
-	for owner := range s.leases {
-		if owner != id {
-			holders = append(holders, string(owner))
-		}
-	}
+	s.touchLocked(id)
 	s.mu.Unlock()
-	sort.Strings(holders)
 	if has && (req.DeviceID == "" || req.DeviceID == existing.Device.ID) && (req.Platform == "" || req.Platform == existing.Device.Platform) {
 		current := existing.Device
 		if listed, ok := s.listedDevice(ctx, existing.Device); ok {
@@ -686,16 +801,51 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			// serial it ran under, and boots by that name.
 			current = listed
 		}
+		if existing.Suspended {
+			current.Booted = false
+		}
+		if !current.Booted {
+			// Asleep, or shut down outside AO: starting it again takes memory
+			// like any other boot.
+			listed, err := s.cfg.Provider.List(ctx)
+			if err != nil {
+				return Lease{}, apierr.Unavailable("DEVICE_LIST_FAILED", err.Error())
+			}
+			s.mu.Lock()
+			s.forgetRebootedLocked(listed)
+			plan, err := s.planRoomLocked(id, current, nil, listed)
+			if err == nil {
+				s.markRoomLocked(plan)
+			}
+			s.mu.Unlock()
+			if err != nil {
+				return Lease{}, err
+			}
+			// Committed to starting it: a caller that stops waiting (the phone
+			// gives up on a request after a while) must not cancel the boot half
+			// way, which would shut the device down again and leave the session
+			// with nothing. The provider bounds each boot itself.
+			ctx = context.WithoutCancel(ctx)
+			s.makeRoom(ctx, plan)
+		}
 		device, err := s.boot(ctx, current)
 		if err == nil {
-			return s.confirmReopen(id, existing, device)
+			lease, err := s.confirmReopen(id, existing, device)
+			if err == nil && !current.Booted {
+				// Started again (woken, or off since an outside shutdown): claims
+				// from before the restart are stale, and freeing them here starts
+				// the agent's driver from the daemon. Left to the agent's own first
+				// command, the driver starts inside the agent's shell, where it
+				// could not reach the simulators.
+				s.releaseControl(ctx, lease.Device, id)
+			}
+			return lease, err
 		}
 		// A device deleted since it was leased never boots again: let the lease
 		// go and open another, rather than fail every open until a close.
 		if !s.releaseIfGone(ctx, id, existing) {
 			return Lease{}, apierr.Unavailable("DEVICE_BOOT_FAILED", err.Error())
 		}
-		has, localInUse = false, localInUse-1
 	}
 	var workspace string
 	if s.cfg.Sessions != nil {
@@ -703,42 +853,82 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			workspace = info.WorkspacePath
 		}
 	}
-	decision := Resolve(ResolveInput{
+	in := ResolveInput{
 		Requested:        req.Platform,
 		ProjectPlatforms: DetectPlatforms(workspace),
 		Local:            s.cfg.Provider.Platforms(ctx),
-		LocalSlotFree:    has || localInUse < s.cfg.MaxLocalLeases,
-		LocalCap:         s.cfg.MaxLocalLeases,
-		LocalHolders:     holders,
-	})
+	}
+	// Whether the device it would pick fits the memory budget, or can once
+	// idle devices are shut down: a running one costs nothing more, a new
+	// boot its platform's weight. A pick that fails (the named device is
+	// taken) says why below, so it does not count as a full machine.
+	platform := pickPlatform(in)
+	in.LocalSlotFree = true
+	var roomErr error
+	var devices []ports.DeviceInfo
+	var listGen uint64
+	if availability(in.Local, platform).Available {
+		s.mu.Lock()
+		listGen = s.bootGen
+		s.mu.Unlock()
+		listed, err := s.cfg.Provider.List(ctx)
+		if err != nil {
+			return Lease{}, apierr.Unavailable("DEVICE_LIST_FAILED", err.Error())
+		}
+		devices = listed
+		s.mu.Lock()
+		s.forgetStoppedLocked(devices, listGen)
+		s.forgetRebootedLocked(devices)
+		if candidate, err := s.pickLocked(devices, platform, req.DeviceID, id); err == nil {
+			_, roomErr = s.planRoomLocked(id, candidate, s.leasePtrLocked(id), devices)
+			if apiErr := (*apierr.Error)(nil); errors.As(roomErr, &apiErr) {
+				in.LocalSlotFree, in.LocalFull = false, apiErr.Message
+			}
+		}
+		s.mu.Unlock()
+	}
+	decision := Resolve(in)
 	if !decision.OK() {
+		if roomErr != nil && decision.Fallback == in.LocalFull {
+			return Lease{}, roomErr // no room right now: keep its code, which says so
+		}
 		return Lease{}, apierr.Conflict("NO_DEVICE_AVAILABLE", decision.Fallback, map[string]any{"platform": string(decision.Platform)})
 	}
-	s.mu.Lock()
-	listGen := s.bootGen
-	s.mu.Unlock()
-	devices, err := s.cfg.Provider.List(ctx)
-	if err != nil {
-		return Lease{}, apierr.Unavailable("DEVICE_LIST_FAILED", err.Error())
+	if devices == nil || decision.Platform != platform {
+		s.mu.Lock()
+		listGen = s.bootGen
+		s.mu.Unlock()
+		listed, err := s.cfg.Provider.List(ctx)
+		if err != nil {
+			return Lease{}, apierr.Unavailable("DEVICE_LIST_FAILED", err.Error())
+		}
+		devices = listed
 	}
-	// Pick, check the cap and reserve under one lock, before booting: two opens
-	// racing for the last slot or the same device must not both boot one.
+	// Pick, check the budget and reserve under one lock, before booting: two
+	// opens racing for the last room or the same device must not both boot one.
 	s.mu.Lock()
 	s.forgetStoppedLocked(devices, listGen)
+	s.forgetRebootedLocked(devices)
 	device, err := s.pickLocked(devices, decision.Platform, req.DeviceID, id)
+	var plan roomPlan
 	if err == nil {
-		err = s.capLocked(id, decision.Platform)
+		plan, err = s.planRoomLocked(id, device, s.leasePtrLocked(id), devices)
 	}
 	if err != nil {
 		s.mu.Unlock()
 		return Lease{}, err
 	}
+	s.markRoomLocked(plan)
 	key := deviceKey(device)
 	if s.reserved == nil {
 		s.reserved = map[string]domain.SessionID{}
 	}
 	s.reserved[key] = id
 	s.mu.Unlock()
+	// Committed, like a reopen above: the boot finishes and the lease is
+	// written even if the caller goes away meanwhile.
+	ctx = context.WithoutCancel(ctx)
+	s.makeRoom(ctx, plan)
 	wasBooted := device.Booted
 	// Until the lease is written, a failure gives back the reservation and
 	// shuts down a device this open started, unless a lease now holds it.
@@ -755,7 +945,7 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 		_, held := s.ownerOfLocked(key)
 		stop := started.ID != "" && !wasBooted && !held
 		if stop {
-			delete(s.owned, key)
+			s.disownLocked(key)
 			delete(s.parked, key)
 		}
 		s.mu.Unlock()
@@ -804,20 +994,30 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			s.releasing = map[string]bool{}
 		}
 		s.releasing[deviceKey(previous.Device)] = true
-		s.parkLocked(id, previous.Device)
+		if previous.Suspended {
+			// Asleep, so off already: nothing to park.
+			s.disownLocked(deviceKey(previous.Device))
+		} else {
+			s.parkLocked(id, previous.Device)
+		}
 	}
 	if !wasBooted {
 		s.owned[key] = true
+		s.noteOwnBootLocked(key, booted)
 	}
 	// Held again: its last session ending no longer powers it off.
 	delete(s.parked, key)
 	delete(s.reserved, key)
 	committed = true
 	s.leases[id] = lease
+	s.touchLocked(id)
 	s.saveLocked()
 	s.mu.Unlock()
+	s.setAgentAsleep(id, false)
 	if replaced {
-		_ = s.finishRelease(ctx, id, previous.Device, false)
+		// Shut down rather than parked when the budget needed its memory.
+		shutdown := plan.previous != "" && plan.previous == deviceKey(previous.Device)
+		_ = s.finishRelease(ctx, id, previous.Device, shutdown)
 	}
 	// No other AO session holds this device now, so any other claim on it is
 	// stale: an ended session, or one whose lease a daemon restart dropped.
@@ -852,7 +1052,7 @@ func (s *Service) forgetStoppedLocked(devices []ports.DeviceInfo, listGen uint64
 		if d.Booted || !s.owned[key] || !s.idleLocked(key) {
 			continue
 		}
-		delete(s.owned, key)
+		s.disownLocked(key)
 		delete(s.parked, key)
 		changed = true
 	}
@@ -887,27 +1087,6 @@ func (s *Service) pickLocked(devices []ports.DeviceInfo, platform ports.DevicePl
 	return pickDevice(devices, platform, wantID, taken, s.owned, busy)
 }
 
-// capLocked refuses a session without a lease once leases and other
-// sessions' in-flight opens fill the machine's cap. Callers hold s.mu.
-func (s *Service) capLocked(id domain.SessionID, platform ports.DevicePlatform) error {
-	if _, has := s.leases[id]; has {
-		return nil
-	}
-	holders := map[domain.SessionID]bool{}
-	for owner := range s.leases {
-		holders[owner] = true
-	}
-	for _, owner := range s.reserved {
-		if owner != id {
-			holders[owner] = true
-		}
-	}
-	if len(holders) < s.cfg.MaxLocalLeases {
-		return nil
-	}
-	return apierr.Conflict("NO_DEVICE_AVAILABLE", fmt.Sprintf("This machine already runs %d devices for other sessions, the most it runs at once. Release one of them, or end its session, to open another.", s.cfg.MaxLocalLeases), map[string]any{"platform": string(platform)})
-}
-
 // confirmReopen records a reopened lease once its device is up, unless the
 // lease was released or its device taken while the boot ran.
 func (s *Service) confirmReopen(id domain.SessionID, existing Lease, device ports.DeviceInfo) (Lease, error) {
@@ -936,7 +1115,12 @@ func (s *Service) confirmReopen(id domain.SessionID, existing Lease, device port
 		updated.AgentControl = control
 		s.stopWatchLocked(id)
 	}
+	if updated.Suspended {
+		updated.Suspended = false
+		s.setAgentAsleep(id, false)
+	}
 	s.leases[id] = updated
+	s.touchLocked(id)
 	s.saveLocked()
 	return updated, nil
 }
@@ -972,7 +1156,7 @@ func (s *Service) releaseIfGone(ctx context.Context, id domain.SessionID, held L
 		s.mu.Unlock()
 		return false
 	}
-	delete(s.owned, deviceKey(held.Device))
+	s.disownLocked(deviceKey(held.Device))
 	ended, _ := s.endLeaseLocked(id)
 	s.listed = nil
 	s.mu.Unlock()
@@ -981,14 +1165,11 @@ func (s *Service) releaseIfGone(ctx context.Context, id domain.SessionID, held L
 	return true
 }
 
-// sameDevice says whether a listed device is the leased one. A running
-// emulator is listed by its serial and a stopped one by its AVD name, so
-// Android also matches on the name.
+// sameDevice says whether a listed device is the leased one: the same
+// deviceKey, so an emulator matches by its AVD name, whatever serial it runs
+// under now or another emulator took since.
 func sameDevice(listed, leased ports.DeviceInfo) bool {
-	if listed.ID == leased.ID {
-		return true
-	}
-	return leased.Platform == ports.DevicePlatformAndroid && listed.Platform == leased.Platform && listed.Name == leased.Name
+	return deviceKey(listed) == deviceKey(leased)
 }
 
 // ownerOfLocked returns the session holding the device with this deviceKey.
@@ -1075,20 +1256,46 @@ func (s *Service) boot(ctx context.Context, device ports.DeviceInfo) (ports.Devi
 	s.mu.Lock()
 	if s.booting == nil {
 		s.booting = map[string]bool{}
+		s.bootDone = map[string]chan struct{}{}
 	}
 	// By deviceKey: a stopped emulator boots by its AVD name while its lease
 	// still holds the serial it last ran under.
 	key := deviceKey(device)
-	s.booting[key] = true
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.booting, key)
-		s.bootGen++
-		s.listed = nil // the next LiveLease reads the device as it is now
+	if done, underWay := s.bootDone[key]; underWay {
+		// Another open is booting it (the Device tab and the phone waking the
+		// same sleeping device at once). Booting it again would reset the
+		// helper of the simulator that boot just started, which shuts it down:
+		// wait, then take it as it is now.
 		s.mu.Unlock()
-	}()
-	return s.cfg.Provider.Boot(ctx, device)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return device, ctx.Err()
+		}
+		if listed, ok := s.listedDevice(ctx, device); ok {
+			device = listed
+		}
+		return s.boot(ctx, device)
+	}
+	done := make(chan struct{})
+	s.booting[key] = true
+	s.bootDone[key] = done
+	s.mu.Unlock()
+	booted, err := s.cfg.Provider.Boot(ctx, device)
+	s.mu.Lock()
+	delete(s.booting, key)
+	delete(s.bootDone, key)
+	close(done)
+	s.bootGen++
+	s.listed = nil // the next LiveLease reads the device as it is now
+	if err == nil && s.owned[key] {
+		// Woken: AO's own new boot, recorded before anyone can list it as
+		// a boot outside AO.
+		s.noteOwnBootLocked(key, booted)
+		s.saveLocked()
+	}
+	s.mu.Unlock()
+	return booted, err
 }
 
 // liveListTTL is how long LiveLease trusts the last device list.
@@ -1128,7 +1335,8 @@ func (s *Service) LiveLease(ctx context.Context, id domain.SessionID) (Lease, bo
 		}
 	}
 	s.mu.Lock()
-	if s.booting[deviceKey(l.Device)] {
+	l.Starting = s.booting[deviceKey(l.Device)]
+	if l.Starting || l.Suspended {
 		l.Device.Booted = false
 	}
 	s.mu.Unlock()
@@ -1137,7 +1345,7 @@ func (s *Service) LiveLease(ctx context.Context, id domain.SessionID) (Lease, bo
 
 // listedDevice finds a leased device in the provider's (briefly cached) list.
 // A running emulator is listed by its serial and a stopped one by its AVD
-// name, so Android also matches on the name.
+// name, so Android matches on the name (see deviceKey).
 func (s *Service) listedDevice(ctx context.Context, device ports.DeviceInfo) (ports.DeviceInfo, bool) {
 	s.mu.Lock()
 	devices, fresh := s.listed, s.cfg.Now().Sub(s.listedAt) < liveListTTL && s.listed != nil
@@ -1148,19 +1356,17 @@ func (s *Service) listedDevice(ctx context.Context, device ports.DeviceInfo) (po
 			devices = listed
 			s.mu.Lock()
 			s.listed, s.listedAt = listed, s.cfg.Now()
+			s.forgetRebootedLocked(listed)
 			s.mu.Unlock()
 		}
 	}
+	// By deviceKey: an emulator is its AVD, not the serial it last ran under,
+	// which another emulator may hold now (woken from sleep, the leased AVD
+	// must not be taken for that one).
+	key := deviceKey(device)
 	for _, d := range devices {
-		if d.ID == device.ID {
+		if deviceKey(d) == key {
 			return d, true
-		}
-	}
-	if device.Platform == ports.DevicePlatformAndroid {
-		for _, d := range devices {
-			if d.Platform == device.Platform && d.Name == device.Name {
-				return d, true
-			}
 		}
 	}
 	return ports.DeviceInfo{}, false
@@ -1179,6 +1385,34 @@ func (s *Service) requireLease(id domain.SessionID) (Lease, error) {
 	return l, nil
 }
 
+// leasePtrLocked is the session's lease, or nil. Callers hold s.mu.
+func (s *Service) leasePtrLocked(id domain.SessionID) *Lease {
+	if l, ok := s.leases[id]; ok {
+		return &l
+	}
+	return nil
+}
+
+// errAsleep refuses stream work on a sleeping device: only opening it, or
+// device work (install, launch, screenshot, the agent's command), starts it.
+func errAsleep(l Lease) error {
+	return apierr.Conflict("DEVICE_ASLEEP", l.Device.Name+" was shut down while unused. Open it to start it again.", nil)
+}
+
+// awake returns the session's lease for device work with its device running:
+// one put to sleep for going unused starts again first.
+func (s *Service) awake(ctx context.Context, id domain.SessionID) (Lease, error) {
+	l, err := s.requireLease(id)
+	if err != nil {
+		return Lease{}, err
+	}
+	s.touch(id)
+	if !l.Suspended {
+		return l, nil
+	}
+	return s.Open(ctx, id, OpenRequest{})
+}
+
 // Close releases the session's device, optionally shutting it down. One this
 // service booted that is left running is powered off when the session ends,
 // unless another session took it meanwhile.
@@ -1189,7 +1423,8 @@ func (s *Service) Close(ctx context.Context, id domain.SessionID, shutdown bool)
 	if !ok {
 		return nil
 	}
-	if err := s.finishRelease(ctx, id, l.Device, shutdown); err != nil {
+	// Asleep, it is off already: shutting it down again would only fail.
+	if err := s.finishRelease(ctx, id, l.Device, shutdown && !l.Suspended); err != nil {
 		return apierr.Unavailable("DEVICE_SHUTDOWN_FAILED", "Released "+l.Device.Name+", but it did not shut down: "+err.Error())
 	}
 	return nil
@@ -1197,7 +1432,7 @@ func (s *Service) Close(ctx context.Context, id domain.SessionID, shutdown bool)
 
 // Install installs a built app on the session's device.
 func (s *Service) Install(ctx context.Context, id domain.SessionID, artifactPath string) (Lease, error) {
-	l, err := s.requireLease(id)
+	l, err := s.awake(ctx, id)
 	if err != nil {
 		return Lease{}, err
 	}
@@ -1252,7 +1487,7 @@ func artifactMismatch(device ports.DeviceInfo, path string, isDir bool) string {
 
 // Launch starts an installed app on the session's device.
 func (s *Service) Launch(ctx context.Context, id domain.SessionID, appID string) (Lease, error) {
-	l, err := s.requireLease(id)
+	l, err := s.awake(ctx, id)
 	if err != nil {
 		return Lease{}, err
 	}
@@ -1267,7 +1502,7 @@ func (s *Service) Launch(ctx context.Context, id domain.SessionID, appID string)
 
 // Screenshot returns a PNG of the session's device.
 func (s *Service) Screenshot(ctx context.Context, id domain.SessionID) ([]byte, error) {
-	l, err := s.requireLease(id)
+	l, err := s.awake(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1288,6 +1523,9 @@ func (s *Service) SetQuality(ctx context.Context, id domain.SessionID, quality p
 	l, err := s.requireLease(id)
 	if err != nil {
 		return err
+	}
+	if l.Suspended {
+		return errAsleep(l)
 	}
 	tuner, ok := s.cfg.Provider.(ports.DeviceStreamTuner)
 	if !ok {
@@ -1312,6 +1550,9 @@ func (s *Service) PressButton(ctx context.Context, id domain.SessionID, button s
 	if err != nil {
 		return err
 	}
+	if l.Suspended {
+		return errAsleep(l)
+	}
 	presser, ok := s.cfg.Provider.(ports.DeviceButtonPresser)
 	if !ok {
 		return apierr.Conflict("DEVICE_BUTTON_UNSUPPORTED", "Send this button on the device's input socket.", nil)
@@ -1334,6 +1575,9 @@ func (s *Service) HubTarget(ctx context.Context, id domain.SessionID) (ports.Dev
 	l, err := s.requireLease(id)
 	if err != nil {
 		return ports.DeviceHubEndpoint{}, Lease{}, nil, err
+	}
+	if l.Suspended {
+		return ports.DeviceHubEndpoint{}, Lease{}, nil, errAsleep(l)
 	}
 	// A killed session's viewer must not keep driving the device: the stream
 	// and touch socket are where it would.

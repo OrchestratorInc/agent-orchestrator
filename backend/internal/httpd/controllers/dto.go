@@ -5356,6 +5356,8 @@ type DeviceLease struct {
 	Reason      string             `json:"reason" description:"Why the resolver picked this provider."`
 	AgentDevice DeviceAgentControl `json:"agentDevice"`
 	OpenedAt    time.Time          `json:"openedAt"`
+	Suspended   bool               `json:"suspended,omitempty" description:"The device was shut down after going unused, to free memory. The lease still holds it; opening it (or the agent's next command) starts it again."`
+	Starting    bool               `json:"starting,omitempty" description:"AO is booting the device now."`
 }
 
 // DeviceStatusResponse is the body of GET /api/v1/devices.

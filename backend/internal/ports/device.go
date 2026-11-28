@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // DevicePlatform names the mobile OS a simulator or emulator runs.
@@ -129,6 +130,20 @@ type DevicePlatformLister interface {
 // must not keep driving it, so RevokeControl turns that command off.
 type DeviceControlRevoker interface {
 	RevokeControl(sessionID string) error
+}
+
+// DeviceAgentActivity is implemented by a provider whose agent command drives
+// the device without going through the daemon. The device service reads when
+// the agent last used it, to leave a device in use running, and marks the
+// command asleep while the device is shut down for being idle, so the agent's
+// next command starts it again first.
+type DeviceAgentActivity interface {
+	// AgentLastUsed is when the session's agent last ran its device command,
+	// or the zero time when it never did.
+	AgentLastUsed(sessionID string) time.Time
+	// SetAgentAsleep marks the session's device asleep (shut down while its
+	// lease holds) or awake again.
+	SetAgentAsleep(sessionID string, asleep bool) error
 }
 
 // DeviceButtonPresser is implemented by a provider whose hardware buttons

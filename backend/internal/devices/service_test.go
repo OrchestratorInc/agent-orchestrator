@@ -3,6 +3,7 @@ package devices
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,8 @@ type fakeProvider struct {
 	// set, hears each Boot as it starts.
 	bootGate    chan struct{}
 	bootEntered chan string
+	// boots counts boots, for each one's BootID.
+	boots int
 	// gateDevice, when set, limits bootGate and bootEntered to that device.
 	gateDevice string
 	// bootID, when set, renames a booted device (an emulator back under a new
@@ -50,6 +53,28 @@ type fakeProvider struct {
 	readyGate   chan struct{}
 	// noted records each device NoteBooted heard, as id@bootID.
 	noted []string
+	// agentUsed is when each session's agent last ran its command, and asleep
+	// which sessions' commands are marked asleep.
+	agentUsed map[string]time.Time
+	asleep    map[string]bool
+	// coldBoots records each Boot of a device that was off.
+	coldBoots []string
+}
+
+func (f *fakeProvider) AgentLastUsed(session string) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.agentUsed[session]
+}
+
+func (f *fakeProvider) SetAgentAsleep(session string, asleep bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.asleep == nil {
+		f.asleep = map[string]bool{}
+	}
+	f.asleep[session] = asleep
+	return nil
 }
 
 func (f *fakeProvider) NoteBooted(d ports.DeviceInfo) {
@@ -101,7 +126,7 @@ func (f *fakeProvider) setBooted(id string, booted bool) {
 		}
 	}
 }
-func (f *fakeProvider) Boot(_ context.Context, d ports.DeviceInfo) (ports.DeviceInfo, error) {
+func (f *fakeProvider) Boot(ctx context.Context, d ports.DeviceInfo) (ports.DeviceInfo, error) {
 	gated := f.gateDevice == "" || f.gateDevice == d.ID
 	if f.bootEntered != nil && gated {
 		f.bootEntered <- d.ID
@@ -109,17 +134,50 @@ func (f *fakeProvider) Boot(_ context.Context, d ports.DeviceInfo) (ports.Device
 	if f.bootGate != nil && gated {
 		<-f.bootGate
 	}
+	if err := ctx.Err(); err != nil {
+		return ports.DeviceInfo{}, err // as the hub's start call does
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.bootErr[d.ID]; err != nil {
 		return ports.DeviceInfo{}, err
 	}
 	f.booted = append(f.booted, d.ID)
+	if !d.Booted {
+		f.coldBoots = append(f.coldBoots, d.ID)
+	}
+	listedID := d.ID
 	if f.bootID != nil {
 		d.ID = f.bootID(d)
 	}
+	if !d.Booted {
+		// A new boot, as a simulator's lastUsedAt moves on each one.
+		f.boots++
+		d.BootID = fmt.Sprintf("boot-%d", f.boots)
+	}
 	d.Booted = true
+	// Listed as running from now on, as a real boot is.
+	for i := range f.devices {
+		if f.devices[i].ID == listedID && f.bootID == nil {
+			f.devices[i].Booted = true
+			f.devices[i].BootID = d.BootID
+		}
+	}
 	return d, nil
+}
+
+// rebootOutside shuts the listed device down and starts it again behind the
+// service's back (its user, in Xcode): running, on a boot AO did not start.
+func (f *fakeProvider) rebootOutside(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.boots++
+	for i := range f.devices {
+		if f.devices[i].ID == id {
+			f.devices[i].Booted = true
+			f.devices[i].BootID = fmt.Sprintf("outside-%d", f.boots)
+		}
+	}
 }
 func (f *fakeProvider) Shutdown(_ context.Context, d ports.DeviceInfo) error {
 	if f.shutdownGate != nil {
@@ -163,7 +221,12 @@ func (f *fakeProvider) ReleaseControl(_ context.Context, d ports.DeviceInfo, kee
 func (f *fakeProvider) Close() error { return nil }
 
 // newAvailable builds a service with devices available, as with Developer mode on.
+// Memory pressure reads normal unless the test says otherwise: the host's own
+// would make results depend on the machine running them.
 func newAvailable(cfg Config) *Service {
+	if cfg.MemoryPressure == nil {
+		cfg.MemoryPressure = func() MemoryPressure { return PressureNormal }
+	}
 	svc := New(cfg)
 	svc.SetAvailable(true)
 	return svc
@@ -172,7 +235,7 @@ func newAvailable(cfg Config) *Service {
 func newTestService(t *testing.T, p *fakeProvider, maxLocal int) *Service {
 	t.Helper()
 	dir := t.TempDir()
-	svc := newAvailable(Config{DataDir: dir, Provider: p, MaxLocalLeases: maxLocal, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := newAvailable(Config{DataDir: dir, Provider: p, MemoryBudget: int64(maxLocal) * iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) }})
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -239,8 +302,8 @@ func TestOpenRespectsLocalCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := svc.Open(ctx, "s-2", OpenRequest{Platform: ports.DevicePlatformIOS})
-	if apiCode(err) != "NO_DEVICE_AVAILABLE" {
-		t.Fatalf("over-capacity open err = %v, want NO_DEVICE_AVAILABLE", err)
+	if apiCode(err) != "NO_DEVICE_ROOM" {
+		t.Fatalf("over-capacity open err = %v, want NO_DEVICE_ROOM", err)
 	}
 }
 
@@ -269,7 +332,7 @@ func TestOpenRequiresOptIn(t *testing.T) {
 func TestDevicesNeedDeveloperMode(t *testing.T) {
 	ctx := context.Background()
 	p := iosFleet()
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := New(Config{DataDir: t.TempDir(), Provider: p, MemoryBudget: 3 * iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) }})
 	if _, err := svc.Setup(ctx); apiCode(err) != "DEVICES_UNAVAILABLE" {
 		t.Fatalf("Setup while unavailable = %v, want DEVICES_UNAVAILABLE", err)
 	}
@@ -543,7 +606,7 @@ func (p *pressingProvider) PressButton(_ context.Context, d ports.DeviceInfo, se
 
 func newServiceWith(t *testing.T, p ports.DeviceProvider) *Service {
 	t.Helper()
-	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, MemoryBudget: 3 * iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) }})
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -835,7 +898,7 @@ func TestSetupRefusesWhenNothingCanRun(t *testing.T) {
 		{Platform: ports.DevicePlatformAndroid, Reason: "Install the Android SDK."},
 	}}
 	dir := t.TempDir()
-	svc := newAvailable(Config{DataDir: dir, Provider: p, MaxLocalLeases: 1, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := newAvailable(Config{DataDir: dir, Provider: p, MemoryBudget: iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) }})
 	_, err := svc.Setup(context.Background())
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "NO_DEVICE_PLATFORM" {
@@ -953,8 +1016,8 @@ func TestConcurrentOpensRespectTheCap(t *testing.T) {
 	// One open reserves the only slot and boots; the other is refused before
 	// it starts a device it could never keep.
 	first := <-p.bootEntered
-	if err := <-results; apiCode(err) != "NO_DEVICE_AVAILABLE" {
-		t.Fatalf("the losing open = %v, want NO_DEVICE_AVAILABLE", err)
+	if err := <-results; apiCode(err) != "NO_DEVICE_ROOM" {
+		t.Fatalf("the losing open = %v, want NO_DEVICE_ROOM", err)
 	}
 	close(p.bootGate)
 	if err := <-results; err != nil {
@@ -1009,7 +1072,7 @@ func TestLeaseSurvivesAFailedSessionLookup(t *testing.T) {
 	ctx := context.Background()
 	p := iosFleet()
 	var lookupErr error
-	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, MemoryBudget: 3 * iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) },
 		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) { return SessionInfo{}, lookupErr }})
 	if _, err := svc.Setup(ctx); err != nil {
 		t.Fatal(err)
@@ -1153,7 +1216,7 @@ func TestEndingALeaseRevokesTheAgentCommand(t *testing.T) {
 func TestHubTargetRefusesAnEndedSession(t *testing.T) {
 	ctx := context.Background()
 	var terminated atomic.Bool
-	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet(), MemoryBudget: 3 * iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) },
 		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
 			return SessionInfo{Terminated: terminated.Load()}, nil
 		}})
@@ -1180,7 +1243,7 @@ func TestEndedSessionsAreReapedInTheBackground(t *testing.T) {
 	t.Cleanup(func() { reapEvery = previous })
 	ctx := context.Background()
 	var terminated atomic.Bool
-	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet(), MemoryBudget: 3 * iosDeviceMemory, Now: func() time.Time { return time.Unix(1, 0) },
 		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
 			return SessionInfo{Terminated: terminated.Load()}, nil
 		}})
@@ -1728,7 +1791,7 @@ func TestTheReaperPowersOffAnEndedSessionsDevice(t *testing.T) {
 
 // savedParked reads the parked record a restarted daemon would load.
 func savedParked(dir string) map[string]parkedDevice {
-	_, _, parked := loadLeases(dir)
+	_, _, _, parked := loadLeases(dir, time.Unix(1, 0))
 	return parked
 }
 

@@ -34,6 +34,9 @@ type DeviceService interface {
 	PressButton(ctx context.Context, id domain.SessionID, button string) error
 	SetQuality(ctx context.Context, id domain.SessionID, quality ports.DeviceStreamQuality) error
 	HubTarget(ctx context.Context, id domain.SessionID) (ports.DeviceHubEndpoint, devices.Lease, context.Context, error)
+	// Watch records a viewer on the session's device until the returned func
+	// runs, so a device someone watches is never put to sleep.
+	Watch(id domain.SessionID) func()
 }
 
 // DeviceSessionReader reads the session a device route names.
@@ -322,6 +325,7 @@ func (c *DevicesController) hub(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "DEVICE_HUB_NOT_FOUND", "Not a device stream route", nil)
 		return
 	}
+	defer c.Svc.Watch(id)()
 	target, err := url.Parse(endpoint.Origin)
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -424,5 +428,7 @@ func deviceLeaseView(l devices.Lease) DeviceLease {
 		Reason:      l.Reason,
 		AgentDevice: DeviceAgentControl{Command: l.AgentControl.Command, Args: append([]string{}, l.AgentControl.Args...)},
 		OpenedAt:    l.OpenedAt,
+		Suspended:   l.Suspended,
+		Starting:    l.Starting,
 	}
 }
