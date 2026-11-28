@@ -1,8 +1,8 @@
-import { useContext } from "react";
+import { useCallback, useContext, useState } from "react";
 import { Check, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
-import { composeMenuCloseAutoFocus, ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter, useMenuReturnTarget } from "./menu-focus";
+import { composeMenuCloseAutoFocus, ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter, useCloseWhenFrameFocused, useMenuReturnTarget } from "./menu-focus";
 import {
 	actionMenuContentClass,
 	actionMenuDestructiveItemClass,
@@ -16,11 +16,22 @@ import {
  * and turns off pointer events on <body>; either restyles every element on the page
  * when the menu opens and again when it closes. Unless `modal` is passed, an outside
  * click still only closes the menu, as a modal one's would.
+ *
+ * A click in a framed page (an artifact preview, a browser view) never reaches
+ * this document, so it also closes the menu when such a frame takes focus.
  */
-export function DropdownMenu({ modal, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+export function DropdownMenu({ modal, open: openProp, defaultOpen = false, onOpenChange, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+	const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+	const controlled = openProp !== undefined;
+	const open = controlled ? openProp : uncontrolledOpen;
+	const setOpen = useCallback((next: boolean) => {
+		if (!controlled) setUncontrolledOpen(next);
+		onOpenChange?.(next);
+	}, [controlled, onOpenChange]);
+	useCloseWhenFrameFocused(open, () => setOpen(false));
 	return (
 		<ShieldOutsideClick.Provider value={modal === undefined}>
-			<DropdownMenuPrimitive.Root modal={modal ?? false} {...props} />
+			<DropdownMenuPrimitive.Root modal={modal ?? false} open={open} onOpenChange={setOpen} {...props} />
 		</ShieldOutsideClick.Provider>
 	);
 }

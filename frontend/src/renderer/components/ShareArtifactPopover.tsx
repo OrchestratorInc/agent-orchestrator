@@ -25,6 +25,7 @@ import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
+import { useCloseWhenFrameFocused } from "./ui/menu-focus";
 import { publishResultEvent } from "../lib/artifact-telemetry";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
@@ -393,32 +394,6 @@ export const MAX_INVITES_PER_REQUEST = 50;
 
 /** What a failed change of who the link is shared with says. */
 type GrantFailure = "artifacts.share.people.inviteFailed" | "artifacts.share.people.removeFailed" | "artifacts.share.people.teamsFailed" | "artifacts.share.access.changeFailed";
-
-/**
- * Closes an open popover when focus moves into a framed page. A click inside
- * an artifact preview lands in its iframe and never reaches this document, so
- * the popover's own click-outside cannot see it; the window's blur, with the
- * frame left as the active element, can. Read a tick later, once focus settles.
- */
-function useCloseWhenFrameFocused(open: boolean, close: () => void): void {
-	const closeRef = useRef(close);
-	closeRef.current = close;
-	useEffect(() => {
-		if (!open) return;
-		let timer: number | undefined;
-		const check = () => {
-			timer = window.setTimeout(() => {
-				const active = document.activeElement;
-				if (active instanceof HTMLIFrameElement || active?.tagName === "WEBVIEW") closeRef.current();
-			}, 0);
-		};
-		window.addEventListener("blur", check);
-		return () => {
-			window.removeEventListener("blur", check);
-			window.clearTimeout(timer);
-		};
-	}, [open]);
-}
 
 /**
  * The publish panel a menu's Publish or Unpublish item opens, anchored to the

@@ -1,4 +1,4 @@
-import { createContext, useCallback, type PointerEvent } from "react";
+import { createContext, useCallback, useEffect, useRef, type PointerEvent } from "react";
 
 /**
  * Focus hand-off between a menu that is closing and the surface its selected
@@ -212,4 +212,31 @@ export function swallowClickAfter(event: CustomEvent<{ originalEvent: globalThis
 	document.addEventListener("click", swallow, { capture: true, signal: listening.signal });
 	document.addEventListener("pointerup", release, { capture: true, once: true, signal: listening.signal });
 	document.addEventListener("pointercancel", release, { capture: true, once: true, signal: listening.signal });
+}
+
+/**
+ * Closes an open menu or popover when focus moves into a framed page. A click
+ * inside an artifact preview or a browser view lands in its iframe or webview
+ * and never reaches this document, so the overlay's own click-outside cannot
+ * see it; the window's blur, with the frame left as the active element, can.
+ * Read a tick later, once focus settles.
+ */
+export function useCloseWhenFrameFocused(open: boolean, close: () => void): void {
+	const closeRef = useRef(close);
+	closeRef.current = close;
+	useEffect(() => {
+		if (!open) return;
+		let timer: number | undefined;
+		const check = () => {
+			timer = window.setTimeout(() => {
+				const active = document.activeElement;
+				if (active instanceof HTMLIFrameElement || active?.tagName === "WEBVIEW") closeRef.current();
+			}, 0);
+		};
+		window.addEventListener("blur", check);
+		return () => {
+			window.removeEventListener("blur", check);
+			window.clearTimeout(timer);
+		};
+	}, [open]);
 }
