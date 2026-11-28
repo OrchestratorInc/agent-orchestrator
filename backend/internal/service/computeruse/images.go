@@ -73,7 +73,8 @@ func (s imageStore) prune(dir string) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Type().IsRegular() {
+		// The folder also holds the session's timeline, which is not an image.
+		if entry.Type().IsRegular() && !strings.HasPrefix(entry.Name(), timelineFile) {
 			names = append(names, entry.Name())
 		}
 	}

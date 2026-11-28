@@ -147,9 +147,10 @@ type Driver interface {
 
 // Service runs Cua Driver for the settings page and the computer-use tools.
 type Service struct {
-	driver Driver
-	images imageStore
-	goos   string
+	driver   Driver
+	images   imageStore
+	timeline timelineLog
+	goos     string
 
 	background context.Context
 	stop       context.CancelFunc
@@ -348,6 +349,21 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if err != nil {
 		return CallResult{}, err
 	}
+	result, stepErr, err := s.run(ctx, binary, scope, tool, request.SessionID, arguments)
+	// A run_steps batch whose step failed still returns its report to the
+	// agent; the timeline records it as failed, with the step's reason.
+	recorded := err
+	if recorded == nil {
+		recorded = stepErr
+	}
+	s.recordCall(scope, tool, request.Arguments, result.Images, recorded)
+	return result, err
+}
+
+// run makes one driver call for Call, which has checked the request. stepErr
+// is a run_steps step's failure that the returned report already describes.
+func (s *Service) run(ctx context.Context, binary, scope, tool, sessionID string, arguments map[string]any) (CallResult, error, error) {
+	var stepErr error
 	saved := &savedImages{store: s.images, scope: scope, tool: tool, images: []Image{}}
 	screenshot := saved.requestScreenshotFile(tool, arguments)
 	dropImageFiles(arguments)
@@ -358,7 +374,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	_, named := arguments["session"]
 	injected := !named && !s.isSessionless(tool)
 	if injected {
-		arguments["session"] = driverSession(request.SessionID)
+		arguments["session"] = driverSession(sessionID)
 	}
 	if tool == "run_steps" {
 		if observed := s.prepareObserve(saved, arguments); observed != "" {
@@ -379,18 +395,19 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if runErr != nil && tool == "run_steps" && batchReport(stdout) {
 		// A step failed after the batch ran: its per-step report and
 		// observation say which step and what the window shows now.
+		stepErr = batchFailure(stdout)
 		runErr = nil
 	}
 	if runErr != nil {
 		var apiErr *apierr.Error
 		if errors.As(runErr, &apiErr) {
-			return CallResult{}, runErr
+			return CallResult{}, nil, runErr
 		}
 		if daemonNotRunning(stdout, stderr) {
-			return CallResult{}, errDaemonStopped
+			return CallResult{}, nil, errDaemonStopped
 		}
 		if ctx.Err() != nil {
-			return CallResult{}, ctx.Err()
+			return CallResult{}, nil, ctx.Err()
 		}
 		message := commandFailure(runErr, stdout, stderr)
 		if code, _ := refusalCode(stdout); driverRefusalHints[code] != "" {
@@ -401,7 +418,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		if needsWebTextAdvice(tool, stdout, stderr) {
 			message += "\n" + webTextAdvice
 		}
-		return CallResult{}, apierr.New(driverFailureKind(stdout, stderr), "COMPUTER_USE_CALL_FAILED", message, map[string]any{"tool": tool})
+		return CallResult{}, nil, apierr.New(driverFailureKind(stdout, stderr), "COMPUTER_USE_CALL_FAILED", message, map[string]any{"tool": tool})
 	}
 
 	var result any
@@ -420,7 +437,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		result = s.observeAfter(ctx, binary, saved, arguments, result)
 	}
 	s.images.prune(scope)
-	return CallResult{Tool: tool, Result: result, Images: saved.images}, nil
+	return CallResult{Tool: tool, Result: result, Images: saved.images}, stepErr, nil
 }
 
 // callInSession runs one driver call in its named driver session, reviving
@@ -472,6 +489,37 @@ func batchReport(stdout []byte) bool {
 		Steps []json.RawMessage `json:"steps"`
 	}
 	return json.Unmarshal(stdout, &report) == nil && len(report.Steps) > 0
+}
+
+// batchFailure names the step that failed in a run_steps report, for the
+// timeline. The agent reads the whole report.
+func batchFailure(stdout []byte) error {
+	var report struct {
+		Steps []struct {
+			Index   int    `json:"index"`
+			Tool    string `json:"tool"`
+			OK      *bool  `json:"ok"`
+			Message string `json:"message"`
+			Error   string `json:"error"`
+		} `json:"steps"`
+	}
+	if json.Unmarshal(stdout, &report) != nil {
+		return errors.New("a step in the batch failed")
+	}
+	for _, step := range report.Steps {
+		if step.OK == nil || *step.OK {
+			continue
+		}
+		reason := strings.TrimSpace(step.Message)
+		if reason == "" {
+			reason = strings.TrimSpace(step.Error)
+		}
+		if reason == "" {
+			reason = "failed"
+		}
+		return fmt.Errorf("step %d (%s): %s", step.Index+1, step.Tool, reason)
+	}
+	return errors.New("a step in the batch failed")
 }
 
 func sessionEnded(stderr []byte) bool {

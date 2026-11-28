@@ -3641,6 +3641,35 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
   });
 
+  it("offers a Computer Use tab after Browser once the session has made a computer-use call", async () => {
+    const respond = commonGetsResponder([], "", [reviewState(1, "needs_review")]);
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/computer-use/sessions/{sessionId}/timeline"
+        ? { data: { entries: [{ id: "c1", at: "2026-11-16T09:00:00Z", tool: "click", ok: true, screenshots: ["shot.png"] }] } }
+        : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Computer use" }));
+    const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
+    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Computer use", "Side chat"]);
+    expect(screen.getByTestId("computer-use-panel")).toBeInTheDocument();
+    expect(screen.getByText("This machine")).toBeInTheDocument();
+  });
+
+  it("leaves the Computer Use tab out until the session makes a computer-use call", async () => {
+    const respond = commonGetsResponder([], "", []);
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/computer-use/sessions/{sessionId}/timeline" ? { data: { entries: [] } } : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([])} sideChatView={<div />} />);
+
+    await waitFor(() =>
+      expect(getMock.mock.calls.some(([path]) => path === "/api/v1/computer-use/sessions/{sessionId}/timeline")).toBe(true),
+    );
+    expect(screen.queryByRole("tab", { name: "Computer use" })).not.toBeInTheDocument();
+  });
+
   it("keeps a Subagents selection while the chat has not reported its subagents yet", () => {
     mockCommonGets([], "", []);
     const onViewChange = vi.fn();
