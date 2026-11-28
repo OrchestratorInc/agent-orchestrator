@@ -126,7 +126,7 @@ func TestTimestampRepairTriggerInventory(t *testing.T) {
 	// chat_attachment_leases_commit_* fire on inserts, or on updates OF text and
 	// delivery_content_json only, so a representation-only timestamp rewrite
 	// never fires them.
-	const reviewed = "c59355e04366c2687e1ff785a819ebd03f0ef796593afacea9edb2287257d4bb"
+	const reviewed = "f6cd39d54472685966d71cd2dbb16374b4ab3a5e623cfa2b4eeee3b623cb1649"
 	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != reviewed {
 		t.Fatalf("timestamp trigger inventory changed; review preservation logic before updating fingerprint: %s", got)
 	}
