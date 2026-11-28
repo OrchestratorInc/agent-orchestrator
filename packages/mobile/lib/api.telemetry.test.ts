@@ -4,9 +4,12 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 const capture = vi.hoisted(() => vi.fn());
+const requestTimed = vi.hoisted(() => vi.fn());
+vi.mock("./telemetry/uiUsageRegistry", async (importOriginal) => ({ ...(await importOriginal<object>()), reportRequestTimed: requestTimed }));
 vi.mock("./sentry", () => ({ captureMobileApiError: capture, httpCategory: (status: number) => (status >= 500 ? "http_5xx" : "http_4xx") }));
 
-import { getTelemetryIdentity, killSession } from "./api";
+import { apiRequest, getTelemetryIdentity, killSession } from "./api";
+import { noteBackgrounded, requestStartedIn } from "./telemetry/uiUsageRegistry";
 import type { ServerConfig } from "./config";
 
 const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", secure: false, password: "secret12" };
@@ -14,6 +17,7 @@ const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", 
 afterEach(() => {
 	vi.unstubAllGlobals();
 	capture.mockReset();
+	requestTimed.mockReset();
 });
 
 function respond(status: number, body: unknown) {
@@ -43,5 +47,74 @@ describe("API failure capture", () => {
 		expect(operation).toBe("POST /api/v1/sessions/:id/kill");
 		expect([category, status, code]).toEqual(["http_5xx", 500, "INTERNAL_ERROR"]);
 		expect(JSON.stringify(capture.mock.calls)).not.toContain("acme-secret");
+	});
+});
+
+describe("request timing", () => {
+	it("reports each answer's time by the connection kind it went over", async () => {
+		respond(200, { distinctId: "ins_1", optedOut: false });
+		await getTelemetryIdentity({ ...cfg, endpointKind: "tailscale" });
+		const [ms, transport, ok] = requestTimed.mock.calls[0];
+		expect(typeof ms).toBe("number");
+		expect([transport, ok]).toEqual(["tailscale", true]);
+	});
+
+	it("reports a failed answer and an unanswered request as failures", async () => {
+		respond(500, { code: "INTERNAL_ERROR" });
+		await expect(killSession(cfg, "s1")).rejects.toThrow();
+		expect(requestTimed.mock.calls[0].slice(1, 3)).toEqual(["unknown", false]);
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Network request failed")));
+		await expect(killSession(cfg, "s1")).rejects.toThrow();
+		expect(requestTimed.mock.calls[1].slice(0, 3)).toEqual([null, "unknown", false]);
+	});
+
+	describe("when the body stalls", () => {
+		const stalled = (status: number) => new Response(new ReadableStream({ start() {} }), { status });
+		afterEach(() => vi.useRealTimers());
+
+		it("reports a body that times out once, as a failure", async () => {
+			vi.useFakeTimers();
+			vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stalled(200)));
+			const done = apiRequest(cfg, "/api/v1/sessions", undefined, 100).catch(() => undefined);
+			await vi.advanceTimersByTimeAsync(100);
+			await done;
+			expect(requestTimed.mock.calls).toEqual([[null, "unknown", false, requestStartedIn()]]);
+		});
+
+		it("reports an error status once, with its time to the headers", async () => {
+			vi.useFakeTimers();
+			vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stalled(401)));
+			const done = apiRequest(cfg, "/api/v1/sessions", undefined, 100).catch(() => undefined);
+			await vi.advanceTimersByTimeAsync(100);
+			await done;
+			expect(requestTimed.mock.calls).toHaveLength(1);
+			expect(requestTimed.mock.calls[0]).toEqual([expect.any(Number), "unknown", false, requestStartedIn()]);
+		});
+
+		// The registry then leaves it out (appStateTelemetry.test.ts).
+		it("names the background count from when the request started", async () => {
+			vi.useFakeTimers();
+			vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stalled(200)));
+			const before = requestStartedIn();
+			const done = apiRequest(cfg, "/api/v1/sessions", undefined, 100).catch(() => undefined);
+			await vi.advanceTimersByTimeAsync(1);
+			noteBackgrounded();
+			await vi.advanceTimersByTimeAsync(100);
+			await done;
+			expect(requestTimed.mock.calls).toEqual([[null, "unknown", false, before]]);
+			expect(requestStartedIn()).not.toBe(before);
+		});
+
+		it("reports nothing when the screen cancels", async () => {
+			vi.useFakeTimers();
+			vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stalled(200)));
+			const controller = new AbortController();
+			const done = apiRequest(cfg, "/api/v1/sessions", { signal: controller.signal }).catch(() => undefined);
+			await vi.advanceTimersByTimeAsync(1);
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(1);
+			await done;
+			expect(requestTimed).not.toHaveBeenCalled();
+		});
 	});
 });

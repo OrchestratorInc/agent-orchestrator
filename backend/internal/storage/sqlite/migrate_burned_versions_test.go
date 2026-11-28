@@ -301,6 +301,7 @@ var shippedMigrations = map[int64]string{
 	20261126171749354: "20261126171749354_add_session_move_started.sql",
 	20261127085740884: "20261127085740884_session_version_moves.sql",
 	20261127183058106: "20261127183058106_repair_open_usage_harness_checks.sql",
+	20261128055914527: "20261128055914527_lifetime_work_session_count.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

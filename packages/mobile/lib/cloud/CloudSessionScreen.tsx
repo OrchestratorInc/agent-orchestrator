@@ -29,7 +29,10 @@ import { haptics } from "../haptics";
 import { InlineBanner } from "../InlineBanner";
 import { openGitHub } from "../openGitHub";
 import { useOpenPage } from "../pageNavigation";
-import { reviewRouteForPR, sessionPRReadyForReview } from "../reviewView";
+import { reviewRouteForPR } from "../reviewView";
+import { pullRequestMenuAction } from "../sessionPullRequests";
+import { usePullRequestListRequest } from "../usePullRequestListRequest";
+import { useSessionPullRequests } from "../useSessionPullRequests";
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { startupVisible } from "../session/sessionStartup";
 import {
@@ -62,6 +65,7 @@ import { ARCHIVE_CLOUD_SESSION_CONFIRM, cloudSessionMenuGroups } from "./session
 import { useCloudStartup } from "./startup";
 import { useCloudConversation } from "./useCloudConversation";
 import { useCloudPRSummaries } from "./useCloudPRSummaries";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 
 /** A Terminal UI session shows its agent's terminal or its conversation; the sandbox shell is its own page. */
 type SessionView = "chat" | "agent";
@@ -135,6 +139,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 
 	const tui = session?.interfaceMode === "tui";
 	const current: SessionView = view ?? (tui ? "agent" : "chat");
+	const [agentOutputShown, setAgentOutputShown] = useState(false);
+	const showAgentOutput = useCallback(() => setAgentOutputShown(true), []);
 	// A switch of interface (from here or the desktop) shows the new one's own view.
 	useEffect(() => { setView(null); }, [tui]);
 	const terminated = Boolean(session?.isTerminated);
@@ -198,6 +204,9 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// The card covers the screen from the tap; a banner says it only while a
 	// drain waits on the agent's turn, with the conversation still readable.
 	const switchCardShown = cloudSwitchCovers(transition, { launching: launchingSwitch, sourceBusy: switchSourceBusy }) || handoff.pending;
+	// Opening the session is timed until its conversation or its agent's terminal
+	// output shows, and is not covered by the switch card.
+	useSessionContentShown((current === "agent" ? agentOutputShown : Boolean(snapshot)) && !switchCardShown);
 	const switchRecovery = mobileInterfaceTransitionRecoveryMessage(transition);
 	const notice = switchActive || !cloudSwitchNoticeShown(transition) ? undefined : switchNotice(transition);
 	const canSwitch = !terminated && (Boolean(interfaceSwitch.status?.supported) || switchActive);
@@ -345,12 +354,16 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const pinned = (listed ?? session)?.pinned === true;
 	const pr = session?.prs?.find((item) => item.state === "open" || item.state === "draft") ?? session?.prs?.[0];
 	const prNumber = pr?.number;
-	const prUrl = pr?.url;
-	// The pull request ready for review, as a chip over the composer, with the
-	// detail its card shows (title, checks, review) once Cloud has answered.
-	const reviewPromptPR = useMemo(() => session ? sessionPRReadyForReview(cloudSessionRow(session)) : undefined, [session]);
-	const reviewSummaries = useCloudPRSummaries(reviewPromptPR && session ? [session.id] : NO_IDS);
-	const reviewPromptSummary = reviewPromptPR && session ? reviewSummaries.summaryFor(session.id, reviewPromptPR.number) : undefined;
+	// Every PR the session raised, as a chip over the composer (one opens its
+	// review, several a list), with each one's title and checks once Cloud has answered.
+	const sessionRow = useMemo(() => session ? cloudSessionRow(session) : undefined, [session]);
+	const hasPullRequests = Boolean(sessionRow && (sessionRow.prs?.length || sessionRow.pr));
+	const reviewSummaries = useCloudPRSummaries(hasPullRequests && session ? [session.id] : NO_IDS);
+	const pullRequests = useSessionPullRequests(sessionRow, (number) => session ? reviewSummaries.summaryFor(session.id, number) : undefined);
+	// The ⋯ menu's "Pull requests" asks the composer for the list. From the
+	// agent's terminal, where there is no composer, it shows the chat first.
+	const showChat = useCallback(() => setView("chat"), []);
+	const pullRequestList = usePullRequestListRequest(current === "chat" && Boolean(snapshot), showChat);
 	const hasSession = Boolean(session);
 	// Its artifact files open from "⋯" where the organization has artifacts.
 	const artifactsOffered = Boolean((org?.offering ?? cloud.me?.offering)?.artifacts);
@@ -398,7 +411,11 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			Alert.alert("Couldn't update pin", cloudErrorMessage(error));
 		}),
 		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId, title, hostId: CLOUD_HOST_ID } }),
-		pull_requests: () => { if (prNumber !== undefined && prUrl) openPage(reviewRouteForPR(sessionId, { number: prNumber, url: prUrl }, CLOUD_HOST_ID)); },
+		pull_requests: () => {
+			const action = pullRequestMenuAction(pullRequests?.rows.length ?? 0);
+			if (action === "review" && pullRequests) openPage(reviewRouteForPR(sessionId, pullRequests.lead, CLOUD_HOST_ID));
+			else if (action === "list") pullRequestList.ask();
+		},
 		delete: archive,
 		restore,
 		switch_tui: requestSwitch,
@@ -609,7 +626,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			<View style={[styles.screen, { paddingTop: headerOverlap }]}>
 				{headerItems}
 				{banners}
-				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} />
+				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} onOutputShown={showAgentOutput} />
 				{switchCard}
 			</View>
 		);
@@ -722,9 +739,9 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					fileUploads={attachmentLimit ? { maxBytes: attachmentLimit } : undefined}
 					attachmentsUnavailable={!attachmentLimit}
 					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
-					reviewPR={reviewPromptPR}
-					reviewPRSummary={reviewPromptSummary}
-					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, CLOUD_HOST_ID)) : undefined}
+					pullRequests={pullRequests}
+					onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, CLOUD_HOST_ID))}
+					pullRequestListRequest={pullRequestList.request}
 				/>
 			</KeyboardFollower>
 			{switchCard}

@@ -79,6 +79,8 @@ type APIDeps struct {
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
 	TelemetryIdentity ports.TelemetryIdentityStore
 	LifetimeSessions  func(context.Context) (int64, error)
+	// LifetimeWork counts worker and standalone sessions ever started.
+	LifetimeWork func(context.Context) (int64, error)
 	// DaemonVersion is this daemon's release, reported to a paired phone.
 	DaemonVersion string
 	Mobile        *controllers.MobileController
@@ -275,7 +277,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
-		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, DaemonVersion: deps.DaemonVersion},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, LifetimeWork: deps.LifetimeWork, DaemonVersion: deps.DaemonVersion},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		approvals:     &controllers.ApprovalsController{Svc: deps.Approvals},

@@ -1,4 +1,6 @@
 import { Host } from "@expo/ui";
+import { useState } from "react";
+import { View, type LayoutChangeEvent } from "react-native";
 import { Button, HStack, Label, ProgressView, Text } from "@expo/ui/swift-ui";
 import { accessibilityLabel as accessibilityLabelModifier, accessibilityValue, buttonBorderShape, buttonStyle, contentShape, controlSize, disabled as disabledModifier, foregroundStyle, frame, onTapGesture, shapes, tint } from "@expo/ui/swift-ui/modifiers";
 import type { ReviewActionButtonProps } from "./review-action-button.types";
@@ -18,8 +20,21 @@ export function ReviewActionButton({ label, accessibilityLabel, icon, tone, busy
 	// The accent is near white on the dark theme, where the prominent style's
 	// white label would vanish; the accent's own ink reads on it in both.
 	const ink = tone === "filled" ? [foregroundStyle(t.onAccent)] : [];
+	// Sized to its content, the Host is zero wide on its first frame and the
+	// capsule, centred on that point, hangs off to the left until the width
+	// arrives: a slide in from the left each time a button mounts (Open after
+	// Resolved, a row opening). It stays hidden until it has a width.
+	const [placed, setPlaced] = useState(false);
+	const place = (event: LayoutChangeEvent) => { if (event.nativeEvent.layout.width > 0) setPlaced(true); };
+	// The Host's height is the touch target's and only its width follows the
+	// label: sized to its content both ways, some came out 52pt tall with the
+	// capsule at the top and others 44pt with it centred. It ignores the safe
+	// area: scrolled under the translucent header or status bar, a Host took
+	// their insets and drew its capsule up to 17pt above its slot until the next
+	// render, so Send to agent could sit above Reply beside it.
 	return (
-		<Host matchContents colorScheme={scheme}>
+		<View onLayout={placed ? undefined : place} style={placed ? undefined : UNPLACED}>
+		<Host matchContents={HOST_SIZING} colorScheme={scheme} style={HOST_STYLE} ignoreSafeArea="all">
 			<Button
 				role={tone === "destructive" ? "destructive" : undefined}
 				onPress={onPress}
@@ -46,5 +61,10 @@ export function ReviewActionButton({ label, accessibilityLabel, icon, tone, busy
 					: <Label title={label} systemImage={icon.ios} modifiers={ink} />}
 			</Button>
 		</Host>
+		</View>
 	);
 }
+
+const HOST_SIZING = { horizontal: true } as const;
+const HOST_STYLE = { height: touchTarget } as const;
+const UNPLACED = { opacity: 0 } as const;

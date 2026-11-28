@@ -211,6 +211,8 @@ import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { clearFolderImports, isChosenFolder, registerCloudFolderPushIpc, rememberChosenFolder } from "./main/cloud-folder-push";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
+import { EXIT_FEEDBACK_EVENT_CHANNEL, EXIT_FEEDBACK_REQUEST_CHANNEL, EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, EXIT_FEEDBACK_STATE_CHANNEL, type ExitFeedbackRequest } from "./shared/exit-feedback";
+import { EXIT_FEEDBACK_MARKER, createExitFeedbackFacts, createExitFeedbackGate, createExitFeedbackSender, decideExitFeedback, parseExitFeedbackOverride } from "./main/exit-feedback";
 import { daemonSentryDsn } from "./shared/sentry-config";
 import { boundCloudUserId, buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
@@ -552,6 +554,9 @@ const desktopQuit = createDesktopQuitController({
 // there is nowhere to show the dialog, so the shortcut quits directly.
 const quitConfirm = createQuitConfirmController({
 	canConfirm: () => {
+		// The exit feedback dialog replaces "Quit AO?" for this quit, including a
+		// second ⌘Q while it is open.
+		if (exitFeedbackWouldShow()) return false;
 		const shell = getShellWebContents();
 		return Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed());
 	},
@@ -566,6 +571,72 @@ const quitConfirm = createQuitConfirmController({
 		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
 	},
 	quit: () => app.quit(),
+});
+// First-day exit feedback (docs/telemetry.md, "Exit feedback prompt"). The
+// facts are kept ready while the app runs; a quit only reads memory.
+const exitFeedbackLaunchedAtMs = Date.now();
+const exitFeedbackOverride = parseExitFeedbackOverride(process.env.AO_EXIT_FEEDBACK_FORCE);
+// Set when the OS is shutting down or logging out; such a quit is never held.
+let systemSessionEnding = false;
+const exitFeedbackFacts = createExitFeedbackFacts({
+	readInstallCreatedMs: async () => {
+		const mtime = (await stat(path.join(desktopDataDir, "telemetry_install_id"))).mtimeMs;
+		return mtime > 0 ? mtime : undefined;
+	},
+	markerExists: async () => existsSync(path.join(desktopDataDir, EXIT_FEEDBACK_MARKER)),
+	readDaemon: readExitFeedbackDaemonFacts,
+	now: () => Date.now(),
+	override: exitFeedbackOverride,
+	setInterval: (fn, ms) => setInterval(fn, ms),
+	clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+});
+const exitFeedbackSender = createExitFeedbackSender({
+	host: import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST,
+	projectKey: import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY,
+	fetch: (url, init) => fetch(url, init),
+	log: (message, error) => console.warn(`AO: ${message}`, error ?? ""),
+});
+/** Usage analytics on for the renderer: the same conditions that hand out its PostHog bootstrap. */
+function exitFeedbackAnalyticsOn(): boolean {
+	return telemetryPolicyController !== null && !telemetryIdentity.isOptedOut() && rendererTelemetryEnabled(process.env, app.isPackaged);
+}
+function decideExitFeedbackNow() {
+	if (systemSessionEnding || isUpdateRestartRequested() || browserQuitRequested) return null;
+	// Cached facts count only while the daemon that reported them is still up.
+	if (daemonStatus.state !== "ready") return null;
+	// Never pop a window up just to ask.
+	const shell = getShellWebContents();
+	if (!mainWindow || !mainWindow.isVisible() || mainWindow.isMinimized() || !shell || shell.isDestroyed() || shell.isCrashed()) return null;
+	return decideExitFeedback(exitFeedbackFacts.get(), { nowMs: Date.now(), launchedAtMs: exitFeedbackLaunchedAtMs, analyticsOn: exitFeedbackAnalyticsOn(), override: exitFeedbackOverride });
+}
+/** Whether a quit now belongs to the exit feedback gate: it is about to show, or already holds a quit. */
+function exitFeedbackWouldShow(): boolean {
+	try {
+		const phase = exitFeedbackGate.phase();
+		// A second ⌘Q while the dialog is up must reach the gate as second_close.
+		if (phase === "pending" || phase === "open" || phase === "closing") return true;
+		return phase === "idle" && decideExitFeedbackNow() !== null;
+	} catch {
+		return false;
+	}
+}
+const exitFeedbackGate = createExitFeedbackGate({
+	decide: decideExitFeedbackNow,
+	request: (version) => {
+		const shell = getShellWebContents();
+		if (!shell || shell.isDestroyed()) return false;
+		shell.send(EXIT_FEEDBACK_REQUEST_CHANNEL, { version } satisfies ExitFeedbackRequest);
+		return true;
+	},
+	markShown: () => {
+		exitFeedbackFacts.markShown();
+		writeFileSync(path.join(desktopDataDir, EXIT_FEEDBACK_MARKER), "", { mode: 0o600 });
+	},
+	notifySecondClose: () => getShellWebContents()?.send(EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL),
+	flush: (capMs) => exitFeedbackSender.flush(capMs),
+	setTimeout: (fn, ms) => setTimeout(fn, ms),
+	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+	log: (message, error) => console.warn(`AO: ${message}`, error ?? ""),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -1335,6 +1406,16 @@ async function createWindowInternal(): Promise<void> {
 			return;
 		}
 		if (chatDraftRisks.length > 0) chatDraftWindowCloseConfirmed = true;
+		// Windows and Linux: closing the last visible window quits, so it can ask
+		// for exit feedback first; hidden helper windows do not count. On macOS only a real quit asks (before-quit).
+		if (process.platform !== "darwin" && BaseWindow.getAllWindows().every((other) => other === mainWindow || !other.isVisible()) && exitFeedbackGate.intercept(() => mainWindow?.close())) {
+			event.preventDefault();
+		}
+	});
+	// Windows shutdown or log off: never hold it.
+	mainWindow.on("query-session-end", () => {
+		systemSessionEnding = true;
+		exitFeedbackGate.bypass();
 	});
 
 	// Application shortcuts are handled here so they fire no matter which web
@@ -1491,7 +1572,12 @@ async function createWindowInternal(): Promise<void> {
 		artifactZoomEngaged = false;
 		trayLifecycle.clear();
 	});
-	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
+	shellWebContents.on("render-process-gone", () => {
+		trayLifecycle.clear();
+		exitFeedbackGate.abort();
+	});
+	// A main-frame reload drops the dialog; did-navigate ignores artifact iframes.
+	shellWebContents.on("did-navigate", () => exitFeedbackGate.abort());
 
 	mainWindow.on("closed", () => {
 		lifecycleLog("main_window_closed");
@@ -3708,6 +3794,30 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return;
 	}
 });
+/** Work started and projects added, for the exit feedback prompt; empty while the daemon is unreachable. */
+async function readExitFeedbackDaemonFacts(): Promise<{ workSessions?: number; projectCount?: number }> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return {};
+	const base = `http://127.0.0.1:${daemonStatus.port}/api/v1`;
+	const readJson = async (route: string) => {
+		const response = await fetch(`${base}${route}`, { signal: AbortSignal.timeout(1500) });
+		return response.ok ? (await response.json() as Record<string, unknown>) : {};
+	};
+	const [identity, projects] = await Promise.all([readJson("/telemetry/identity").catch(() => ({})), readJson("/projects").catch(() => ({}))]);
+	const work = (identity as { lifetimeWorkSessions?: unknown }).lifetimeWorkSessions;
+	const list = (projects as { projects?: unknown }).projects;
+	return {
+		...(typeof work === "number" && Number.isSafeInteger(work) && work >= 0 ? { workSessions: work } : {}),
+		...(Array.isArray(list) ? { projectCount: list.length } : {}),
+	};
+}
+ipcMain.on(EXIT_FEEDBACK_STATE_CHANNEL, (event, state: unknown) => {
+	if (event.sender !== getShellWebContents()) return;
+	exitFeedbackGate.rendererState(state);
+});
+ipcMain.on(EXIT_FEEDBACK_EVENT_CHANNEL, (event, payload: unknown) => {
+	if (event.sender !== getShellWebContents() || !exitFeedbackGate.accepting() || !exitFeedbackAnalyticsOn()) return;
+	exitFeedbackSender.send(payload);
+});
 /** The daemon's durable lifetime session count, or null while it is unreachable. */
 async function daemonLifetimeSessions(): Promise<number | null> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) return null;
@@ -3783,7 +3893,11 @@ ipcMain.handle("telemetry:setPlan", (event, plan: unknown) => {
 	return true;
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
-ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
+ipcMain.handle("telemetry:getLifetimeSessions", () => {
+	// Asked right after a session was created: work may have started.
+	void exitFeedbackFacts.refresh(true);
+	return daemonLifetimeSessions();
+});
 // Performance telemetry: the launch start (once per shell page) and the
 // resource use since the previous read. Neither carries an identifier.
 ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null => {
@@ -4252,6 +4366,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
+	exitFeedbackGate.bypass();
 	preserveAgentsOnQuit = true;
 	app.relaunch();
 	desktopQuit.quitCompletely();
@@ -4911,6 +5026,7 @@ app.whenReady().then(async () => {
 			const installed = installedBundlePath(bundlePath);
 			console.info(`newer install at ${installed}; handing off and quitting`);
 			await shell.openPath(installed);
+			exitFeedbackGate.bypass();
 			app.quit();
 			return;
 		}
@@ -4994,9 +5110,15 @@ app.whenReady().then(async () => {
 		});
 		app.once("will-quit", () => awakeTray.dispose());
 	}
+	// macOS and Linux shutdown, reboot or log out: never hold that quit.
+	powerMonitor.on("shutdown", () => {
+		systemSessionEnding = true;
+		exitFeedbackGate.bypass();
+	});
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
+	exitFeedbackFacts.start();
 	// Boot the daemon alongside the window, not after it: the board cannot show
 	// until the daemon answers. createWindow links the browser runtime itself
 	// when the daemon is already ready by the time the window exists. Windows
@@ -5012,6 +5134,7 @@ app.whenReady().then(async () => {
 			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
 					parent: () => mainWindow,
 					quit: () => {
+						exitFeedbackGate.bypass();
 						preserveAgentsOnQuit = true;
 						desktopQuit.quitCompletely();
 					},
@@ -5103,7 +5226,20 @@ setUpdateRestartFailureHandler(() => {
 
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
-	if (desktopQuit.handleBeforeQuit(event)) return;
+	// First-day exit feedback holds a user quit until the dialog is done; an
+	// update restart, a shutdown or a forced quit was bypassed before this. An
+	// unsafe chat draft asks first, so a cancelled quit never spends the prompt;
+	// once confirmed, the re-entered quit reaches the gate.
+	const chatDraftConfirmPending = chatDraftRisks.length > 0 && !chatDraftQuitConfirmed;
+	if (!chatDraftConfirmPending && exitFeedbackGate.intercept(() => app.quit())) {
+		event.preventDefault();
+		return;
+	}
+	if (desktopQuit.handleBeforeQuit(event)) {
+		// Hidden to the tray, not quit: a later quit may still ask.
+		exitFeedbackGate.reset();
+		return;
+	}
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -5117,6 +5253,7 @@ app.on("before-quit", (event) => {
 			preserveAgentsOnQuit = false;
 			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
+			exitFeedbackGate.reset();
 		}
 		return;
 	}
