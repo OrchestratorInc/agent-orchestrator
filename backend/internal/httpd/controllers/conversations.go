@@ -458,7 +458,7 @@ func writeConversationRetryError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, chatsvc.ErrTurnNotRetryable):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RETRY_NOT_RETRYABLE",
-			"this turn cannot be retried: it is not a failed human turn in this conversation", nil)
+			"this turn cannot be retried: it is not a failed message you can resend in this conversation", nil)
 	case errors.Is(err, chatsvc.ErrRetryDeliveryUncertain):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RETRY_DELIVERY_UNCERTAIN",
@@ -1546,6 +1546,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			RetryOfTurnID:   turn.RetryOfTurnID,
 			HasRetryAttempt: turn.HasRetryAttempt,
 			HasHumanPrompt:  turn.HasHumanPrompt,
+			HasEventPrompt:  turn.HasEventPrompt,
 			ErrorMessage:    turn.ErrorMessage,
 			FailureCode:     string(turn.FailureCode),
 			UsageLimit:      usageLimitPayload(turn.UsageLimit),

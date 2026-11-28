@@ -442,3 +442,41 @@ func TestRenderDocumentNavigationBoundary(t *testing.T) {
 		}
 	}
 }
+
+// Moving a session is the desktop app's: a preview, another local web page or
+// a paired phone (which pins Origin http://localhost) is refused; the app and
+// native callers without browser metadata are let through. The move's
+// read-only preview and targets stay open.
+func TestSessionMoveRoutesAreRendererOnly(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, origin string
+		lanBearer            bool
+		want                 int
+	}{
+		{http.MethodGet, "/api/v1/sessions/app-1/move/transcript", "app://renderer", false, http.StatusNoContent},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/export", "", false, http.StatusNoContent},
+		{http.MethodGet, "/api/v1/sessions/app-1/move/transcript", "http://ao-preview.hostile.localhost:5181", false, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/export", "http://localhost:3000", false, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/complete", "http://localhost", true, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/abandon", "http://localhost", true, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/abandon", "app://renderer", false, http.StatusNoContent},
+		{http.MethodPost, "/api/v1/sessions/move/import", "http://localhost", true, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/move/import", "app://renderer", false, http.StatusNoContent},
+		{http.MethodGet, "/api/v1/sessions/app-1/move/preview", "http://localhost", true, http.StatusNoContent},
+		{http.MethodGet, "/api/v1/sessions/move/targets", "http://localhost", true, http.StatusNoContent},
+		{http.MethodGet, "/api/v1/sessions/app-1/messages", "http://localhost", true, http.StatusNoContent},
+	} {
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.origin != "" {
+			r.Header.Set("Origin", tc.origin)
+		}
+		if tc.lanBearer {
+			r = r.WithContext(context.WithValue(r.Context(), lanBearerContextKey{}, true))
+		}
+		w := httptest.NewRecorder()
+		rendererOriginMiddleware([]string{"app://renderer"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Errorf("%s %s origin=%q lan=%v: status=%d want=%d", tc.method, tc.path, tc.origin, tc.lanBearer, w.Code, tc.want)
+		}
+	}
+}

@@ -104,6 +104,12 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 		} catch { /* reporting must not become another uncaught error */ }
 	};
 	window.addEventListener("error", (event: Event) => {
+		// Chromium raises this, with no error object, when a ResizeObserver
+		// leaves resizes for the next frame. Nothing failed; the callbacks still run.
+		if (event instanceof ErrorEvent && event.error == null && /^ResizeObserver loop (?:completed with undelivered notifications|limit exceeded)\.?$/.test(event.message)) return;
+		// A cross-origin script's error, which the browser hides behind this text
+		// with no error object or location. Nothing in it can be acted on.
+		if (event instanceof ErrorEvent && event.error == null && !event.filename && /^Script error\.?$/.test(event.message)) return;
 		if (event instanceof ErrorEvent) report(event.error ?? event.message, "window-error", event);
 		else if (event.target instanceof HTMLScriptElement) report(new Error("Renderer script load failed"), "script-load");
 	}, true);

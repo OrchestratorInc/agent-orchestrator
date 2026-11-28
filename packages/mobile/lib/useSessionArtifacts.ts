@@ -1,5 +1,5 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionArtifact } from "./artifacts";
 import type { ArtifactsBackend } from "./artifactsBackend";
 import { userFacingError } from "./connectionError";
@@ -68,8 +68,12 @@ export function useSessionArtifacts(sessionId: string, backend: ArtifactsBackend
 	}, [load, refresh]);
 
 	const base = listed ?? (fetched?.sessionId === sessionId ? fetched.artifacts : undefined);
-	const hidden = removed && removed.base === base ? removed.paths : [];
-	const artifacts = base?.filter((artifact) => !hidden.includes(artifact.path));
+	// Kept while the list and the deleted paths are unchanged, so a screen's
+	// callbacks and memoized rows built on it keep their identity between renders.
+	const artifacts = useMemo(() => {
+		const hidden = removed && removed.base === base ? removed.paths : [];
+		return hidden.length > 0 ? base?.filter((artifact) => !hidden.includes(artifact.path)) : base;
+	}, [base, removed]);
 
 	const markDeleted = useCallback((path: string) => {
 		setRemoved((previous) => ({ base, paths: [...(previous && previous.base === base ? previous.paths : []), path] }));

@@ -114,12 +114,34 @@ type Input struct {
 	FullHistory string
 	// MaxChars caps the note's length in characters; DefaultMaxChars when 0.
 	MaxChars int
+	// MovedFrom names the machine a moved session came from. Its note leaves
+	// out paths that only exist there and says what stayed behind.
+	MovedFrom string
+	// MovedWIP says the branch's top commit holds the work that was not
+	// committed on MovedFrom.
+	MovedWIP bool
+	// MovedWIPCommit is that commit's subject, and MovedWIPSHA its id.
+	MovedWIPCommit string
+	MovedWIPSHA    string
+	// HomeDir is the user's home folder on MovedFrom. Paths under it are
+	// written as HomePlaceholder, so the note names no local user or folder.
+	HomeDir string
+	// MaxBytes lowers the byte cap for a destination with a smaller prompt
+	// limit; the package MaxBytes when 0 or higher.
+	MaxBytes int
 }
 
 // Fork names the session a text-handoff fork was copied from.
 type Fork struct {
 	SourceSessionID string
 	SourceTitle     string
+}
+
+func (in Input) maxBytes() int {
+	if in.MaxBytes > 0 && in.MaxBytes < MaxBytes {
+		return in.MaxBytes
+	}
+	return MaxBytes
 }
 
 func (in Input) maxChars() int {
@@ -152,13 +174,13 @@ func Build(in Input) string {
 	// listed artifacts, and previous turns. The latest turn is never dropped.
 	for {
 		note := render(in, older, recent, artifacts, inheritedCap)
-		if fits(note, in.maxChars()) {
+		if fits(note, in.maxChars(), in.maxBytes()) {
 			return note
 		}
 		switch {
 		case inheritedCap > 0:
 			// Shorten it by what the note is over; a rune is at most four bytes.
-			over := max(utf8.RuneCountInString(note)-in.maxChars(), (len(note)-MaxBytes+3)/4, 1)
+			over := max(utf8.RuneCountInString(note)-in.maxChars(), (len(note)-in.maxBytes()+3)/4, 1)
 			inheritedCap = utf8.RuneCountInString(quoteHandoffText(inherited, inheritedCap, handoffClipMarker)) - over
 			if inheritedCap < handoffInheritedMin {
 				inheritedCap = 0
@@ -170,25 +192,25 @@ func Build(in Input) string {
 		case len(recent) > 1:
 			recent = recent[1:]
 		default:
-			return clipNote(note, in.maxChars())
+			return clipNote(note, in.maxChars(), in.maxBytes())
 		}
 	}
 }
 
-func fits(note string, maxChars int) bool {
-	return utf8.RuneCountInString(note) <= maxChars && len(note) <= MaxBytes
+func fits(note string, maxChars, maxBytes int) bool {
+	return utf8.RuneCountInString(note) <= maxChars && len(note) <= maxBytes
 }
 
 // clipNote clips a note to both the character and the byte cap.
-func clipNote(note string, maxChars int) string {
+func clipNote(note string, maxChars, maxBytes int) string {
 	limit := maxChars
 	for {
 		clipped := clipHandoffText(note, limit, handoffClipMarker)
-		if len(clipped) <= MaxBytes {
+		if len(clipped) <= maxBytes {
 			return clipped
 		}
 		// A rune is at most four bytes.
-		limit -= max(1, (len(clipped)-MaxBytes)/4)
+		limit -= max(1, (len(clipped)-maxBytes)/4)
 	}
 }
 
@@ -212,6 +234,9 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 		}
 		fmt.Fprintf(&b, "You are %s in a new Orchestrator session forked from Orchestrator session %s%s. %s can't copy that session's conversation itself, so the conversation is copied as text below. The conversation really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 			handoffHarnessLabel(in.TargetHarness), fork.SourceSessionID, title, handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness))
+	} else if in.MovedFrom != "" {
+		fmt.Fprintf(&b, "You are %s, continuing this Orchestrator-managed session after it moved here from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
+			handoffHarnessLabel(in.TargetHarness), in.MovedFrom, handoffHarnessLabel(in.SourceHarness))
 	} else {
 		fmt.Fprintf(&b, "You are %s, taking over this Orchestrator-managed session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 			handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
@@ -222,8 +247,12 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 
 	b.WriteString("\n## Session\n")
 	writeHandoffNoteField(&b, "Title", in.SessionTitle)
-	writeHandoffNoteField(&b, "Project", in.Project)
-	writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
+	if in.MovedFrom != "" {
+		writeHandoffNoteField(&b, "Moved from", in.MovedFrom)
+	} else {
+		writeHandoffNoteField(&b, "Project", in.Project)
+		writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
+	}
 	writeHandoffNoteField(&b, "Git branch", in.Branch)
 	if in.Fork != nil {
 		writeHandoffNoteField(&b, "Forked at", in.At.UTC().Format(time.RFC3339))
@@ -248,7 +277,25 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 		}
 	}
 
-	if len(in.Artifacts) > 0 {
+	if in.MovedWIP {
+		subject := in.MovedWIPCommit
+		if subject == "" {
+			subject = "WIP: uncommitted changes"
+		}
+		if in.MovedWIPSHA != "" {
+			fmt.Fprintf(&b, "\n## Code\nThe move committed the work that was not committed on %s as commit %s, %q, on branch %s. Orchestrator made that commit, not you or the user. Keep it, amend it, or squash it.\n",
+				in.MovedFrom, in.MovedWIPSHA, subject, in.Branch)
+		} else {
+			fmt.Fprintf(&b, "\n## Code\nThe branch's top commit, %q, holds the work that was not committed on %s. Keep it, amend it, or squash it.\n", subject, in.MovedFrom)
+		}
+	}
+
+	if len(in.Artifacts) > 0 && in.MovedFrom != "" {
+		fmt.Fprintf(&b, "\n## Session artifacts\n%d files stayed in the session's artifact directory on %s and were not copied:\n", len(in.Artifacts), in.MovedFrom)
+		for _, file := range in.Artifacts[:artifacts] {
+			fmt.Fprintf(&b, "- %s\n", quoteHandoffLine(file.Path, handoffChangedFileCap))
+		}
+	} else if len(in.Artifacts) > 0 {
 		fmt.Fprintf(&b, "\n## Session artifacts\nFiles already in the session artifact directory `%s` (%d). Read the one a request is about before writing it again, and update it instead of starting over:\n",
 			quoteHandoffLine(in.ArtifactDir, handoffHistoryPathCap), len(in.Artifacts))
 		for _, file := range in.Artifacts[:artifacts] {
@@ -291,7 +338,7 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 		b.WriteByte('\n')
 	}
 
-	if len(in.HistoryFiles) > 0 {
+	if len(in.HistoryFiles) > 0 && in.MovedFrom == "" {
 		b.WriteString("\n## Earlier agents' own history\n")
 		b.WriteString("Orchestrator did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
 		for _, file := range in.HistoryFiles {
@@ -324,7 +371,40 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 		b.WriteString("Do not mention this note unless it is relevant. Wait for the user's next message.\n")
 	}
 	b.WriteString("</ao-handoff-request>")
-	return b.String()
+	return replaceHome(b.String(), in.HomeDir)
+}
+
+// HomePlaceholder stands for the user's home folder in a moved session's note
+// and conversation; the destination fills in its own.
+const HomePlaceholder = "/ao-moved/home"
+
+// replaceHome writes home as HomePlaceholder wherever it stands as a whole
+// path: "/Users/ann" matches "/Users/ann/x" but not "/Users/anna".
+func replaceHome(s, home string) string {
+	home = strings.TrimRight(home, "/")
+	if home == "" || !strings.HasPrefix(home, "/") {
+		return s
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(s, home)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		end := i + len(home)
+		b.WriteString(s[:i])
+		if (i == 0 || !isPathByte(s[i-1])) && (end == len(s) || !isPathByte(s[end])) {
+			b.WriteString(HomePlaceholder)
+		} else {
+			b.WriteString(home)
+		}
+		s = s[end:]
+	}
+}
+
+func isPathByte(c byte) bool {
+	return c == '-' || c == '_' || c == '.' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // handoffTaskShownInFull reports whether the original task already appears

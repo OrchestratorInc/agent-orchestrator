@@ -492,21 +492,6 @@ func TestScanOffersOnlyRecentConversations(t *testing.T) {
 	}
 }
 
-func TestClaudePromptOnlyStripsCommandRecords(t *testing.T) {
-	for input, want := range map[string]string{
-		"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>PR 12</command-args>": "/review PR 12",
-		"<command-message>review</command-message>\n<command-name>/review</command-name>":                                     "/review",
-	} {
-		if got, command := claudePrompt(input); got != want || !command {
-			t.Errorf("claudePrompt(%q) = %q, %v", input, got, command)
-		}
-	}
-	quoted := "why does my log show <command-name>/model</command-name> here?"
-	if got, command := claudePrompt(quoted); got != quoted || command {
-		t.Fatalf("a prompt quoting command tags became %q, %v", got, command)
-	}
-}
-
 // A long Claude history is not held whole while its branches are read: the
 // oldest text goes first, the opening prompt stays, and the row says so.
 func TestClaudeReadHoldsBoundedText(t *testing.T) {

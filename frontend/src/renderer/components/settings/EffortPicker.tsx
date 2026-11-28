@@ -13,6 +13,8 @@ export type EffortMenuProps = {
 	onChange: (value: string) => void;
 	defaultValue?: string | null;
 	defaultEffort?: string;
+	/** Reports a pick of defaultEffort as that level rather than as defaultValue. */
+	keepDefaultPick?: boolean;
 	availability?: EffortAvailability;
 	/** Chat composer menus: 12px rows with muted inactive items, like the model list. */
 	compact?: boolean;
@@ -60,7 +62,7 @@ export function effortDisplayLabel({ value, choices, followLabel, t, defaultEffo
 	return effortLevelKey(reported) ? formatEffortLabel(reported, t) : followLabel;
 }
 
-export function EffortMenuItems({ value, choices, onChange, defaultValue = "", defaultEffort, availability = "supported", compact = false }: EffortMenuProps) {
+export function EffortMenuItems({ value, choices, onChange, defaultValue = "", defaultEffort, keepDefaultPick = false, availability = "supported", compact = false }: EffortMenuProps) {
 	const { t } = useTranslation();
 	const rowSize = compact ? "text-xs" : "text-[length:var(--font-size-base)]";
 	const levels = choices.filter((choice) => choice.value !== defaultValue && choice.value.toLowerCase() !== "default");
@@ -79,7 +81,7 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 			const isDefault = choice === defaultChoice;
 			const active = choice.value === value || (following && isDefault);
 			return <OptionMenuItem key={choice.value} radio active={active}
-				onSelect={() => onChange(isDefault && defaultValue !== null ? defaultValue : choice.value)} className={cn(rowSize, compact && !active ? "text-muted-foreground" : "text-foreground")}>
+				onSelect={() => onChange(isDefault && defaultValue !== null && !keepDefaultPick ? defaultValue : choice.value)} className={cn(rowSize, compact && !active ? "text-muted-foreground" : "text-foreground")}>
 				<span className="flex-1">{choice.label || formatEffortLabel(choice.value, t)}</span>
 				<Check aria-hidden="true" className={`ml-3 size-3 shrink-0 ${active ? "" : "invisible"}`} />
 			</OptionMenuItem>;

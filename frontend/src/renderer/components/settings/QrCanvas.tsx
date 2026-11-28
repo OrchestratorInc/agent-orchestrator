@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useRef } from "react";
-import { encodeQr, modulesForVersion } from "../../lib/qr-matrix";
+import { encodeQr } from "../../lib/qr-matrix";
 import { paintQr, quietZonePx } from "./qr-paint";
 import { preloadQrLogo, qrLogo, whenQrLogoReady } from "./qr-logo";
 
@@ -16,8 +16,9 @@ preloadQrLogo();
  * grew or shrank between generations. Pinning the version keeps the density
  * the same; 17 holds LAN, Tailscale and a tunnel with a typical tunnel name.
  * A longer offer still gets the version it needs (a code that cannot hold its
- * payload is worse than a denser one), and keeps the same outer size because
- * the quiet zone is fixed in px and the modules are not snapped to pixels.
+ * payload is worse than a denser one). The canvas stays `size` square, and
+ * the quiet zone is four modules of the matrix actually drawn, so an
+ * overflowing code is drawn a few px larger inside the same canvas.
  */
 export const PAIRING_QR_VERSION = 17;
 
@@ -48,8 +49,8 @@ export const QrCanvas = memo(function QrCanvas({
 	size: number;
 	showLogo?: boolean;
 	/** Pin the QR version (see PAIRING_QR_VERSION) so codes of different
-	 *  payload lengths draw at the same density and outer size. Omitted, the
-	 *  encoder picks the smallest version and the quiet zone follows it. */
+	 *  payload lengths draw at the same density. Omitted, the encoder picks the
+	 *  smallest version. Either way the quiet zone follows the matrix drawn. */
 	version?: number;
 	/** The code is public (a store link, the decoy): keep its encoding for next
 	 *  time. Off by default, because a pairing code carries the password. */
@@ -86,9 +87,9 @@ export const QrCanvas = memo(function QrCanvas({
 				return;
 			}
 			const matrix = encodeQr(value, { version, cache });
-			// The quiet zone follows the pinned version, so a longer payload that
-			// needs a bigger one keeps the same outer box.
-			const margin = quietZonePx(size, modulesForVersion(version ?? matrix.version));
+			// From the matrix painted, not the pin: paintQr divides what the margin
+			// leaves by this count, and a payload that overflows the pin has more.
+			const margin = quietZonePx(size, matrix.modules);
 			paintQr(ctx, matrix, { size, margin, showLogo, logo: showLogo ? qrLogo() : null });
 		};
 		let cancelLogoWait: (() => void) | undefined;

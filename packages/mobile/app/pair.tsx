@@ -307,6 +307,7 @@ export default function PairScreen() {
 			}
 		}).catch(() => {});
 		mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "qr", from_onboarding: fromOnboarding });
+		// The manual connection page reports its own (app/connect.tsx).
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
 		await finish(pairedNotice(result));
@@ -433,7 +434,7 @@ export default function PairScreen() {
 					variant="secondary"
 					icon={{ ios: "keyboard", android: "keyboard" }}
 					title="Enter details manually"
-					onPress={() => router.push(connectRoute(() => void finish(), repairHost?.id))}
+					onPress={() => router.push(connectRoute(() => void finish(), repairHost?.id, fromOnboarding))}
 				/>
 			</View>
 		</View>

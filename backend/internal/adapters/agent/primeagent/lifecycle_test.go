@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,5 +134,91 @@ func TestTerminateNativeSessionHonorsCanceledContext(t *testing.T) {
 	}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("TerminateNativeSession error = %v, want context.Canceled", err)
+	}
+}
+
+// A Prime session started before AO pinned its private daemon socket still runs
+// on Prime's default socket; terminate must find and stop it there.
+func TestTerminateNativeSessionFallsBackToTheDefaultDaemonSocket(t *testing.T) {
+	owner := `{"sessions":[{"sessionId":"native-7","activeSessionId":"active-7"}]}`
+	other := `{"sessions":[{"sessionId":"native-8","activeSessionId":"active-8"}]}`
+	down := errors.New("connect ENOENT daemon.sock")
+	type daemon struct {
+		list    string
+		listErr error
+	}
+	tests := []struct {
+		name          string
+		privateSocket bool
+		private       daemon
+		fallback      daemon
+		wantStops     []string
+		wantFallback  bool
+		wantErr       string
+	}{
+		{name: "no private socket, default daemon owns", fallback: daemon{list: owner}, wantStops: []string{"default"}, wantFallback: true},
+		{name: "private daemon owns", privateSocket: true, private: daemon{list: owner}, fallback: daemon{list: owner}, wantStops: []string{"private"}},
+		{name: "private daemon has a newer session, default owns", privateSocket: true, private: daemon{list: other}, fallback: daemon{list: owner}, wantStops: []string{"default"}, wantFallback: true},
+		{name: "private daemon has no match, default daemon down", privateSocket: true, private: daemon{list: other}, fallback: daemon{listErr: down}, wantFallback: true},
+		{name: "stale private socket, default owns", privateSocket: true, private: daemon{listErr: down}, fallback: daemon{list: owner}, wantStops: []string{"default"}, wantFallback: true},
+		{name: "stale private socket, default has no match", privateSocket: true, private: daemon{listErr: down}, fallback: daemon{list: other}, wantFallback: true, wantErr: "list live sessions"},
+		{name: "neither daemon running", fallback: daemon{listErr: down}, wantFallback: true, wantErr: "list live sessions"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			primeDir := filepath.Join(dataDir, "agent-runtime", "prime-agent")
+			socket := filepath.Join(primeDir, "daemon.sock")
+			if tc.privateSocket {
+				if err := os.MkdirAll(primeDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(socket, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stops []string
+			fallbackListed := false
+			p := &Plugin{
+				resolvedBinary: "prime-agent",
+				runCommand: func(_ context.Context, _, _ string, env map[string]string, args ...string) ([]byte, error) {
+					if env["PRIME_AGENT_CODING_AGENT_DIR"] != primeDir {
+						return nil, fmt.Errorf("env=%v", env)
+					}
+					target, d := "default", tc.fallback
+					if got, ok := env["PRIME_AGENT_DAEMON_SOCKET"]; ok {
+						if got != socket {
+							return nil, fmt.Errorf("socket=%q", got)
+						}
+						target, d = "private", tc.private
+					}
+					switch strings.Join(args, " ") {
+					case "list --json":
+						if target == "default" {
+							fallbackListed = true
+						}
+						return []byte(d.list), d.listErr
+					case "stop active-7 --json":
+						stops = append(stops, target)
+						return []byte(`{"stopped":true}`), nil
+					default:
+						return nil, fmt.Errorf("unexpected args: %q", args)
+					}
+				},
+			}
+			err := p.TerminateNativeSession(context.Background(), ports.SessionRef{
+				DataDir:  dataDir,
+				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-7"},
+			})
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("TerminateNativeSession error = %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("TerminateNativeSession error = %v, want substring %q", err, tc.wantErr)
+			}
+			if strings.Join(stops, ",") != strings.Join(tc.wantStops, ",") || fallbackListed != tc.wantFallback {
+				t.Fatalf("stops=%v fallbackListed=%v, want stops=%v fallbackListed=%v", stops, fallbackListed, tc.wantStops, tc.wantFallback)
+			}
+		})
 	}
 }

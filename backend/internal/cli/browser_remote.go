@@ -27,9 +27,12 @@ const (
 )
 
 // remoteBrowserConfig carries the self-hosted agent-browser service endpoint.
+// viaDaemon means the command goes to this host's daemon, which runs the
+// approval gate and holds the service token; AO sessions get only the URL.
 type remoteBrowserConfig struct {
-	baseURL string
-	token   string
+	baseURL   string
+	token     string
+	viaDaemon bool
 }
 
 // remoteBrowserForward reports whether args select `ao browser` while a
@@ -44,6 +47,12 @@ func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBro
 	baseURL := strings.TrimSpace(getenv(envAgentBrowserURL))
 	if baseURL == "" {
 		return nil, nil, nil
+	}
+	if strings.TrimSpace(getenv("AO_BROWSER_CAPABILITY")) != "" {
+		// An AO session: its daemon gates and forwards the command. This wins
+		// over a service token, which a session started before the host
+		// upgraded may still carry: that token must not bypass the gate.
+		return &remoteBrowserConfig{baseURL: strings.TrimRight(baseURL, "/"), viaDaemon: true}, args[1:], nil
 	}
 	token := strings.TrimSpace(getenv(envAgentBrowserToken))
 	if token == "" {
@@ -76,6 +85,9 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 	if err != nil {
 		return err
 	}
+	if cfg.viaDaemon {
+		return runGatedRemoteBrowserCommand(ctx, deps, args, files)
+	}
 	body, err := json.Marshal(remoteBrowserRequest{Args: args, Files: files})
 	if err != nil {
 		return err
@@ -103,6 +115,11 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 	if err := json.NewDecoder(io.LimitReader(resp.Body, remoteBrowserMaxResponseBytes)).Decode(&out); err != nil {
 		return fmt.Errorf("decode remote browser response: %w", err)
 	}
+	return relayRemoteBrowserResponse(deps, out)
+}
+
+// relayRemoteBrowserResponse writes returned files and prints the output.
+func relayRemoteBrowserResponse(deps Deps, out remoteBrowserResponse) error {
 	if err := writeRemoteBrowserFiles(out.Files); err != nil {
 		return err
 	}
@@ -123,6 +140,40 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 		return errors.New(out.Error)
 	}
 	return nil
+}
+
+// runGatedRemoteBrowserCommand sends the command to this host's daemon, which
+// asks the user before a consequential action and then forwards it to the
+// agent browser. There is no fallback to the service: if the daemon cannot be
+// reached, the command does not run.
+func runGatedRemoteBrowserCommand(ctx context.Context, deps Deps, args []string, files map[string]string) error {
+	sessionID, capability, err := currentBrowserIdentity()
+	if err != nil {
+		return err
+	}
+	c := &commandContext{deps: deps}
+	var out remoteBrowserResponse
+	// Only the daemon can read a raw agent-browser command, so any one may be
+	// waiting for the user; a quick one finishes before the hint shows.
+	stderr := deps.Err
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	err = withApprovalHint(stderr, func() error {
+		return c.doJSONPathWithHeadersAndTimeout(
+			ctx,
+			http.MethodPost,
+			"/api/v1/browser/remote-commands",
+			map[string]any{"sessionId": sessionID, "args": args, "files": files},
+			&out,
+			map[string]string{browserCapabilityHeader: capability},
+			browserCommandTimeout,
+		)
+	})
+	if err != nil {
+		return err
+	}
+	return relayRemoteBrowserResponse(deps, out)
 }
 
 // remoteBrowserUploadArgs inlines local files named by the command, mirroring

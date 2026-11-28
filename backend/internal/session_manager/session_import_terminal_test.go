@@ -40,6 +40,7 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 			a := &terminalImportAgent{native: native}
 			rt := &fakeRuntime{}
 			m, st, _ := newExitedResumeManager(t, rt, a)
+			m.dataDir = t.TempDir()
 			workspace := t.TempDir()
 			child := filepath.Join(workspace, "child")
 			if err := os.Mkdir(child, 0o700); err != nil {
@@ -69,7 +70,7 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 				t.Fatalf("restore/preflight import context missing: restores=%#v probes=%#v", a.restores, a.probes)
 			}
 			for _, probe := range a.probes {
-				if probe.Metadata[ports.MetadataKeyImportSourceNativeID] != "native-terminal" || probe.Metadata[ports.MetadataKeyImportConfigDir] != rec.Metadata.ImportSource.ConfigDir || probe.WorkspacePath != child {
+				if probe.Metadata[ports.MetadataKeyImportSourceNativeID] != "native-terminal" || probe.Metadata[ports.MetadataKeyImportConfigDir] != rec.Metadata.ImportSource.ConfigDir || probe.WorkspacePath != child || probe.DataDir != m.dataDir {
 					t.Fatalf("strict probe lost import identity/worktree: %#v", probe)
 				}
 			}

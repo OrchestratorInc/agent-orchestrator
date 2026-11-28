@@ -1,14 +1,18 @@
-import type { NativeStackNavigationOptions } from "expo-router";
-import type { ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { useNavigation, useRouter, type NativeStackNavigationOptions } from "expo-router";
+import { useHeaderHeight } from "expo-router/react-navigation";
+import { useLayoutEffect, type ReactElement, type ReactNode } from "react";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
 import type { AppSymbolProps } from "./AppSymbol.types";
+import { backOr } from "./backNavigation";
 import { CupertinoChevron } from "./cupertinoChevron";
+import { BAR_SEAM, Frost, pillFrostStops } from "./frost";
+import { PillHeaderInsetContext } from "./pillHeaderInset";
 import { rowDividerWidth } from "./divider";
 import { usePressFeedback } from "./pressFeedback";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { iconSize, radius, space } from "./tokens";
+import { font, iconSize, radius, space } from "./tokens";
 
 /**
  * Header controls that float over a page scrolling under a clear bar, each on
@@ -27,6 +31,85 @@ import { iconSize, radius, space } from "./tokens";
  */
 export function pillBackOptions(): NativeStackNavigationOptions {
 	return Platform.OS === "android" ? { headerBackVisible: false, headerLeft: () => <View /> } : {};
+}
+
+/**
+ * A pushed page's bar as the chat's on Android: clear, with the way back and
+ * the page's title on one pill (`HeaderPill`), so the page scrolls up under it.
+ * Pair it with `pillScreenLayout` on the same stack, which lays the frost over
+ * each page and tells it how far to hold its content down. iOS keeps the
+ * system's bar.
+ */
+export function pillHeaderOptions(): NativeStackNavigationOptions {
+	if (Platform.OS !== "android") return {};
+	return {
+		...pillBackOptions(),
+		headerTransparent: true,
+		headerStyle: { backgroundColor: "transparent" },
+		headerTitle: ({ children }) => <PillTitle>{children}</PillTitle>,
+	};
+}
+
+/**
+ * The stack's `screenLayout` for `pillHeaderOptions`, on Android: each page,
+ * then the chat's frost over it behind the bar's pills, dense at the status bar
+ * and thinning through the bar. Its fade into the page is the short seam, no
+ * deeper than the room a page leaves above its first row, so nothing reads
+ * dimmed at rest. The page learns the bar's height from `useGlassBarInset`.
+ */
+export const pillScreenLayout: ((props: { children: ReactNode }) => ReactElement) | undefined = Platform.OS === "android"
+	? ({ children }) => <PillHeaderScreen>{children}</PillHeaderScreen>
+	: undefined;
+
+/**
+ * `pillScreenLayout` for a single page in a stack whose other pages keep the
+ * stack's own bar, such as New task in the root stack: the page wraps itself.
+ * Nothing on iOS.
+ */
+export function PillHeaderFrame({ children }: { children: ReactNode }) {
+	return Platform.OS === "android" ? <PillHeaderScreen>{children}</PillHeaderScreen> : <>{children}</>;
+}
+
+function PillHeaderScreen({ children }: { children: ReactNode }) {
+	const headerHeight = useHeaderHeight();
+	return (
+		<PillHeaderInsetContext.Provider value={headerHeight}>
+			<View style={layoutStyles.fill}>
+				{children}
+				<Frost from="top" stops={pillFrostStops(headerHeight, BAR_SEAM)} style={[layoutStyles.frost, { height: headerHeight + BAR_SEAM }]} />
+			</View>
+		</PillHeaderInsetContext.Provider>
+	);
+}
+
+const layoutStyles = StyleSheet.create({
+	fill: { flex: 1 },
+	frost: { position: "absolute", top: 0, left: 0, right: 0 },
+});
+
+function PillTitle({ children }: { children: string }) {
+	const router = useRouter();
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<HeaderPill onBack={() => backOr(router)}>
+			<Text accessibilityRole="header" numberOfLines={1} style={styles.title}>{children}</Text>
+		</HeaderPill>
+	);
+}
+
+/**
+ * A page's trailing action under `pillHeaderOptions`, set as the bar's
+ * `headerRight`: a native toolbar button would float bare over the frost,
+ * which thins to nearly clear by the bar's end, with rows showing through
+ * behind it. Pass a memoised `HeaderPillButton`, or nothing for no action.
+ */
+export function PillHeaderRight({ children }: { children: ReactElement | null }) {
+	const navigation = useNavigation();
+	useLayoutEffect(() => {
+		navigation.setOptions({ headerRight: children ? () => children : undefined });
+		return () => navigation.setOptions({ headerRight: undefined });
+	}, [navigation, children]);
+	return null;
 }
 
 /** A pill's height: a round button's diameter, and a capsule's. */
@@ -67,10 +150,12 @@ export function HeaderPillButton({
 	onPress,
 	icon,
 	children,
+	disabled = false,
 	testID,
 }: {
 	label: string;
 	onPress(): void;
+	disabled?: boolean;
 	icon?: AppSymbolProps["name"];
 	/** Drawn in place of `icon`, for a glyph `AppSymbol` does not have. */
 	children?: ReactNode;
@@ -83,14 +168,19 @@ export function HeaderPillButton({
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={label}
+			accessibilityState={{ disabled }}
 			android_ripple={feedback.android_ripple}
 			// The pill is smaller than a touch target; the slop makes up the rest.
 			hitSlop={space.xxs}
+			disabled={disabled}
 			onPress={onPress}
 			testID={testID}
 			style={({ pressed }) => [styles.surface, styles.round, pressed && feedback.pressed]}
 		>
-			{children ?? (icon ? <AppSymbol name={icon} size={iconSize.xl} color={t.textPrimary} /> : null)}
+			{/* Disabled dims the glyph alone: faded as a whole, the pill's surface
+			    let the rows scrolling under it show through, the very thing the
+			    pill is there to stop. */}
+			{children ?? (icon ? <AppSymbol name={icon} size={iconSize.xl} color={disabled ? t.textTertiary : t.textPrimary} /> : null)}
 		</Pressable>
 	);
 }
@@ -114,5 +204,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	capsule: { flexDirection: "row", alignSelf: "flex-start", justifyContent: "flex-start", maxWidth: "100%", marginEnd: space.sm, paddingHorizontal: space.md },
 	// The chevron's own round target sits in the capsule's leading end.
 	capsuleWithBack: { paddingStart: space.xxs, gap: space.xxs },
+	title: { fontFamily: font.semibold, flexShrink: 1, color: t.textPrimary, fontSize: 17, lineHeight: 22 },
 	back: { width: HEADER_PILL_SIZE - space.xs, height: HEADER_PILL_SIZE - space.xs, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
 });

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -331,12 +332,32 @@ func (l *agentLauncher) invocation(spec LaunchSpec) ports.ReviewInvocation {
 		ReviewQueue:     spec.ReviewQueue,
 		ReviewIndex:     spec.ReviewIndex,
 		Config:          spec.AgentConfig,
+		ProjectEnv:      spec.ProjectEnv,
 		WorkspacePath:   spec.WorkspacePath,
 		DataDir:         l.dataDir,
 		RunFilePath:     l.runFile,
 		Prompt:          prompt,
 		SystemPrompt:    systemPrompt,
 	}
+}
+
+// endpointEnv resolves the custom endpoint a reviewer of spec's harness runs
+// on, with project overrides. For a supported harness, an empty map records
+// a completed lookup with no endpoint, so the command adapter need not reread.
+func (l *agentLauncher) endpointEnv(spec LaunchSpec) (map[string]string, error) {
+	harnessSpec, ok := harnessendpoint.Lookup(string(spec.Harness))
+	if !ok {
+		return nil, nil
+	}
+	// A project pointing the harness at another origin gets none of the saved
+	// endpoint, so its key never travels to a gateway it was not saved for:
+	// its own gateway and key apply instead, and a project gateway with no key
+	// of its own stops the launch, as an unreadable endpoint does.
+	stored, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, runtime.GOOS == "windows")
+	if err != nil {
+		return nil, fmt.Errorf("load custom endpoint for %s reviewer: %w", spec.Harness, err)
+	}
+	return harnessSpec.WithProjectEnv(stored, spec.ProjectEnv, runtime.GOOS == "windows"), nil
 }
 
 // prepareInvocation stores the full reviewer instructions outside the
@@ -406,6 +427,7 @@ func (l *agentLauncher) prepareIdleInvocation(spec LaunchSpec) (ports.ReviewInvo
 		WorkerSessionID:  spec.WorkerID,
 		AgentSessionID:   spec.AgentSessionID,
 		Config:           spec.AgentConfig,
+		ProjectEnv:       spec.ProjectEnv,
 		WorkspacePath:    spec.WorkspacePath,
 		DataDir:          l.dataDir,
 		RunFilePath:      l.runFile,
@@ -457,10 +479,15 @@ func truncateReviewHistoryBody(body string) string {
 }
 
 func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	endpointEnv, err := l.endpointEnv(spec)
+	if err != nil {
+		return LaunchResult{}, err
+	}
 	inv, err := l.prepareInvocation(ctx, spec)
 	if err != nil {
 		return LaunchResult{}, err
 	}
+	inv.EndpointEnv = endpointEnv
 	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
 		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
 			return l.startReviewerChat(ctx, spec, inv, profile, false)
@@ -474,10 +501,15 @@ func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResul
 }
 
 func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	endpointEnv, err := l.endpointEnv(spec)
+	if err != nil {
+		return LaunchResult{}, err
+	}
 	inv, err := l.prepareIdleInvocation(spec)
 	if err != nil {
 		return LaunchResult{}, err
 	}
+	inv.EndpointEnv = endpointEnv
 	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
 		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
 			return l.startReviewerChat(ctx, spec, inv, profile, true)
@@ -499,7 +531,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if spec.DeferInitialMessage {
 		prompt = ""
 	}
-	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil, inv.EndpointEnv), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -564,7 +596,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if workingDirectory == "" {
 		workingDirectory = spec.WorkspacePath
 	}
-	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env)
+	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env, inv.EndpointEnv)
 	argv := cmd.Argv
 	if strings.TrimSpace(spec.LaunchID) != "" {
 		executable, resolveErr := l.executable()
@@ -663,7 +695,7 @@ func outputContainsAny(output string, patterns []string) bool {
 	return false
 }
 
-func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base map[string]string) map[string]string {
+func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base, endpointEnv map[string]string) map[string]string {
 	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
 	delete(env, sessionmanager.EnvSessionID)
 	env["AO_REVIEW_SESSION_ID"] = spec.ReviewSessionID
@@ -683,6 +715,19 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 				env[key] = value
 			}
 		}
+	}
+	// Use the same endpoint snapshot that command construction received, as
+	// resolved, so the variables it clears stay blank even when the project
+	// sets them.
+	for key, value := range endpointEnv {
+		if runtime.GOOS == "windows" {
+			for existing := range env {
+				if existing != key && strings.EqualFold(existing, key) {
+					delete(env, existing)
+				}
+			}
+		}
+		env[key] = value
 	}
 	if strings.TrimSpace(l.runFile) != "" {
 		env[EnvRunFile] = l.runFile

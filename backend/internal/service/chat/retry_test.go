@@ -501,12 +501,13 @@ func TestRetrySourceRemainsConsumedWhenAttemptIsEditedOntoAnotherBranch(t *testi
 	}
 }
 
-func TestRetryTurnRefusesNonHumanPrompt(t *testing.T) {
+func TestRetryTurnResendsEventPrompt(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
+	// A review-comment relay started the turn, and the provider timed out.
 	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text:            "automated relay",
+		Text:            "address the review on #228",
 		ClientMessageID: "cm-5",
 		Origin:          domain.MessageOriginAutomation,
 	})
@@ -517,12 +518,30 @@ func TestRetryTurnRefusesNonHumanPrompt(t *testing.T) {
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: turn.ProviderTurnID,
 		TurnState:      domain.TurnStateFailed,
-		Err:            errors.New("boom"),
+		Err:            errors.New("request timed out"),
 	})
 	failedTurnSnapshot(t, h, turn.ID)
 
-	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); !errors.Is(err, chatsvc.ErrTurnNotRetryable) {
-		t.Fatalf("RetryTurn on automation-origin turn = %v, want ErrTurnNotRetryable", err)
+	retried, err := h.svc.RetryTurn(ctx, testSession, turn.ID)
+	if err != nil {
+		t.Fatalf("RetryTurn on a failed event turn: %v", err)
+	}
+	if retried.ID == "" || retried.ID == turn.ID || retried.State != domain.TurnStateRunning {
+		t.Fatalf("retried turn = %+v, want a new running turn", retried)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || sent[1].Text != "address the review on #228" {
+		t.Fatalf("provider sends = %+v, want the event prompt sent again", sent)
+	}
+	// It is still the event's prompt, not one the user typed.
+	if sent[1].Origin != domain.MessageOriginAutomation {
+		t.Fatalf("retried origin = %q, want automation", sent[1].Origin)
+	}
+
+	// A replay returns the same attempt instead of sending the event a third time.
+	again, err := h.svc.RetryTurn(ctx, testSession, turn.ID)
+	if err != nil || again.ID != retried.ID {
+		t.Fatalf("replayed RetryTurn = %+v, %v; want existing attempt %q", again, err, retried.ID)
 	}
 }
 

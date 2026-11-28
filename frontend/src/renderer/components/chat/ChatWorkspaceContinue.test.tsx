@@ -76,7 +76,7 @@ describe("ChatWorkspace continue", () => {
 		expect(continueButton()).toBeInTheDocument();
 	});
 
-	it("shows a continue as a Continued marker, not as a message the user wrote", () => {
+	it.each(["human", "automation"] as const)("shows a %s continue as a Continued marker, not as a message the user wrote", (origin) => {
 		const snapshot = stoppedSnapshot();
 		const stopped = snapshot.turns.find((turn) => turn.id === "turn-2")!;
 		snapshot.turns = [...snapshot.turns, { id: "turn-continue", state: "completed", requestedAt: stopped.requestedAt, completedAt: stopped.requestedAt }];
@@ -89,7 +89,7 @@ describe("ChatWorkspace continue", () => {
 				sequence: snapshot.latestSequence + 1,
 				revision: 0,
 				role: "user",
-				origin: "human",
+				origin,
 				text: CONTINUE_STOPPED_TURN_PROMPT,
 				continuation: true,
 				streaming: false,

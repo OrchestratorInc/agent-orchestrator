@@ -1,7 +1,8 @@
 /**
- * The orchestrator chat draws worker traffic as rows. These pin what a reader
- * keeps when it does: a quiet reply still copies and rolls back, a reply that asks
- * something stays a full reply, and a turn with no reply still shows its work.
+ * The orchestrator chat draws a spawned worker as a row in a spawn tree under its
+ * turn until it answers, and worker traffic as rows. These pin what a reader keeps when it does:
+ * a quiet reply still copies and rolls back, a reply that asks something stays a
+ * full reply, and a turn with no reply still shows its work.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -59,13 +60,13 @@ function snapshot(items: ConversationItem[], turnState: "completed" | "running" 
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed") {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed", onSessionLinkOpen?: (url: string) => void) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} />
+				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} onSessionLinkOpen={onSessionLinkOpen} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -73,46 +74,73 @@ function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), wor
 }
 
 describe("orchestrator worker updates", () => {
-	it("shows one collapsed spawn group and an idle worker when the daemon also recorded the spawn", async () => {
-		const workspaces = [{
-			id: "proj", name: "proj", path: "/tmp/proj",
-			sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [] }],
-		}] as unknown as WorkspaceSummary[];
-		const spawn = {
-			...command("t1", 1, "ao spawn --project proj --name 'Audit usage'"),
-			detail: { command: "ao spawn --project proj --name 'Audit usage'", output: 'spawned session proj-288 "Audit usage" (idle)' },
-		};
-		const action: ConversationActivity = {
-			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
-			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
-			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
-		};
-		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
+	const worker = (overrides: Record<string, unknown> = {}) => [{
+		id: "proj", name: "proj", path: "/tmp/proj",
+		sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [], ...overrides }],
+	}] as unknown as WorkspaceSummary[];
+	const spawnCommand = (id = "proj-288", status: ConversationActivity["status"] = "completed"): ConversationActivity => ({
+		...command("t1", 1, "ao spawn --project proj --name 'Audit usage'"),
+		status,
+		detail: { command: "ao spawn --project proj --name 'Audit usage'", ...(status === "completed" ? { output: `spawned session ${id} "Audit usage" (idle)` } : {}) },
+	});
+	// The daemon files the spawn under the turn whose command ran it, as soon as the session exists.
+	const spawnRecord = (id = "proj-288", turnId: string | undefined = "t1", sequence = 12, status: ConversationActivity["status"] = "completed"): ConversationActivity => ({
+		kind: "activity", id: `ao-action:session.spawned:${id}`, turnId, sequence, revision: 0, activityKind: "ao_action",
+		status, summary: "Spawned an agent", createdAt: at(1),
+		detail: { action: "session.spawned", operationId: id, targetSessionId: id },
+	});
+	const startedReply = { ...reply("t1", 1, "Worker started."), sequence: 13 };
 
-		// The agents a turn spawned fold with its work.
-		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
-		const group = screen.getByRole("button", { name: "Spawned 1 agent" });
-		expect(group).toHaveAttribute("aria-expanded", "false");
+	it("shows a recorded spawn as one spawn tree row under the turn's reply, outside Worked for", async () => {
+		const openSession = vi.fn();
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnCommand(), spawnRecord(), startedReply], vi.fn(), worker(), "orchestrator", "completed", openSession);
+
+		const row = screen.getByTestId("spawned-agent");
+		expect(screen.getAllByTestId("spawned-agent")).toHaveLength(1);
+		expect(screen.getByText("Worker started.").compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		// The reply's copy row closes the turn, under the tree.
+		expect(row.compareDocumentPosition(screen.getByRole("button", { name: "Copy message as markdown" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
-		expect(screen.queryByText("Audit usage")).not.toBeInTheDocument();
-		await userEvent.click(group);
-		expect(group).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getByText("Audit usage")).toBeInTheDocument();
-		const idle = screen.getByText("Idle");
-		expect(idle.parentElement?.querySelector(".animate-spin")).toBeNull();
+		expect(screen.queryByRole("button", { name: /Spawned \d agents?/ })).not.toBeInTheDocument();
+		// A reply arrow in place of the fork icon, and the worker's agent logo.
+		expect(row.querySelector("svg.icon-corner-down-right")).not.toBeNull();
+		expect(row.querySelector("svg.icon-split")).toBeNull();
+		expect(within(row).getByRole("img", { name: "codex" })).toBeInTheDocument();
+		// Logo, name and state are the session's link; the arrow stays outside it.
+		const link = within(row).getByRole("link", { name: /Audit usage/ });
+		expect(link).toHaveAttribute("href", "ao://sessions/proj/proj-288");
+		expect(link.querySelector("svg.icon-corner-down-right")).toBeNull();
+		const idle = within(row).getByText("Idle");
+		expect(idle.parentElement?.querySelector('[data-testid="lattice-loader"]')).toBeNull();
+		await userEvent.click(link);
+		expect(openSession).toHaveBeenCalledWith("ao://sessions/proj/proj-288");
 	});
 
-	it("keeps a structured spawn action when no command group represents it", () => {
-		const action: ConversationActivity = {
-			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
-			status: "completed", summary: "Spawned an agent", createdAt: at(1),
-			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
-		};
-		renderOrchestrator([automation("t1", 1, "Check current usage."), action]);
-		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	it("names a worker the session list does not have from its spawn record", () => {
+		const record = { ...spawnRecord(), detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288", displayName: "Audit usage", harness: "codex", href: "ao://sessions/proj/proj-288" } };
+		renderOrchestrator([automation("t1", 1, "Check current usage."), record, startedReply]);
+		const row = screen.getByTestId("spawned-agent");
+		expect(within(row).getByRole("img", { name: "codex" })).toBeInTheDocument();
+		expect(within(row).getByRole("link", { name: /Audit usage/ })).toHaveAttribute("href", "ao://sessions/proj/proj-288");
+		expect(row).not.toHaveTextContent("proj-288");
 	});
 
-	it("keeps an action filed under a rolled-back turn on its own line", () => {
+	it("marks a hovered row by underlining its name, with no fill behind it", () => {
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnRecord(), startedReply], vi.fn(), worker());
+		const row = screen.getByTestId("spawned-agent");
+		const link = within(row).getByRole("link", { name: /Audit usage/ });
+		expect(within(link).getByText("Audit usage")).toHaveClass("group-hover:underline");
+		expect(`${row.className} ${link.className}`).not.toMatch(/\bhover:bg-|\bbg-/);
+		expect(row.querySelector("svg.icon-arrow-up-right")).toBeNull();
+	});
+
+	it("draws a recorded spawn outside any turn as the worker's row", () => {
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnRecord("proj-288", undefined, 2)]);
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("proj-288");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("draws a spawn filed under a rolled-back turn as the worker's row on its own", () => {
 		const action: ConversationActivity = {
 			kind: "activity", id: "ao-action:session.spawned:proj-9", turnId: "t2", sequence: 25, revision: 0, activityKind: "ao_action",
 			status: "completed", summary: "Spawned an agent", createdAt: at(2),
@@ -137,67 +165,179 @@ describe("orchestrator worker updates", () => {
 				</TooltipProvider>
 			</QueryClientProvider>,
 		);
-		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
-	});
-
-	it("hides the matching action as soon as the command completes during a running turn", () => {
-		const spawn = {
-			...command("t1", 1, "ao spawn --project proj"),
-			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
-		};
-		const action: ConversationActivity = {
-			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
-			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
-			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
-		};
-		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, action], vi.fn(), [], "orchestrator", "running");
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("proj-9");
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("keeps a distinct structured spawn next to the command spawn group", async () => {
-		const spawn = {
-			...command("t1", 1, "ao spawn --project proj"),
-			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+	it("shows the row as soon as the daemon records the spawn, while the turn and its command still run", () => {
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnCommand("proj-288", "running"), spawnRecord()], vi.fn(), [], "orchestrator", "running");
+		expect(screen.getByTestId("spawned-agent")).toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("draws a row for a spawn only its command output names, beside a recorded one", () => {
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnCommand("proj-288"), spawnRecord("proj-289"), startedReply]);
+		expect(screen.getAllByTestId("spawned-agent").map((row) => row.textContent)).toEqual([
+			expect.stringContaining("proj-289"),
+			expect.stringContaining("proj-288"),
+		]);
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("folds a turn's failed spawn into Worked for, as one failed step", async () => {
+		const reason = "The default account is signed out or now holds another login, and no other account is signed in.";
+		const cmd = "ao spawn --project proj --name 'background config snapshot'";
+		const approval: ConversationActivity = {
+			kind: "activity", id: "t1-approval", turnId: "t1", sequence: 11, revision: 0, activityKind: "auto_review", status: "completed",
+			summary: cmd, detail: { status: "approved", riskLevel: "medium", command: cmd }, createdAt: at(1),
 		};
-		const action: ConversationActivity = {
-			kind: "activity", id: "ao-action:session.spawned:proj-289", sequence: 13, revision: 0,
-			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
-			detail: { action: "session.spawned", operationId: "proj-289", targetSessionId: "proj-289" },
+		const failedCall: ConversationActivity = {
+			kind: "activity", id: "t1-spawn", turnId: "t1", sequence: 12, revision: 0, activityKind: "command", status: "failed",
+			summary: cmd, detail: { command: cmd, exitCode: 1, output: reason }, createdAt: at(1),
 		};
-		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started."), action]);
+		const failedRecord: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:failed-1", turnId: "t1", sequence: 13, revision: 0, activityKind: "ao_action", status: "failed",
+			summary: "Spawned an agent", createdAt: at(1), detail: { action: "session.spawned", operationId: "failed:req-1", error: reason },
+		};
+		renderOrchestrator([automation("t1", 1, "Check the config."), approval, failedCall, failedRecord, { ...reply("t1", 1, "I couldn't start the check."), sequence: 14 }]);
+
+		// Folded, the turn shows only Worked for and the reply.
+		expect(screen.queryByRole("button", { name: /Ran 2 tool calls/ })).not.toBeInTheDocument();
+		expect(screen.queryByText(reason)).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
-		expect(screen.getByRole("button", { name: "Spawned 1 agent" })).toBeInTheDocument();
-		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+		const run = await screen.findByRole("button", { name: /Ran 2 tool calls/ });
+		expect(run).toHaveTextContent("1 failed");
+		// The failed step stays inside its run until the run opens.
+		expect(screen.queryByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).not.toBeInTheDocument();
+		await userEvent.click(run);
+		expect(await screen.findByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).toBeInTheDocument();
+		expect(screen.getByText(reason)).toBeInTheDocument();
+	});
+
+	it("keeps a failed spawn the daemon recorded nothing for under the fold, like any failed call", () => {
+		const cmd = "ao spawn --project proj --name 'background config snapshot'";
+		const failedCall: ConversationActivity = {
+			kind: "activity", id: "t1-spawn", turnId: "t1", sequence: 12, revision: 0, activityKind: "command", status: "failed",
+			summary: cmd, detail: { command: cmd }, createdAt: at(1),
+		};
+		renderOrchestrator([automation("t1", 1, "Check the config."), failedCall, { ...reply("t1", 1, "I couldn't start the check."), sequence: 14 }]);
+		// An older daemon, or a record that landed in another run: no step says why, so the
+		// call that failed stays on screen.
+		expect(screen.getByRole("button", { name: /background config snapshot/ })).toBeInTheDocument();
+	});
+
+	it("keeps a failed spawn as the action row that says so, inside Worked for", async () => {
+		renderOrchestrator([automation("t1", 1, "Check current usage."), { ...spawnRecord("", undefined, 2, "failed"), detail: { action: "session.spawned", operationId: "failed:req-1", error: "project not found" } }]);
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
+		expect(await screen.findByText("Spawned an agent")).toBeInTheDocument();
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+	});
+
+	it("drops the row once the worker reports", () => {
+		renderOrchestrator([
+			automation("t1", 1, "Check current usage."), spawnRecord(), startedReply,
+			report("t2", 3, "[done] [Audit usage](ao://sessions/proj/proj-288)\nFound 9 issues across 6 files."),
+			reply("t2", 4, "Noted."),
+		], vi.fn(), worker());
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("leaves no empty space under the reply once every worker has answered", () => {
+		renderOrchestrator([
+			automation("t1", 1, "Check current usage."), spawnCommand(), spawnRecord(), startedReply,
+			report("t2", 3, "[done] [Audit usage](ao://sessions/proj/proj-288)\nFound 9 issues across 6 files."),
+			reply("t2", 4, "Noted."),
+		], vi.fn(), worker());
+		// The `ao spawn` output still names the worker, but nothing is left to wait on.
+		expect(screen.queryByTestId("spawned-agents")).not.toBeInTheDocument();
+		expect(document.querySelector("div.mt-2\\.5:empty")).toBeNull();
+	});
+
+	it("drops the termination of a worker its row already shows", () => {
+		const terminated = { ...spawnRecord("proj-288", undefined, 20), id: "ao-action:session.terminated:proj-288", summary: "Terminated an agent", detail: { action: "session.terminated", operationId: "proj-288:generation:0", targetSessionId: "proj-288" } };
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply, terminated], vi.fn(), worker({ status: "terminated", isTerminated: true }));
+		expect(within(screen.getByTestId("spawned-agent")).getByText("Terminated")).toBeInTheDocument();
+		expect(screen.queryByText("Terminated an agent")).not.toBeInTheDocument();
+	});
+
+	it("shows the termination of a worker that has already answered", async () => {
+		const terminated = { ...spawnRecord("proj-288", "t3", 52), id: "ao-action:session.terminated:proj-288", summary: "Terminated an agent", detail: { action: "session.terminated", operationId: "proj-288:generation:0", targetSessionId: "proj-288" } };
+		renderOrchestrator([
+			automation("t1", 1, "Check usage."), spawnRecord(), startedReply,
+			report("t2", 3, "[done] [Audit usage](ao://sessions/proj/proj-288)\nFound 9 issues across 6 files."),
+			reply("t2", 4, "Noted."),
+			automation("t3", 5, "Stop the audit."), command("t3", 5, "ao session kill proj-288"), terminated, { ...reply("t3", 5, "Stopped it."), sequence: 53 },
+		], vi.fn(), worker({ status: "terminated", isTerminated: true }));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: /^Worked for/ }).at(-1)!);
+		expect(await screen.findByRole("button", { name: /Terminated an agent/ })).toBeInTheDocument();
+	});
+
+	it("keeps a termination of a worker this chat did not spawn, and a failed one", () => {
+		const terminated = (id: string, sequence: number, status: ConversationActivity["status"]): ConversationActivity => ({
+			kind: "activity", id: `ao-action:session.terminated:${id}`, sequence, revision: 0, activityKind: "ao_action",
+			status, summary: "Terminated an agent", createdAt: at(1),
+			detail: { action: "session.terminated", operationId: `${id}:generation:0`, targetSessionId: id },
+		});
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord("proj-288", undefined, 2), terminated("proj-288", 3, "failed"), terminated("proj-300", 4, "completed")]);
+		// The failed one says it failed; the other worker has no row to say it ended.
+		expect(screen.getByText("Terminated 2 agents")).toBeInTheDocument();
+	});
+
+	it("keeps a working worker's row to its state, with the stage the daemon names on its hover card", async () => {
+		const workspaces = worker({ status: "working", activity: { state: "active" }, displayStatus: "Fixing CI failures", createdAt: new Date(Date.now() - 90_000).toISOString() });
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply], vi.fn(), workspaces);
+		const row = screen.getByTestId("spawned-agent");
+		expect(row).toHaveTextContent("Working");
+		expect(row).not.toHaveTextContent("1m");
+		// One short line per worker: the stage waits on the card.
+		expect(row).not.toHaveTextContent("Fixing CI failures");
+		await userEvent.hover(within(row).getByRole("link", { name: /Audit usage/ }));
+		expect(await screen.findByRole("status", { name: "Audit usage, Fixing CI failures" })).toBeInTheDocument();
+	});
+
+	it("says on the hover card why a worker's start failed", async () => {
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply], vi.fn(), worker({ provisionState: "failed", provisionError: "worktree add failed" }));
+		const row = screen.getByTestId("spawned-agent");
+		expect(row).toHaveTextContent("Start failed");
+		expect(row).not.toHaveTextContent("worktree add failed");
+		await userEvent.hover(within(row).getByRole("link", { name: /Audit usage/ }));
+		expect(await screen.findByText("worktree add failed")).toBeInTheDocument();
+	});
+
+	it("does not repeat the state as the stage", () => {
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply], vi.fn(), worker({ status: "working", activity: { state: "active" }, displayStatus: "Working" }));
+		expect(within(screen.getByTestId("spawned-agent")).getAllByText(/Working/)).toHaveLength(1);
 	});
 
 	it.each([
-		["provisioning", { provisionState: "provisioning" }, "Spawning", true],
+		["provisioning", { provisionState: "provisioning" }, "Starting", true],
 		["active", { status: "working", activity: { state: "active" } }, "Working", true],
 		["idle", { status: "idle", activity: { state: "idle" } }, "Idle", false],
 		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
 		["terminated", { status: "terminated", isTerminated: true }, "Terminated", false],
+		["terminated while waiting for input", { status: "terminated", isTerminated: true, activity: { state: "waiting_input" } }, "Terminated", false],
 		["failed start", { provisionState: "failed" }, "Start failed", false],
 		["status needs input", { status: "needs_input" }, "Needs input", false],
 		["PR waiting input", { status: "needs_input", prs: [{ number: 94, state: "open", ci: "pending", review: "pending", mergeability: "unknown" }] }, "Needs input", false],
 		["activity waiting input", { activity: { state: "waiting_input" } }, "Needs input", false],
 		["activity blocked", { activity: { state: "blocked" } }, "Needs input", false],
-		["checking", { statusReadiness: "checking" }, "Checking status", false],
+		["checking", { statusReadiness: "checking" }, "Checking", false],
+		["PR in review", { status: "idle", activity: { state: "idle" }, kanbanColumn: "needs_review", displayStatus: "Needs human review" }, "In review", false],
+		["PR ready", { status: "idle", activity: { state: "idle" }, kanbanColumn: "ready", displayStatus: "Mergeable" }, "Ready to merge", false],
+		["PR merged", { status: "idle", activity: { state: "idle" }, kanbanColumn: "ready", displayStatus: "Merged" }, "Merged", false],
+		["PR with failing CI", { status: "idle", activity: { state: "idle" }, displayStatus: "CI failing" }, "CI failing", false],
+		["working with a PR", { status: "working", activity: { state: "active" }, kanbanColumn: "needs_review", displayStatus: "Needs human review" }, "Working", true],
 		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
 		["missing", null, "Status unavailable", false],
-	] as const)("shows %s child state without a false spinner", async (_case, child, label, spinning) => {
-		const workspaces = [{
-			id: "proj", name: "proj", path: "/tmp/proj",
-			sessions: child ? [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [], ...child }] : [],
-		}] as unknown as WorkspaceSummary[];
-		const spawn = {
-			...command("t1", 1, "ao spawn --project proj"),
-			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
-		};
-		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started.")], vi.fn(), workspaces);
-		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
-		await userEvent.click(screen.getByRole("button", { name: "Spawned 1 agent" }));
-		const line = screen.getByText(label).parentElement;
-		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
+	] as const)("shows %s child state without a false spinner", (_case, child, label, spinning) => {
+		const workspaces = child ? worker(child) : ([{ id: "proj", name: "proj", path: "/tmp/proj", sessions: [] }] as unknown as WorkspaceSummary[]);
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnCommand(), startedReply], vi.fn(), workspaces);
+		const line = within(screen.getByTestId("spawned-agent")).getByText(label).parentElement;
+		expect(line?.querySelector('[data-testid="lattice-loader"]') !== null).toBe(spinning);
 	});
 
 	it("draws a report batch as one line that opens to its rows, and the orchestrator's answer as a normal reply", async () => {
@@ -448,6 +588,92 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t1", 2, "Noted."),
 		]);
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	// The orchestrator answers a report by spawning another worker. That worker's line
+	// is under the turn until it answers, so the turn stays in view until then.
+	const spawnedFixCi: ConversationActivity = {
+		kind: "activity", id: "ao-action:session.spawned:proj-290", turnId: "t1", sequence: 15, revision: 0, activityKind: "ao_action",
+		status: "completed", summary: "Spawned an agent", createdAt: at(1),
+		detail: { action: "session.spawned", operationId: "proj-290", targetSessionId: "proj-290", displayName: "Fix CI" },
+	};
+	const spawnedInBackground = [
+		report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser."),
+		spawnedFixCi,
+		reply("t1", 2, "Started Fix CI."),
+	];
+
+	it("keeps a background turn in view while a worker it spawned has not answered", () => {
+		renderOrchestrator(spawnedInBackground);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("Fix CI");
+	});
+
+	it("folds that turn once the worker it spawned reports", () => {
+		renderOrchestrator([
+			...spawnedInBackground,
+			report("t2", 3, "[done] [Fix CI](ao://sessions/proj/proj-290)\nCI is green."),
+			reply("t2", 4, "Noted."),
+		]);
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 done · /);
+	});
+
+	// A worker that is killed, exits, never starts or is deleted sends no report, so nothing
+	// would ever take its row down or let its turn fold.
+	const fixCi = (overrides: Record<string, unknown> | null) => [{
+		id: "proj", name: "proj", path: "/tmp/proj",
+		sessions: overrides ? [{ id: "proj-290", workspaceId: "proj", title: "Fix CI", provider: "codex", kind: "worker", status: "idle", prs: [], ...overrides }] : [],
+	}] as unknown as WorkspaceSummary[];
+	const laterTurn = [
+		report("t2", 3, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus also close on Escape."),
+		reply("t2", 4, "Noted."),
+	];
+
+	it.each([
+		["terminated", { status: "terminated", isTerminated: true }],
+		["exited", { status: "exited", activity: { state: "exited" } }],
+		["never started", { provisionState: "failed" }],
+		["gone from the session list", null],
+	] as const)("lets go of a worker that %s without reporting once a later turn starts", (_case, session) => {
+		renderOrchestrator([...spawnedInBackground, ...laterTurn], vi.fn(), fixCi(session));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		// Its turn folds with the one after it.
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · /);
+	});
+
+	it("puts the spawn of a worker that ended without reporting back into its turn's work", async () => {
+		renderOrchestrator([
+			automation("t1", 1, "Fix CI."), spawnedFixCi, { ...reply("t1", 1, "Started Fix CI."), sequence: 16 },
+			automation("t2", 3, "Thanks."), reply("t2", 4, "Anytime."),
+		], vi.fn(), fixCi({ status: "terminated", isTerminated: true }));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: /^Worked for/ })[0]!);
+		expect(await screen.findByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it("keeps an ended worker's row while its turn is still the last", () => {
+		renderOrchestrator(spawnedInBackground, vi.fn(), fixCi({ status: "terminated", isTerminated: true }));
+		expect(within(screen.getByTestId("spawned-agent")).getByText("Terminated")).toBeInTheDocument();
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	it("keeps a worker that is still running after a later turn starts", () => {
+		renderOrchestrator([...spawnedInBackground, ...laterTurn], vi.fn(), fixCi({ status: "working", activity: { state: "active" } }));
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("Fix CI");
+	});
+
+	it("shows the termination of a worker whose row has gone", async () => {
+		const terminated: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.terminated:proj-290", turnId: "t2", sequence: 31, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Terminated an agent", createdAt: at(3),
+			detail: { action: "session.terminated", operationId: "proj-290:generation:0", targetSessionId: "proj-290" },
+		};
+		renderOrchestrator([...spawnedInBackground, automation("t2", 3, "Stop Fix CI."), terminated, reply("t2", 4, "Stopped it.")], vi.fn(), fixCi({ status: "terminated", isTerminated: true }));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: /^Worked for/ }).at(-1)!);
+		expect(await screen.findByText("Terminated an agent")).toBeInTheDocument();
 	});
 
 	it("folds a needs-you report a newer update from the same worker overtook", () => {

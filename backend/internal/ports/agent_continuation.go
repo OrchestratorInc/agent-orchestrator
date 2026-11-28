@@ -161,3 +161,20 @@ type AgentImportedSessionRelocator interface {
 type AgentImportedSessionPreparer interface {
 	PrepareImportedSession(context.Context, ImportedSessionRelocation) (NativeSessionRef, error)
 }
+
+// AgentImportVersionChecker is an OPTIONAL capability for preparers pinned to
+// one verified native CLI version. Import calls it before registering a
+// conversation, so an unsupported installed version fails on that row with a
+// message naming the supported version instead of at first open. Prepared
+// private copies remain reopenable after updates; this gates new imports only.
+type AgentImportVersionChecker interface {
+	CheckImportVersion(context.Context) error
+}
+
+// ImportRefusedError reports that an imported conversation cannot be prepared
+// for a reason the user can fix, such as an agent CLI version that changed
+// between import and first open. Message is fixed adapter text: never a path,
+// configured value or command output, so it may be shown to the user.
+type ImportRefusedError struct{ Message string }
+
+func (e *ImportRefusedError) Error() string { return e.Message }

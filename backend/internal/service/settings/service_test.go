@@ -32,6 +32,10 @@ func (*hibernationSettingsStore) SetAccountHandoff(context.Context, bool, time.T
 	return nil
 }
 
+func (*hibernationSettingsStore) SetSkillSharing(context.Context, bool, time.Time) error {
+	return nil
+}
+
 func (*hibernationSettingsStore) SetCommitAttribution(context.Context, bool, time.Time) error {
 	return nil
 }

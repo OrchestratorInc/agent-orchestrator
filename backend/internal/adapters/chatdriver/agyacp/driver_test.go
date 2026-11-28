@@ -142,6 +142,16 @@ func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
 	}
 }
 
+func TestSessionOptionsRestoreTheModelAndEffortSavedAfterFallback(t *testing.T) {
+	want := []acpdriver.SessionOption{
+		{ID: "model", Value: "gemini-3.8-flash", Optional: true},
+		{ID: thinkingLevelOption, Value: "low", Optional: true},
+	}
+	if got := sessionOptions(ports.ChatTurnSettings{Model: "gemini-3.8-flash", Effort: "low"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored options = %v, want %v", got, want)
+	}
+}
+
 func TestSessionPreambleCarriesStandingInstructionsAsText(t *testing.T) {
 	if got := sessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "  "}); got != nil {
 		t.Fatalf("blank prompt preamble = %v", got)

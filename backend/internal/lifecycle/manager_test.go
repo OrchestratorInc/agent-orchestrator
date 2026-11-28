@@ -5321,6 +5321,23 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 	}
 }
 
+func TestActivity_ClaudeSessionEndKeepsTheResumedConversation(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Harness = domain.HarnessClaudeCode
+	rec.Metadata.AgentSessionID = "resumed-1"
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityExited, Event: "session-end", AgentSessionID: "startup-2",
+		TranscriptPath: "/x/startup-2.jsonl",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata; got.AgentSessionID != "resumed-1" || got.NativeTranscriptPath != "" {
+		t.Fatalf("metadata = %q %q, want resumed-1 and no transcript path", got.AgentSessionID, got.NativeTranscriptPath)
+	}
+}
+
 // Hooks post from their own processes, so a turn's user-prompt-submit can reach
 // AO after the Stop that ended it, as when AO delivers a message just as the
 // previous turn stops (#6686). The session must stay idle at its last turn end

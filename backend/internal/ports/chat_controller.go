@@ -47,7 +47,12 @@ type ChatControllerStart struct {
 	// ForkFirstStart marks a fork's first start, resuming the provider
 	// conversation just copied for it into a conversation with no saved
 	// settings: it starts with, and saves, Model, Effort, and Permissions.
-	ForkFirstStart        bool
+	ForkFirstStart bool
+	// FastMode and AutoCompactWindow seed a brand-new conversation's settings.
+	// Resumes, restores and provider switches leave them unset and keep the
+	// saved ones.
+	FastMode              bool
+	AutoCompactWindow     string
 	SystemPrompt          string
 	AdditionalDirectories []string
 	MCPServers            []ChatMCPServerConfig

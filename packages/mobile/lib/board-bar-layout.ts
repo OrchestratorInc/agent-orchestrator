@@ -9,10 +9,13 @@ import { space } from "./tokens";
 /** The pill's and the button's height. */
 export const BOARD_BAR_HEIGHT = 64;
 
-/** How far the bar floats above the system navigation, and in from each side. */
+/** How far the bar sits in from each side. */
 export const BOARD_BAR_MARGIN = space.lg;
+
+/** How far the bar floats above the system navigation: just clear of it, as Material's navigation bar sits. */
+export const BOARD_BAR_BOTTOM = space.xxs;
 
 /** How much of a tab page's bottom the bar covers, the system navigation under it included. */
 export function boardBarFootprint(bottomInset: number): number {
-	return BOARD_BAR_HEIGHT + BOARD_BAR_MARGIN + bottomInset;
+	return BOARD_BAR_HEIGHT + BOARD_BAR_BOTTOM + bottomInset;
 }

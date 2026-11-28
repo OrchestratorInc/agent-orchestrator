@@ -29,4 +29,29 @@ describe("buildMobileContext", () => {
 		expect(ctx.platform).toBe("other");
 		expect(ctx.app_version).toBe("unknown");
 	});
+
+	it("tags the running OTA update and its channel", () => {
+		const id = "0198A1B2-C3D4-7E5F-8A9B-0C1D2E3F4A5B";
+		const ctx = buildMobileContext({ platformOS: "ios", isPhysicalDevice: true, dev: false, appVersion: "2.4.0", update: { id, embedded: false, channel: "production" } });
+		expect(ctx.update_id).toBe(id.toLowerCase());
+		expect(ctx.update_channel).toBe("production");
+	});
+
+	it("reports the bundle shipped in the binary as embedded", () => {
+		const ctx = buildMobileContext({ platformOS: "android", isPhysicalDevice: true, dev: false, appVersion: "2.4.0", update: { id: "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", embedded: true, channel: "preview" } });
+		expect(ctx.update_id).toBe("embedded");
+		expect(ctx.update_channel).toBe("preview");
+	});
+
+	it("never forwards a malformed update id or an unknown channel", () => {
+		const ctx = buildMobileContext({ platformOS: "ios", isPhysicalDevice: true, dev: false, appVersion: "2.4.0", update: { id: "not-a-uuid /Users/x", embedded: false, channel: "my-branch" } });
+		expect(ctx.update_id).toBeUndefined();
+		expect(ctx.update_channel).toBe("other");
+	});
+
+	it("leaves the update fields out where updates are off", () => {
+		const ctx = buildMobileContext({ platformOS: "ios", isPhysicalDevice: false, dev: true, appVersion: "2.4.0" });
+		expect(ctx).not.toHaveProperty("update_id");
+		expect(ctx).not.toHaveProperty("update_channel");
+	});
 });

@@ -15,7 +15,7 @@ export function ToolbarSearch({ label, query, onQueryChange, persistent = false,
 	const toggleRef = useRef<HTMLButtonElement>(null);
 	if (persistent || open || query) {
 		return (
-			<label className="relative me-1 block w-56 min-w-0 shrink">
+			<label className="relative block w-56 min-w-0 shrink">
 				<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
 				<Input
 					aria-label={label}

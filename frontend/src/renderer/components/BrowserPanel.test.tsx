@@ -14,6 +14,7 @@ import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
+import { tabFadeClassName, tabWideActionTitleClassName } from "./TerminalTabFrame";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
 	BrowserAnnotationCancelPayload,
@@ -21,7 +22,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserDownloadsState } from "../../shared/browser-downloads";
 import type { BrowserProfileSwitchFailure } from "../../shared/browser-profiles";
-import type { BrowserRuntimeState } from "../../main/browser-view-host";
+import type { BrowserRuntimeState, BrowserTabState } from "../../main/browser-view-host";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
@@ -51,6 +52,7 @@ const hookState = vi.hoisted(() => ({
 	findState: { viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
 	selectTab: vi.fn(),
 	closeTab: vi.fn(),
+	muteTab: vi.fn(),
 	openTab: vi.fn(),
 	reorderTabs: vi.fn(),
 	closedTabs: [] as { id: string; title: string; url: string; favicon?: string }[],
@@ -64,7 +66,9 @@ const hookState = vi.hoisted(() => ({
 	annotationMode: false,
 	annotationState: { count: 0, screenshotCount: 0, hasDraft: false },
 	runtimeState: { connected: true, connecting: false, rejected: false } as BrowserRuntimeState | null,
-	tabs: [{ id: "t1", url: "", title: "", active: true }],
+	tabs: [
+		{ id: "t1", url: "", title: "", active: true },
+	] as BrowserTabState[],
 	activeTabId: "t1",
 	tabNotice: "",
 	agentBrowserActive: false,
@@ -106,6 +110,7 @@ vi.mock("../hooks/useBrowserView", () => ({
 			tabNotice: hookState.tabNotice,
 			selectTab: hookState.selectTab,
 			closeTab: hookState.closeTab,
+			muteTab: hookState.muteTab,
 			openTab: hookState.openTab,
 			reorderTabs: hookState.reorderTabs,
 			closedTabs: hookState.closedTabs,
@@ -234,6 +239,21 @@ function PersistentBrowserPanelView({
 	);
 }
 
+/** The panel without a session, as the Settings login browser uses it. */
+function SessionlessBrowserPanelView() {
+	const browserView = useBrowserView({ sessionId: "settings-login", active: true, poppedOut: false });
+	const annotationQueue = useBrowserAnnotationQueue({ sessionId: "settings-login", navUrl: browserView.navState.url });
+	return (
+		<BrowserPanelView
+			active
+			annotationQueue={annotationQueue}
+			browserView={browserView}
+			onTogglePopOut={() => undefined}
+			poppedOut={false}
+		/>
+	);
+}
+
 describe("BrowserPanel", () => {
 	const annotationSubmitListeners = new Set<(payload: BrowserAnnotationSubmitPayload) => void>();
 	const annotationCancelListeners = new Set<(payload: BrowserAnnotationCancelPayload) => void>();
@@ -266,6 +286,7 @@ describe("BrowserPanel", () => {
 		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
+		hookState.muteTab.mockReset();
 		hookState.openTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
 		hookState.closedTabs = [];
@@ -834,6 +855,18 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("menuitem", { name: /iPhone SE/ }).parentElement).toHaveClass("board-scrollbar");
 	});
 
+	it("shows the approval mode for a session's browser and leaves it out without a session", async () => {
+		const { unmount } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Approvals/ })).toBeInTheDocument();
+		unmount();
+
+		render(<SessionlessBrowserPanelView />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: "Device preset" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Approvals/ })).not.toBeInTheDocument();
+	});
+
 	it("captures the active page from the controls menu and confirms the clipboard copy", async () => {
 		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
@@ -1365,6 +1398,77 @@ describe("BrowserPanel", () => {
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
 		// Closing an inactive tab does not select it first.
 		expect(hookState.selectTab).not.toHaveBeenCalled();
+	});
+
+	it("shows a mute control on an audible tab and mutes it on click", async () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Loud app", active: true, audible: true, muted: false }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const mute = within(tabList).getByRole("button", { name: "Mute tab" });
+		expect(mute).toHaveAttribute("aria-pressed", "false");
+		await userEvent.click(mute);
+
+		expect(hookState.muteTab).toHaveBeenCalledWith("t1", true);
+	});
+
+	it("shows a pressed mute control on a muted tab and unmutes it on click", async () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Loud app", active: true, audible: true, muted: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const unmute = within(tabList).getByRole("button", { name: "Unmute tab" });
+		expect(unmute).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(unmute);
+
+		expect(hookState.muteTab).toHaveBeenCalledWith("t1", false);
+	});
+
+	it("keeps a muted control visible after the tab stops playing sound", () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Loud app", active: true, muted: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		expect(screen.getByRole("button", { name: "Unmute tab" })).toBeInTheDocument();
+	});
+
+	it("truncates the title before both controls when a tab shows mute and close", () => {
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Loud app with a long title", active: true, audible: true },
+			{ id: "t2", url: "http://localhost:4000/", title: "Quiet app with a long title", active: false },
+		];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const [loud, quiet] = within(tabList).getAllByRole("tab");
+		expect(loud).toHaveClass(tabWideActionTitleClassName);
+		expect(loud).not.toHaveClass(tabFadeClassName);
+		expect(quiet).toHaveClass(tabFadeClassName);
+		expect(quiet).not.toHaveClass(tabWideActionTitleClassName);
+	});
+
+	it("hides the mute control on a quiet tab", () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Quiet app", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		expect(within(tabList).queryByRole("button", { name: "Mute tab" })).not.toBeInTheDocument();
+		expect(within(tabList).queryByRole("button", { name: "Unmute tab" })).not.toBeInTheDocument();
+	});
+
+	it("hides the mute control on an agent tab whose audio plays on the remote host", () => {
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Agent page", active: true, audible: true, remote: { tabId: "" } },
+		];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		expect(within(tabList).queryByRole("button", { name: "Mute tab" })).not.toBeInTheDocument();
 	});
 
 	it("allows closing the final browser tab", async () => {

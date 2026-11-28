@@ -104,6 +104,9 @@ type state struct {
 // Restore is a planned return to a snapshot. Plan works it out without
 // touching anything; Apply carries it out and Undo reverses an Apply.
 type Restore struct {
+	// store, when set, is the store the snapshot came from: one a folder used
+	// before it became a repository.
+	store   string
 	top     string
 	head    string
 	current state
@@ -145,7 +148,7 @@ func Capture(ctx context.Context, workspace string, refs ...string) error {
 // Save records the worktree and index as Plan found them under ref, before Apply
 // overwrites them. `git stash apply <ref>` brings them back.
 func (r Restore) Save(ctx context.Context, ref string) error {
-	return record(ctx, r.top, r.head, r.current, ref)
+	return record(r.in(ctx), r.top, r.head, r.current, ref)
 }
 
 // record writes files as a commit shaped like git stash's on top of head and
@@ -173,6 +176,12 @@ func record(ctx context.Context, top, head string, files state, refs ...string) 
 
 // Plan works out what restoring the snapshot under ref would change.
 func Plan(ctx context.Context, workspace, ref string) (Restore, error) {
+	// A snapshot from before the folder became a repository is in its store,
+	// and is planned, applied and undone there.
+	stored, store, earlier := earlierSnapshot(ctx, workspace, ref)
+	if earlier {
+		ctx = stored
+	}
 	top, err := toplevel(ctx, workspace)
 	if err != nil {
 		return Restore{}, err
@@ -242,7 +251,7 @@ func Plan(ctx context.Context, workspace, ref string) (Restore, error) {
 	changes, indexOnly := withIndexOnly(changes, staged)
 	id := sha256.Sum256([]byte(strings.Join([]string{snapshot, head, current.worktree, current.index}, "\n")))
 	return Restore{
-		top: top, head: head, current: current, target: target, indexOnly: indexOnly,
+		store: store, top: top, head: head, current: current, target: target, indexOnly: indexOnly,
 		Changes: changes, CommitsSince: commitsSince, PlanID: hex.EncodeToString(id[:16]),
 	}, nil
 }
@@ -272,6 +281,15 @@ func withIndexOnly(changes, staged []Change) ([]Change, map[string]bool) {
 	return changes, indexOnly
 }
 
+// in points ctx at the store the snapshot came from, if it isn't the
+// folder's own.
+func (r Restore) in(ctx context.Context) context.Context {
+	if r.store == "" {
+		return ctx
+	}
+	return withStore(ctx, r.store)
+}
+
 // Apply writes the snapshot's files and index entries for every planned change.
 func (r Restore) Apply(ctx context.Context) error {
 	var write, remove []string
@@ -284,7 +302,7 @@ func (r Restore) Apply(ctx context.Context) error {
 			write = append(write, change.Path)
 		}
 	}
-	return r.write(ctx, r.target, write, remove)
+	return r.write(r.in(ctx), r.target, write, remove)
 }
 
 // Undo puts back the files and index entries Apply replaced.
@@ -299,7 +317,7 @@ func (r Restore) Undo(ctx context.Context) error {
 			write = append(write, change.Path)
 		}
 	}
-	return r.write(ctx, r.current, write, remove)
+	return r.write(r.in(ctx), r.current, write, remove)
 }
 
 // DeleteAll removes every snapshot ref under prefix.
@@ -426,7 +444,7 @@ func capture(ctx context.Context, top string, ignored []string) (state, error) {
 	if err := clearAssumeUnchanged(ctx, top, env); err != nil {
 		return state{}, err
 	}
-	if _, err := git(ctx, top, env, nil, "add", "--all"); err != nil {
+	if _, err := git(ctx, top, env, nil, append([]string{"add", "--all"}, detachedPathspec(ctx, top)...)...); err != nil {
 		return state{}, err
 	}
 	if len(ignored) > 0 {
@@ -559,7 +577,7 @@ func gitlink(ctx context.Context, top, tree string) (string, error) {
 // checkUntracked refuses a worktree whose untracked files are too many or too
 // large to copy into the object store before every turn.
 func checkUntracked(ctx context.Context, top string) error {
-	out, err := git(ctx, top, nil, nil, "ls-files", "-z", "--others", "--exclude-standard")
+	out, err := git(ctx, top, nil, nil, append([]string{"ls-files", "-z", "--others", "--exclude-standard"}, detachedPathspec(ctx, top)...)...)
 	if err != nil {
 		return err
 	}
@@ -631,8 +649,19 @@ func removeFile(top, path string) error {
 
 // toplevel returns the root of the worktree at workspace. A workspace nested in
 // some other repository, such as a home directory under version control, is
-// refused: snapshotting or restoring it would act on that whole repository.
+// refused: snapshotting or restoring it would act on that whole repository. A
+// plain folder with a detached store is its own root, and its store is
+// created the first time it is needed.
 func toplevel(ctx context.Context, workspace string) (string, error) {
+	if _, earlier := ctx.Value(storeKey{}).(string); earlier {
+		return filepath.Clean(workspace), nil
+	}
+	if store, ok := activeStore(workspace); ok {
+		if err := ensureStore(ctx, store); err != nil {
+			return "", err
+		}
+		return filepath.Clean(workspace), nil
+	}
 	top, err := git(ctx, workspace, nil, nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrNotRepository, err)
@@ -686,7 +715,9 @@ func git(ctx context.Context, dir string, env []string, stdin io.Reader, args ..
 		"-c", "splitIndex.sharedIndexExpire=never",
 	}, args...)
 	cmd := aoprocess.CommandContext(ctx, "git", full...)
-	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never"), env...)
+	// A plain folder's commands run against its detached store; the caller's
+	// env comes last, so an override such as GIT_INDEX_FILE wins.
+	cmd.Env = append(append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never"), detachedEnv(ctx, dir)...), env...)
 	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

@@ -14,8 +14,9 @@ for (const mixed of [false, true]) {
 		await page.getByRole("button", { name: "Add to chat", exact: true }).click();
 		await page.getByRole("button", { name: "1 annotation", exact: true }).click();
 		const text = mixed ? "Open src/app.ts here" : "src/app.ts";
-		const preview = page.getByRole("dialog").locator("pre");
-		await expect(preview).toHaveText(text);
+		// The composer's popover shows one annotation at a time, its quote the way back to it.
+		const preview = page.getByRole("dialog").getByRole("button", { name: text, exact: true });
+		await expect(preview).toHaveText(`“${text}”`);
 		await preview.evaluate(element => {
 			const range = document.createRange(); range.selectNodeContents(element);
 			window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
@@ -122,17 +123,13 @@ test("diagram source stays hidden behind the flowchart badge @T0", async ({ page
 	await page.getByRole("button", { name: "1 annotation", exact: true }).click();
 	const preview = page.getByRole("dialog");
 	await expect(preview.getByText("Flowchart attached", { exact: true })).toBeVisible();
-	const badge = preview.getByText("Flowchart attached", { exact: true });
-	await expect(badge.locator("..")).toContainText("1. Selected text:");
+	await expect(preview.getByText("Selected text", { exact: true })).toBeVisible();
 	await expect(preview).not.toContainText("flowchart LR");
-	const close = preview.getByRole("button", { name: "Remove annotation 1", exact: true });
-	const resting = await close.evaluate(element => getComputedStyle(element).color);
-	await close.hover();
-	const hover = await close.evaluate(element => ({ color: getComputedStyle(element).color, background: getComputedStyle(element).backgroundColor, before: getComputedStyle(element, "::before").display, transition: getComputedStyle(element).transitionProperty }));
-	expect(hover.color).not.toBe(resting);
-	expect(hover.background).toBe("rgba(0, 0, 0, 0)");
-	expect(hover.before).toBe("none");
-	expect(hover.transition).toBe("none");
+	// The composer's popover removes the annotation shown from its header.
+	const remove = preview.getByRole("button", { name: "Remove annotation 1", exact: true });
+	const resting = await remove.evaluate(element => getComputedStyle(element).color);
+	await remove.hover();
+	await expect.poll(() => remove.evaluate(element => getComputedStyle(element).color)).not.toBe(resting);
 	await page.screenshot({ path: test.info().outputPath("flowchart-badge.png") });
 	await page.keyboard.press("Escape");
 	await page.getByLabel("Message the agent").fill("Explain the first annotation.");
@@ -146,27 +143,28 @@ test("diagram source stays hidden behind the flowchart badge @T0", async ({ page
 	await expect(page.getByRole("dialog").getByText("Flowchart attached", { exact: true })).toBeVisible();
 });
 
-test("reply controls retain the existing floating layout on hover and focus @T0", async ({ page }) => {
+test("reply controls keep their own line under the bubble on hover and focus @T0", async ({ page }) => {
 	await page.setViewportSize({ width: 1000, height: 850 });
 	await page.goto("/e2e/excerpt-snapshots/harness.html");
 	await page.locator('[data-chat-message-id="question"]').hover();
 	const edit = page.getByRole("button", { name: "Copy user message", exact: true });
 	await expect(edit).toBeVisible();
-	const assertFloating = async () => {
+	const assertOwnLine = async () => {
 		expect(await edit.evaluate(element => {
 			const row = element.closest(".h-7");
 			if (!row) throw new Error("Reply action row missing");
+			// In the flow, so the row takes its own line instead of covering the reply below.
 			return getComputedStyle(row).position;
-		})).toBe("absolute");
+		})).toBe("static");
 	};
 	await page.screenshot({ path: test.info().outputPath("reply-controls.png") });
-	await assertFloating();
+	await assertOwnLine();
 	await edit.focus();
 	await page.mouse.move(0, 0);
 	await expect(edit).toBeFocused();
-	await assertFloating();
+	await assertOwnLine();
 	await page.setViewportSize({ width: 400, height: 850 });
-	await assertFloating();
+	await assertOwnLine();
 });
 
 test("captured excerpts span formatting and code and survive source deletion @T0", async ({ page }) => {
@@ -188,7 +186,7 @@ test("captured excerpts span formatting and code and survive source deletion @T0
 	});
 	await page.getByRole("button", { name: "Add to chat", exact: true }).click();
 	await page.getByRole("button", { name: "1 annotation", exact: true }).click();
-	await expect(page.getByText("1. Selected text:", { exact: true })).toBeVisible();
+	await expect(page.getByRole("dialog").getByText("Selected text", { exact: true })).toBeVisible();
     await expect(page.getByText("View raw excerpt", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Completed turn context", { exact: true })).toHaveCount(0);
 	await page.screenshot({ path: test.info().outputPath("composer-excerpt.png") });

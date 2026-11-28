@@ -32,7 +32,7 @@ func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConf
 	if err != nil {
 		return nil, err
 	}
-	argv, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
+	argv, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools, Env: cfg.Env})
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +68,9 @@ func (p *restorePlan) Ready(ctx context.Context, generation, output string) (boo
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if err := memcodeRestoreCrash(output); err != nil {
+		return false, err
+	}
 	if err := p.verifyHistory(); err != nil {
 		return false, err
 	}
@@ -91,6 +94,9 @@ func (p *restorePlan) Ready(ctx context.Context, generation, output string) (boo
 // Restored implements the native TUI adapter contract.
 func (p *restorePlan) Restored(ctx context.Context, generation, output string) (bool, error) {
 	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := memcodeRestoreCrash(output); err != nil {
 		return false, err
 	}
 	if err := p.verifyHistory(); err != nil {
@@ -191,6 +197,9 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 	for _, m := range history.Messages {
 		if m.Content == nil || m.Role != "user" && m.Role != "assistant" && m.Role != "system" && m.Role != "tool" {
 			return zero, 0, errors.New("memcode invalid native wire history")
+		}
+		if err := ValidateNativeContent(m.Content); err != nil {
+			return zero, 0, err
 		}
 	}
 	messages, err := json.Marshal(history.Messages)

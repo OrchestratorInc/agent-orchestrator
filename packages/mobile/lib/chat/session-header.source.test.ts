@@ -43,10 +43,11 @@ describe("session header controls", () => {
 		expect(session).toContain("changes={composerChanges}");
 	});
 
-	// Pull Requests is a page of its own, opened over the session so back
-	// returns to it.
-	it("opens the Pull Requests page over the session for several PRs", () => {
-		expect(session).toContain('else openPage("/prs");');
+	// Several PRs open the session's own list over the chat (the PR chip's),
+	// not the app-wide Pull Requests page.
+	it("opens the session's own PR list for several PRs", () => {
+		expect(session).toContain('else if (action === "list") setPullRequestListRequest((request) => request + 1);');
+		expect(session).not.toContain('openPage("/prs")');
 		expect(session).not.toContain("/(tabs)/prs");
 		expect(session).not.toMatch(/dismissTo\(\{\s*pathname: "\/prs"/);
 	});

@@ -7,7 +7,7 @@ Use **Connect Mobile** to pair the native phone app with your desktop.
 
 ## Pair on the same network
 
-1. Install [Orchestrator Mobile from the App Store](https://apps.apple.com/app/ao-mobile/id6792552173) or [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev). Open the desktop app and go to **Settings → Connect Mobile**.
+1. Install [Orchestrator Mobile from the App Store](https://apps.apple.com/app/ao-mobile/id6792552173) or [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev). Open the desktop app and go to **Settings → Mobile**.
 2. Put both devices on the same trusted network. In Connect Mobile, choose **Generate** to turn on the separate mobile connection. The app shows an address, a pairing code, and a QR when a reachable endpoint is ready; a blurred or preparing QR cannot pair a phone. The QR and the code pair one device and expire after 10 minutes; the app replaces them as they are used or expire.
 3. In the mobile app, tap **Pair Desktop** during onboarding. Newer mobile builds call this button **Pair a machine**. From an unpaired screen, tap **Scan pairing code**. The app opens the scanner. Scan the desktop QR. The phone gets its own access, which you can remove later without affecting other devices.
 4. If scanning fails or camera access is unavailable, tap **Enter details manually** on the pairing screen and enter the address, port, and pairing code shown on the desktop. A phone app from before pairing codes needs the password instead: choose **Show password** on the desktop. The listener normally starts at port `3011` but can choose another free port. Use the displayed address, not `127.0.0.1`, which means the phone itself when entered there. A failed scan offers **Try again**.

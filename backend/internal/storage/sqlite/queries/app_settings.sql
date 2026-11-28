@@ -15,6 +15,10 @@ UPDATE app_settings SET computer_use = ?, updated_at = ? WHERE id = 1;
 
 -- name: SetCommitAttribution :exec
 UPDATE app_settings SET commit_attribution = ?, updated_at = ? WHERE id = 1;
+
+-- name: SetSkillSharing :exec
+UPDATE app_settings SET skill_sharing = ?, updated_at = ? WHERE id = 1;
+
 -- name: SetLimitHistory :exec
 UPDATE app_settings SET limit_history = ?, updated_at = ? WHERE id = 1;
 

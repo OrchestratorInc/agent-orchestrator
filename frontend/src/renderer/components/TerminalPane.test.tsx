@@ -1405,6 +1405,34 @@ describe("terminal restore", () => {
 		}
 	});
 
+	it("says a Cloud session that moved to another computer continues there when its restore is refused", async () => {
+		terminalState.value = "exited";
+		cloudRestoreMock.mockRejectedValueOnce(new CloudCpError("moved away (CP text)", { status: 409, code: "SESSION_MOVED_AWAY" }));
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			expect(await screen.findByText(
+				"This session moved to another computer and continues there. To use Orchestrator Cloud again, move it from that computer.",
+			)).toBeInTheDocument();
+			expect(screen.queryByText("moved away (CP text)")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("offers no Restore on a Cloud session marked as moved away, and says where it continues", () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", movedAway: true }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(screen.getByTestId("moved-away")).toHaveTextContent("This session moved to another computer and continues there.");
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
 		// Only the sharer's organization restores a session; a guest's restore
 		// would not even reach the control plane (the session is not in their

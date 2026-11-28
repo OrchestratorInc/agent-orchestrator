@@ -158,6 +158,7 @@ export function ShellTerminalTab({
 		const editingContent = isEditing ? (
 			<input
 				aria-label={t("terminal.rename", { title })}
+				data-field="inline"
 				className={terminalTabRenameInputClassName}
 				onBlur={commit}
 				onChange={(event) => setDraft(event.target.value)}
@@ -222,6 +223,7 @@ export function ShellTerminalTab({
 			{isEditing ? (
 				<input
 					aria-label={t("terminal.rename", { title })}
+					data-field="inline"
 					className={cn("min-w-flex-min rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent", agent ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max")}
 					onBlur={commit}
 					onChange={(event) => setDraft(event.target.value)}
