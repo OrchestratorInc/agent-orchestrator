@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // Steering: guidance delivered into a turn that is already running.
@@ -482,6 +483,10 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	if msg.ClientMessageID != "" {
 		delivery, created, reserveErr := c.store.ReserveSteerDelivery(
 			ctx, c.conversation.ID, msg.ClientMessageID, requestJSON, c.now())
+		if errors.Is(reserveErr, store.ErrChatAttachmentDiscarded) {
+			// Refused before anything was reserved or sent: a definite answer.
+			return SteerResult{}, reserveErr
+		}
 		if reserveErr != nil {
 			return SteerResult{}, fmt.Errorf("%w: reserve delivery: %w",
 				ErrSteerDeliveryUncertain, reserveErr)

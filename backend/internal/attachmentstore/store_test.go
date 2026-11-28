@@ -495,6 +495,24 @@ func TestStoreSweepUploadsRunsWithoutANewUpload(t *testing.T) {
 	}
 }
 
+// On a case-insensitive volume Open finds a file by another spelling of its
+// name; OpenExact takes only the stored one.
+func TestStoreOpenExactRefusesAnotherSpelling(t *testing.T) {
+	store := New(t.TempDir())
+	ctx := context.Background()
+	if err := store.PutCanonical(ctx, "ao-1", "attachment-shot.png", []byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	file, _, err := store.OpenExact(ctx, "ao-1", "attachment-shot.png")
+	if err != nil {
+		t.Fatalf("OpenExact stored spelling: %v", err)
+	}
+	_ = file.Close()
+	if _, _, err := store.OpenExact(ctx, "ao-1", "attachment-shot.PNG"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("OpenExact another spelling = %v, want fs.ErrNotExist", err)
+	}
+}
+
 func TestStoreOpenServesLargeCanonicalFile(t *testing.T) {
 	dataDir := t.TempDir()
 	dir := filepath.Join(dataDir, durableDir, "ao-1")

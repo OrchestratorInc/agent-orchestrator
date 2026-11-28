@@ -223,12 +223,12 @@ func TestChatAttachmentReclaimedImageReferenceRefused(t *testing.T) {
 	}
 	at := histClock.Add(3 * time.Second)
 	gone := domain.ConversationMessage{ID: "m1", Text: "look", Origin: domain.MessageOriginHuman, DeliveryContentJSON: image(leasedDropped)}
-	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", gone, "turn-1", at); err == nil {
-		t.Fatal("a message sending a reclaimed file's image was accepted")
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", gone, "turn-1", at); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
+		t.Fatalf("message sending a reclaimed file's image = %v, want ErrChatAttachmentDiscarded", err)
 	}
 	steer := `{"text":"look","content":` + image(leasedDropped) + `,"origin":"human","settings":{}}`
-	if _, _, err := s.ReserveSteerDelivery(ctx, conversation, "steer-1", steer, at); err == nil {
-		t.Fatal("a steer sending a reclaimed file's image was reserved")
+	if _, _, err := s.ReserveSteerDelivery(ctx, conversation, "steer-1", steer, at); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
+		t.Fatalf("steer sending a reclaimed file's image = %v, want ErrChatAttachmentDiscarded", err)
 	}
 
 	// A fork copies its parent's files under the same names: the other session

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // A native image may name a file the session already staged instead of carrying
@@ -31,13 +33,19 @@ var stagedImageBytes = []byte("\x89PNG\r\n\x1a\nstaged image bytes")
 // stagedImagesStub records what the steer and queued-edit routes hand the service.
 type stagedImagesStub struct {
 	*fakeConversationService
-	steered ports.ChatUserMessage
-	edited  chatsvc.QueuedMessageEdit
+	steered  ports.ChatUserMessage
+	edited   chatsvc.QueuedMessageEdit
+	steerErr error
 }
 
 func (s *stagedImagesStub) Steer(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (chatsvc.SteerResult, error) {
 	s.steered = message
-	return chatsvc.SteerResult{}, nil
+	return chatsvc.SteerResult{}, s.steerErr
+}
+
+func (s *stagedImagesStub) SteerOrSend(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage, _ bool) (chatsvc.SteerOrSendResult, error) {
+	s.steered = message
+	return chatsvc.SteerOrSendResult{}, s.steerErr
 }
 
 func (s *stagedImagesStub) EditQueuedTurn(_ context.Context, _ domain.SessionID, _ string, edit chatsvc.QueuedMessageEdit) error {
@@ -135,7 +143,7 @@ func TestSteerAndQueuedEditLoadStagedImagePath(t *testing.T) {
 	image := []map[string]string{stagedImage(".ao/attachments/" + stagedImageName)}
 
 	if status, body := postStagedImageJSON(t, server, "/api/v1/sessions/p1-1/conversation/steer",
-		map[string]any{"text": "look", "attachments": image}); status != http.StatusAccepted {
+		map[string]any{"text": "look", "attachments": image, "clientMessageId": "steer-1"}); status != http.StatusAccepted {
 		t.Fatalf("steer status = %d, body = %s", status, body)
 	}
 	wantStagedImageContent(t, stub.steered.Content)
@@ -147,6 +155,42 @@ func TestSteerAndQueuedEditLoadStagedImagePath(t *testing.T) {
 	wantStagedImageContent(t, stub.edited.Content)
 }
 
+// A steer is committed by its reservation, which only a clientMessageId makes:
+// one that names a staged image without it could lose the file afterwards.
+func TestStagedImageSteerNeedsAClientMessageID(t *testing.T) {
+	for _, route := range []string{"/api/v1/sessions/p1-1/conversation/steer", "/api/v1/sessions/p1-1/conversation/steer-or-send"} {
+		stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
+		server := stagedImagesServer(t, stub)
+		status, body := postStagedImageJSON(t, server, route, map[string]any{
+			"text": "look", "attachments": []map[string]string{stagedImage(".ao/attachments/" + stagedImageName)},
+		})
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "ATTACHMENT_PATH_UNSUPPORTED") {
+			t.Fatalf("%s: status = %d, body = %s; want ATTACHMENT_PATH_UNSUPPORTED", route, status, body)
+		}
+	}
+}
+
+// A send or steer the lease triggers refused (its staged file was taken after
+// it was read) was not accepted: the client gets a definite answer.
+func TestStagedImageDiscardedBeforeAcceptanceIsADefiniteRefusal(t *testing.T) {
+	discarded := fmt.Errorf("append: %w", store.ErrChatAttachmentDiscarded)
+	image := []map[string]string{stagedImage(".ao/attachments/" + stagedImageName)}
+	for _, tc := range []struct {
+		route string
+		body  map[string]any
+	}{
+		{"/api/v1/sessions/p1-1/conversation/messages", map[string]any{"text": "look", "attachments": image}},
+		{"/api/v1/sessions/p1-1/conversation/steer", map[string]any{"text": "look", "attachments": image, "clientMessageId": "steer-1"}},
+	} {
+		stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{sendErr: discarded}, steerErr: discarded}
+		server := stagedImagesServer(t, stub)
+		status, body := postStagedImageJSON(t, server, tc.route, tc.body)
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "ATTACHMENT_NOT_FOUND") {
+			t.Fatalf("%s: status = %d, body = %s; want ATTACHMENT_NOT_FOUND", tc.route, status, body)
+		}
+	}
+}
+
 func TestStagedImagePathRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -154,6 +198,7 @@ func TestStagedImagePathRefusals(t *testing.T) {
 		code  string
 	}{
 		{"not staged by this session", stagedImage(".ao/attachments/attachment-ffff.png"), "ATTACHMENT_NOT_FOUND"},
+		{"another spelling of the stored name", stagedImage(".ao/attachments/" + strings.TrimSuffix(stagedImageName, ".png") + ".PNG"), "ATTACHMENT_NOT_FOUND"},
 		{"outside the attachment folder", stagedImage("src/" + stagedImageName), "INVALID_ATTACHMENT_PATH"},
 		{"traversal", stagedImage(".ao/attachments/../../etc/passwd"), "INVALID_ATTACHMENT_PATH"},
 		{"nested", stagedImage(".ao/attachments/nested/" + stagedImageName), "INVALID_ATTACHMENT_PATH"},

@@ -1273,6 +1273,8 @@ func (s *Store) AppendUserMessage(
 	turnID string,
 	now time.Time,
 ) (created bool, err error) {
+	// The lease triggers refuse a message naming a file cleanup took.
+	defer func() { err = chatAttachmentRefusal(err) }()
 	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", false, now)
 }
 
@@ -5533,6 +5535,8 @@ func (s *Store) ReserveSteerDelivery(
 	conversationID, clientMessageID, requestJSON string,
 	now time.Time,
 ) (delivery domain.ConversationSteerDelivery, created bool, err error) {
+	// The lease triggers refuse a steer naming a file cleanup took.
+	defer func() { err = chatAttachmentRefusal(err) }()
 	return reserveConversationDelivery(
 		ctx,
 		s,

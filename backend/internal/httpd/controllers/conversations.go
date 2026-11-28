@@ -22,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // Native chat images are sent to the provider and retained in conversation
@@ -1212,7 +1213,8 @@ func (c *ConversationsController) readStagedImage(ctx context.Context, sessionID
 	if c.Renders == nil {
 		return nil, notFound
 	}
-	file, info, err := c.Renders.Open(ctx, sessionID, name)
+	// Exactly the stored spelling: the name is recorded for the lease triggers.
+	file, info, err := c.Renders.OpenExact(ctx, sessionID, name)
 	if err != nil {
 		return nil, notFound
 	}
@@ -1445,6 +1447,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 
 func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err error, fallbackCode, fallbackMessage string) {
 	switch {
+	case errors.Is(err, store.ErrChatAttachmentDiscarded):
+		// The accepting write refused a staged file cleanup took after it was
+		// read: nothing was accepted, and the file is gone.
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "ATTACHMENT_NOT_FOUND", "staged attachment was discarded; attach it again", nil)
 	case errors.Is(err, chatsvc.ErrFileReferenceInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_FILE_REFERENCE_INVALID", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrAnnotationLimit):

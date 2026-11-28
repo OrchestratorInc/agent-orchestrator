@@ -449,6 +449,30 @@ func TestAcceptedSteerReplaysAfterControllerRestartWithoutProviderRedispatch(t *
 	}
 }
 
+type discardedImageSteerStore struct {
+	chatsvc.Store
+}
+
+func (discardedImageSteerStore) ReserveSteerDelivery(context.Context, string, string, string, time.Time) (domain.ConversationSteerDelivery, bool, error) {
+	return domain.ConversationSteerDelivery{}, false, fmt.Errorf("reserve: %w", store.ErrChatAttachmentDiscarded)
+}
+
+// A steer whose reservation the lease triggers refused (a staged image cleanup
+// took after it was read) reached nothing: the answer is definite, and the
+// provider is never asked.
+func TestSteerRefusedForADiscardedImageIsDefinite(t *testing.T) {
+	h, provider := steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store {
+		return discardedImageSteerStore{Store: st}
+	})
+	_, err := h.svc.Steer(context.Background(), testSession, ports.ChatUserMessage{Text: "look", ClientMessageID: "steer-discarded"})
+	if !errors.Is(err, store.ErrChatAttachmentDiscarded) || errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("err = %v, want a definite ErrChatAttachmentDiscarded", err)
+	}
+	if calls := provider.steers(); len(calls) != 0 {
+		t.Fatalf("provider received %d steer attempts, want none", len(calls))
+	}
+}
+
 func TestReservedSteerStaysUncertainAcrossRetryAndRestart(t *testing.T) {
 	var flaky *failSteerCompletionStore
 	h, provider := steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store {
