@@ -60,10 +60,13 @@ export function isActiveInstallJob(job: InstallJob | undefined): boolean {
 }
 
 // Startup requirements are read through a process-free GET. An explicit user
-// request to check again first forces the daemon's normal agent refresh so
-// identity-sensitive adapters can perform their bounded validation probe.
+// request to check again first re-runs every agent installation check, so
+// identity-sensitive adapters can perform their bounded validation probe. It
+// skips sign-in probes and answers as soon as one agent is confirmed: a full
+// agent refresh also probes sign-in for every agent and can outrun the
+// request timeout.
 export async function checkRequirementsAgain(onRefetchRequirements: () => Promise<unknown> | void): Promise<void> {
-	const { error } = await apiClient.POST("/api/v1/agents/refresh");
+	const { error } = await apiClient.POST("/api/v1/system/requirements/recheck");
 	if (error) throw apiErrorException(error, "Could not refresh agent inventory.");
 	await onRefetchRequirements();
 }

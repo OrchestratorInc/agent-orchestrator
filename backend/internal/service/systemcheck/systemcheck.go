@@ -43,6 +43,7 @@ type Report struct {
 type HarnessCatalog interface {
 	RefreshFresh(ctx context.Context) (agentsvc.Inventory, error)
 	FindInstalledBinary(ctx context.Context) (agentsvc.Info, agentsvc.Presence)
+	RecheckInstalledBinary(ctx context.Context) (agentsvc.Info, agentsvc.Presence)
 }
 
 // GitHubAuthTerminalOpener starts the reviewed GitHub CLI login command in a
@@ -98,7 +99,25 @@ func (s *Service) CheckStartup(ctx context.Context) (Report, error) {
 	return reportFor([]Requirement{
 		s.checkGit(),
 		s.checkTmux(),
-		s.checkStartupHarness(ctx),
+		startupHarnessRequirement(s.harnesses.FindInstalledBinary(ctx)),
+		s.checkGH(),
+	}), nil
+}
+
+// RecheckStartup answers the startup gate's "Check again". It reports the same
+// requirements as CheckStartup, but re-runs every agent installation check,
+// including the identity probes the process-free startup check skips, so an
+// agent installed or repaired since the last check is found. It still never
+// probes authentication, which is what made a full agent refresh too slow for
+// this button.
+func (s *Service) RecheckStartup(ctx context.Context) (Report, error) {
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
+	return reportFor([]Requirement{
+		s.checkGit(),
+		s.checkTmux(),
+		startupHarnessRequirement(s.harnesses.RecheckInstalledBinary(ctx)),
 		s.checkGH(),
 	}), nil
 }
@@ -217,12 +236,12 @@ func (s *Service) checkHarness(ctx context.Context) Requirement {
 	return Requirement{ID: "harness", Label: label, Satisfied: true, Required: true, Detail: strings.Join(labels, ", ")}
 }
 
-// checkStartupHarness verifies only that one supported agent executable can
-// be resolved. Authentication is intentionally deferred: many agent CLIs
-// determine it by starting a process, which must not delay first render.
-func (s *Service) checkStartupHarness(ctx context.Context) Requirement {
+// startupHarnessRequirement turns an agent search into the startup gate's
+// harness requirement. The search only verifies that one supported agent
+// executable can be resolved. Authentication is intentionally deferred: many
+// agent CLIs determine it by starting a process, which must not delay the gate.
+func startupHarnessRequirement(info agentsvc.Info, search agentsvc.Presence) Requirement {
 	const label = "agent harness"
-	info, search := s.harnesses.FindInstalledBinary(ctx)
 	if search == agentsvc.PresenceUnconfirmed {
 		// A slow or failed check is not proof that no agent is installed, so it
 		// must not block startup. The checks keep running in the background, and

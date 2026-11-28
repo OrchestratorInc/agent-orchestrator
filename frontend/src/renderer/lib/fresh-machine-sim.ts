@@ -188,6 +188,11 @@ export async function simulateFreshMachine(input: Request, send: () => Promise<R
 	const path = new URL(input.url).pathname;
 	const method = input.method;
 	if (method === "GET" && path === "/api/v1/system/requirements") return requirements(send);
+	// "Check again" on the missing-git screen: pretend the person installed it.
+	if (method === "POST" && path === "/api/v1/system/requirements/recheck") {
+		installed.add("git");
+		return requirements(send);
+	}
 	if (method === "GET" && path.startsWith("/api/v1/agents/readiness")) return agentReadiness(send);
 	if (method === "POST" && path === "/api/v1/agents/readiness/ensure") return agentReadiness(send);
 	// "Check again" on the missing-git screen: pretend the person installed it.

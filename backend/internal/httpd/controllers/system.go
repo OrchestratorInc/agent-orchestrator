@@ -16,6 +16,7 @@ import (
 // preflight the desktop loading screen runs before showing the board.
 type SystemChecker interface {
 	CheckStartup(ctx context.Context) (systemcheck.Report, error)
+	RecheckStartup(ctx context.Context) (systemcheck.Report, error)
 	CheckGitHubAuth(ctx context.Context) (systemcheck.Requirement, error)
 	OpenGitHubAuthTerminal(ctx context.Context) (shellterm.ShellTerminal, error)
 }
@@ -28,6 +29,7 @@ type SystemController struct {
 // Register mounts the system requirements route on the supplied router.
 func (c *SystemController) Register(r chi.Router) {
 	r.Get("/system/requirements", c.requirements)
+	r.Post("/system/requirements/recheck", c.recheckRequirements)
 	r.Get("/system/github-auth", c.githubAuth)
 	r.Post("/system/github-auth/terminal", c.openGitHubAuthTerminal)
 }
@@ -64,6 +66,21 @@ func (c *SystemController) requirements(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	report, err := c.Checks.CheckStartup(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, report)
+}
+
+// recheckRequirements backs the startup dialog's "Check again". Unlike the
+// cached GET it re-runs the agent installation checks, so it is a POST.
+func (c *SystemController) recheckRequirements(w http.ResponseWriter, r *http.Request) {
+	if c.Checks == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/system/requirements/recheck")
+		return
+	}
+	report, err := c.Checks.RecheckStartup(r.Context())
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
