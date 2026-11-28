@@ -1204,7 +1204,7 @@ export function steerAnnotations(content: SteerContent = []): ChatAnnotationSumm
 }
 
 export function humanVisibleText(text: string): string {
-	if (!text.endsWith(WORKER_REPORT_CLOSE)) return text;
+	if (!text.trimEnd().endsWith(WORKER_REPORT_CLOSE)) return text;
 	const reportStart = text.lastIndexOf(`\n\n${WORKER_REPORT_OPEN}\n`);
 	if (reportStart < 0) return text;
 	return text.slice(0, reportStart);
@@ -1897,8 +1897,11 @@ export function ActivityRow({
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
-	else if (renderRef) content = <RenderFrame render={renderRef} />;
-	else if (artifactRef) content = <RenderFrame artifact={artifactRef} foldKey={activity.id} />;
+	else if (renderRef || artifactRef) content = (
+		<div className="min-w-0" data-chat-activity-id={activity.id}>
+			{renderRef ? <RenderFrame render={renderRef} /> : <RenderFrame artifact={artifactRef!} foldKey={activity.id} />}
+		</div>
+	);
 	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;
@@ -3651,7 +3654,7 @@ export function SteerMessage({
 	const senderHref = senderSessionId && senderProjectId
 		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
 		: undefined;
-	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : humanVisibleText(text);
 	const { body, attachments } = stagedAttachmentParts(visibleText);
 	// Only the person's own steer is marked; a steer from another session is not theirs.
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);

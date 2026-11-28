@@ -2456,6 +2456,44 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it("adds text selected in a rendered page, only from the frame the reader is using, and the chip leads back to it", () => {
+		const snapshot = structuredClone(chatFixtureSettled);
+		const at = snapshot.items.findIndex((item) => item.id === "a-4");
+		snapshot.items[at] = {
+			kind: "activity", id: "page-1", turnId: "turn-1", sequence: 6, revision: 3, activityKind: "system", status: "completed",
+			summary: "Webhook flow", createdAt: snapshot.items[at]!.createdAt,
+			detail: { event: "render", render: { id: "r1", title: "Webhook flow", height: 300, path: "/api/v1/sessions/proj-1/renders/r1" } },
+		} as ConversationActivity;
+		render(<ChatWorkspace snapshot={snapshot} excerptsEnabled />);
+		const frame = screen.getByTitle("Webhook flow") as HTMLIFrameElement;
+		const box = { left: 10, top: 10, width: 80, height: 20 };
+		const select = (text: string, source: Window | null = frame.contentWindow) => act(() => {
+			window.dispatchEvent(new MessageEvent("message", { source, data: { jsonrpc: "2.0", method: "ao/selection", params: text ? { text, first: box, extent: box } : { text } } }));
+		});
+		const selected = "Are fewer than 20 calls already waiting?";
+		select(selected);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		act(() => frame.focus());
+		select(selected, window);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		select(selected);
+		expect(screen.getByRole("button", { name: "Add to chat" })).toBeInTheDocument();
+		select("");
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		select(selected);
+		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		const row = frame.closest<HTMLElement>("[data-chat-activity-id]")!;
+		expect(row.dataset.chatActivityId).toBe("page-1");
+		const reveal = vi.spyOn(row, "scrollIntoView");
+		vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 900, 600, 300));
+		vi.spyOn(screen.getByRole("log", { name: "Conversation" }), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 0; });
+		fireEvent.click(screen.getByRole("button", { name: selected }));
+		expect(reveal).toHaveBeenCalled();
+	});
+
 	it.each(["Win32", "Linux x86_64", "MacIntel"])("adds selected chat text with the platform shortcut on %s", (platform) => {
 		vi.mocked(isMacPlatform).mockReturnValue(platform === "MacIntel");
 		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;

@@ -27,6 +27,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -1323,18 +1324,24 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, m.chatPreflightEnv(cfg, project.Config.Env)); err != nil {
-			fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
-				errors.Is(err, ports.ErrChatDriverUnavailable) ||
-				errors.Is(err, ports.ErrChatDriverIncompatible) ||
-				errors.Is(err, ports.ErrChatAuthRequired)
-			if modeExplicitlyRequested || !fallbackAllowed ||
-				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", agentlaunch.RedactError(err, project.Config.Env))
+		} else {
+			env, err := m.chatPreflightEnv(cfg, project.Config.Env)
+			if err != nil {
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 			}
-			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
-				"harness", cfg.Harness, "error", agentlaunch.RedactError(err, project.Config.Env))
-			mode = domain.SessionModeTUI
+			if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, env); err != nil {
+				fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
+					errors.Is(err, ports.ErrChatDriverUnavailable) ||
+					errors.Is(err, ports.ErrChatDriverIncompatible) ||
+					errors.Is(err, ports.ErrChatAuthRequired)
+				if modeExplicitlyRequested || !fallbackAllowed ||
+					errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", agentlaunch.RedactError(err, project.Config.Env))
+				}
+				m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
+					"harness", cfg.Harness, "error", agentlaunch.RedactError(err, project.Config.Env))
+				mode = domain.SessionModeTUI
+			}
 		}
 		if mode == domain.SessionModeChat {
 			checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
@@ -5138,6 +5145,10 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		}
 	}
 	m.startupTaskPreparations = nil
+	// Finish draft-attachment reclaims a previous run released or let expire.
+	if err := m.ReclaimChatAttachments(ctx); err != nil {
+		m.logger.Warn("reconcile: staged chat attachments could not be reclaimed", "error", err)
+	}
 	for _, interrupted := range m.startupProvisioningRetries {
 		id := interrupted.ID
 		rec, ok, err := m.store.GetSession(ctx, id)
@@ -7581,18 +7592,22 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
 func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
-	return m.runtimeEnvForHarness(id, project, issue, projectEnv, "")
+	env, _ := m.runtimeEnvForHarness(id, project, issue, projectEnv, "")
+	return env
 }
 
 // runtimeEnvForHarness is runtimeEnv for a session of harness, which decides
 // the AO-stored provider keys it receives (providerkeys.ForSession). An empty
 // harness receives every key.
-func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, harness domain.AgentHarness) map[string]string {
+func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, harness domain.AgentHarness) (map[string]string, error) {
 	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id), harness)
+	if env == nil {
+		return nil, err
+	}
 	if err != nil {
 		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
 	}
-	return env
+	return env, nil
 }
 
 // chatPreflightEnv is the environment a new Chat session will launch with,
@@ -7600,33 +7615,61 @@ func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.Proje
 // runtimeEnvForHarness, so admission and launch agree on which provider keys
 // exist. Subscription-account environment is left to the launch: resolving it
 // now would bind the provider default to a session that does not exist yet.
-func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]string) map[string]string {
-	env, _ := m.runtimeEnvChecked("", cfg.ProjectID, cfg.IssueID, projectEnv, cfg.AgentAccountID, cfg.Harness)
-	return env
+func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]string) (map[string]string, error) {
+	return m.runtimeEnvChecked("", cfg.ProjectID, cfg.IssueID, projectEnv, cfg.AgentAccountID, cfg.Harness)
 }
 
-// runtimeEnvChecked is runtimeEnv that also reports why the session's account
-// environment could not be resolved, for callers that must not go on under
-// another login (an account move's preflight). A nonempty accountID replaces
-// the session's binding.
+// loadHarnessEndpointEnv resolves the custom endpoint a launch of harness
+// receives with the project's env: the saved endpoint, or the project's own
+// gateway and key when it points the harness at another origin. A project
+// gateway with no key of its own, or an endpoint that cannot be read, stops
+// the launch, so no credential is sent to a gateway it was not meant for. No
+// endpoint at all leaves the usual launch path.
+func (m *Manager) loadHarnessEndpointEnv(harness domain.AgentHarness, projectEnv map[string]string, caseInsensitive bool) (map[string]string, error) {
+	env, err := harnessendpoint.ForDataDir(m.dataDir).ProjectEnv(string(harness), projectEnv, caseInsensitive)
+	if err != nil {
+		return nil, fmt.Errorf("load custom endpoint for %s: %w", harness, err)
+	}
+	return env, nil
+}
+
+// runtimeEnvChecked reports endpoint failures without returning a usable
+// environment. An account lookup failure may return a partial environment.
+// A nonempty accountID replaces the session's binding for this lookup.
 func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string, harness domain.AgentHarness) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
+	endpointEnv, err := m.loadHarnessEndpointEnv(harness, projectEnv, caseInsensitive)
+	if err != nil {
+		return nil, err
+	}
+	// The project's own endpoint values apply even when the saved endpoint
+	// does not (none is saved, or the project moved to another origin), as for
+	// reviewers: Codex's AO-prefixed keys are otherwise stripped with other
+	// project env and never restored.
+	if spec, ok := harnessendpoint.Lookup(string(harness)); ok {
+		endpointEnv = spec.WithProjectEnv(endpointEnv, projectEnv, caseInsensitive)
+	}
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
-	if m.dataDir != "" {
-		overridden := func(key string) bool {
-			for configured := range projectEnv {
-				if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
-					return true
-				}
-			}
-			return false
+	// projectSets reports whether the project sets key itself, matching
+	// names the way the platform's environment does.
+	projectSets := func(key string) bool {
+		if _, ok := projectEnv[key]; ok || !caseInsensitive {
+			return ok
 		}
+		for configured := range projectEnv {
+			if strings.EqualFold(configured, key) {
+				return true
+			}
+		}
+		return false
+	}
+	if m.dataDir != "" {
 		keys, _, err := providerkeys.ForSession(m.dataDir, string(harness))
 		if err != nil {
 			m.logger.Warn("provider environment unavailable", "error", err)
 		}
 		for key, value := range keys {
-			if !overridden(key) {
+			if !projectSets(key) {
 				setProtectedEnv(env, key, value, caseInsensitive)
 			}
 		}
@@ -7636,7 +7679,7 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		// exported nothing; a value AO never touched is kept. An unreadable
 		// store withholds the harness's subscription keys rather than none.
 		for key, value := range providerkeys.Withheld(m.dataDir, string(harness)) {
-			if !overridden(key) {
+			if !projectSets(key) {
 				setProtectedEnv(env, key, value, caseInsensitive)
 			}
 		}
@@ -7670,6 +7713,15 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserURL] = m.agentBrowserURL
 	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
+	// The custom endpoint replaces any stored or account credential. It is
+	// applied as ProjectEnv resolved it, with the project's endpoint values
+	// already folded in and validated, and never looked up again here: the
+	// URL that was checked is the URL the process gets, and the variables it
+	// clears (competing credentials, provider switches) stay blank even when
+	// the project sets them.
+	for key, value := range endpointEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
@@ -7766,7 +7818,10 @@ func (m *Manager) launchRuntimeEnv(id domain.SessionID, project domain.ProjectID
 }
 
 func (m *Manager) launchRuntimeEnvForHarness(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, harness domain.AgentHarness) (map[string]string, string, error) {
-	env := m.runtimeEnvForHarness(id, project, issue, projectEnv, harness)
+	env, err := m.runtimeEnvForHarness(id, project, issue, projectEnv, harness)
+	if err != nil {
+		return nil, "", err
+	}
 	if m.browserCapabilities == nil {
 		return env, "", nil
 	}
@@ -8220,7 +8275,13 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 	}
 	env := spawnEnv(rec.ID, rec.ProjectID, rec.IssueID, m.dataDir, nil)
 	if project, err := m.loadProject(ctx, rec.ProjectID); err == nil {
-		env = m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+		resolved, envErr := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+		if envErr == nil {
+			env = resolved
+		} else {
+			m.logger.Warn("workspace cleanup: runtime env unavailable; agent cleanup using AO env only",
+				"sessionID", rec.ID, "error", envErr)
+		}
 	} else {
 		m.logger.Warn("workspace cleanup: project env unavailable; agent cleanup using AO env only",
 			"sessionID", rec.ID, "projectID", rec.ProjectID, "error", err)

@@ -131,6 +131,9 @@ type AgentLimitReading struct {
 	UsedPercent     float64
 	ResetsAt        *time.Time
 	ReadAt          time.Time
+	// OrgID is the organization the login belongs to, empty when the provider
+	// reports none or the reading predates it.
+	OrgID string
 }
 
 // AgentAccountLimits is what the provider's CLI reports about an account's

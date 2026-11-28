@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiClient } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
+import { markApiError } from "../lib/reported-errors";
 
 export type BackgroundTaskReading = components["schemas"]["BackgroundTasksResponse"];
 export type BackgroundTask = components["schemas"]["BackgroundTaskResponse"];
@@ -13,6 +16,9 @@ function isTaskReading(data: BackgroundTaskReading | undefined): data is Backgro
 		&& data.tasks.every((task) => !!task && typeof task === "object")
 		&& ["ready", "partial", "unavailable"].includes(data.availability);
 }
+
+const missingTaskRoute = new AoError("BACKGROUND_TASKS_UNSUPPORTED", "This host does not report background tasks");
+markApiError(missingTaskRoute);
 
 const selectReadings = (data: components["schemas"]["ListBackgroundTasksResponse"]) =>
 	new Map(data.sessions.map((reading) => [reading.sessionId, reading]));
@@ -46,19 +52,20 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
  * Only attached providers are inspected; this read never wakes an agent.
  * `fast` reads every 2 s, for the side panel's Background tasks tab.
  */
-export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = false) {
+export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = false, hostId?: string) {
 	return useQuery({
-		queryKey: [...backgroundTasksQueryRoot, sessionId],
+		queryKey: [...backgroundTasksQueryRoot, sessionUiKey(sessionId, hostId)],
 		enabled,
 		queryFn: async ({ signal }) => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/background-tasks", {
+			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/background-tasks", {
 				params: { path: { sessionId } }, signal,
 			});
+			if (response?.status === 404) throw missingTaskRoute;
 			if (error) throw error;
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
 			return data;
 		},
-		refetchInterval: fast ? 2_000 : 5_000,
+		refetchInterval: (query) => query.state.error === missingTaskRoute ? 60_000 : fast ? 2_000 : 5_000,
 		staleTime: 1_000,
 		retry: false,
 	});
@@ -68,16 +75,16 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = f
  * Stops one provider-owned task. A 409 means it already settled or this
  * provider cannot stop it: the next reading tells the truth, so it is not an error.
  */
-export function useStopBackgroundTask(sessionId: string) {
+export function useStopBackgroundTask(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async (taskId: string) => {
-			const { error, response } = await apiClient.POST("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", {
+			const { error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", {
 				params: { path: { sessionId, taskId } },
 			});
 			if (error && response.status !== 409) throw error;
 		},
-		onSettled: () => queryClient.invalidateQueries({ queryKey: [...backgroundTasksQueryRoot, sessionId] }),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: [...backgroundTasksQueryRoot, sessionUiKey(sessionId, hostId)] }),
 	});
 }
 
@@ -107,17 +114,18 @@ export function useBackgroundTaskOutput(
 	sessionId: string,
 	taskId: string,
 	runId: string | undefined,
-	{ enabled, live, over }: { enabled: boolean; live: boolean; over: boolean },
+	{ enabled, live, over, hostId }: { enabled: boolean; live: boolean; over: boolean; hostId?: string },
 ) {
 	const queryClient = useQueryClient();
-	const queryKey = backgroundTaskOutputQueryKey(sessionId, taskId, runId);
+	const queryKey = backgroundTaskOutputQueryKey(sessionUiKey(sessionId, hostId), taskId, runId);
 	return useQuery({
 		queryKey,
 		enabled,
 		queryFn: async ({ signal }) => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
+			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
 				params: { path: { sessionId, taskId } }, signal,
 			});
+			if (response?.status === 404) throw missingTaskRoute;
 			if (error) throw error;
 			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
 				throw new AoError("BACKGROUND_TASK_OUTPUT_INVALID", "Invalid background task output response");
@@ -143,7 +151,7 @@ export function useBackgroundTaskOutput(
 			}
 			return data as BackgroundTaskOutput;
 		},
-		refetchInterval: live ? 1_000 : false,
+		refetchInterval: (query) => !live ? false : query.state.error === missingTaskRoute ? 60_000 : 1_000,
 		gcTime: Infinity,
 		retry: false,
 	});

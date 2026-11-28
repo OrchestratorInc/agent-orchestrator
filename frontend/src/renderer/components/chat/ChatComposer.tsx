@@ -83,6 +83,7 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
 import { composerModelPicker, openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
@@ -105,6 +106,7 @@ import {
 	clearRejectedChatComposerDelivery,
 	clearUncertainChatComposerDelivery,
 	discardUnsentChatComposerDelivery,
+	draftStagedPaths,
 	finishChatComposerMutation,
 	getChatComposerMutation,
 	isChatComposerMutationCurrent,
@@ -303,6 +305,7 @@ export const ChatComposer = memo(function ChatComposer({
 	filePathsTruncated,
 	onFileQuery,
 	onStageAttachments,
+	onUpdateAttachmentLeases,
 	cloudAttachments,
 	nativeImages,
 	onSteer,
@@ -438,6 +441,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * offered at all.
 	 */
 	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
+	/**
+	 * Releases staged paths this draft gave up and renews the ones it still
+	 * holds, answering which renewed paths are already gone. Removing a chip or
+	 * letting a discarded unsent message lapse releases its files; restoring a
+	 * draft renews them. The daemon never deletes a file a sent message names.
+	 */
+	onUpdateAttachmentLeases?: (release: string[], renew?: string[]) => Promise<string[]>;
 	/**
 	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
 	 * each. Each file uploads on its own and shows its own failure, removing one
@@ -766,12 +776,12 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 	const prepareAttachments = useCallback(
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
-			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
+			if (!onStageAttachments) throw new AoError("ATTACHMENT_STAGING_UNAVAILABLE", "Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
 			// streams it to the daemon (toWireAttachments).
 			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
 			if (paths.length !== attachments.length) {
-				throw new Error("Attachment staging returned an incomplete result");
+				throw new AoError("ATTACHMENT_STAGING_INCOMPLETE", "Attachment staging returned an incomplete result");
 			}
 			return attachments.map((attachment, index) => {
 				const stagedPath = paths[index];
@@ -833,6 +843,43 @@ export const ChatComposer = memo(function ChatComposer({
 		prepareEach: Boolean(cloudAttachments),
 	});
 	const { pendingAttachments } = fileAttachments;
+	const fileAttachmentsRef = useRef(fileAttachments);
+	fileAttachmentsRef.current = fileAttachments;
+	const draftScopeRef = useRef(draftScope);
+	draftScopeRef.current = draftScope;
+	// Give up staged files this draft no longer holds. A path the saved draft
+	// still names elsewhere (a send in flight, an unsent message, a queued edit)
+	// stays leased. Best effort: an unreleased lease expires on its own.
+	const releaseStagedPaths = useCallback((paths: (string | undefined)[]) => {
+		if (!onUpdateAttachmentLeases) return;
+		const scope = draftScopeRef.current;
+		const held = scope ? draftStagedPaths(readChatSessionDraft(scope), { composer: false }) : new Set<string>();
+		const release = [...new Set(paths)].filter((path): path is string =>
+			Boolean(path) && !isCloudAttachmentReference(path!) && !held.has(path!));
+		if (release.length > 0) void onUpdateAttachmentLeases(release).catch(() => undefined);
+	}, [onUpdateAttachmentLeases]);
+	const queuedDraftScopeRef = useRef(queuedDraftScope);
+	queuedDraftScopeRef.current = queuedDraftScope;
+	// A restored draft renews its files so they outlive the lease expiry, and
+	// drops any chip whose file is already gone rather than sending a dead path.
+	// A queued-edit editor has no draft scope of its own; its files live in the
+	// session draft's queued edit.
+	useEffect(() => {
+		const scope = draftScopeRef.current ?? queuedDraftScopeRef.current;
+		if (!scope || !onUpdateAttachmentLeases) return;
+		const renew = [...draftStagedPaths(readChatSessionDraft(scope), { composer: true })]
+			.filter((path) => !isCloudAttachmentReference(path));
+		if (renew.length === 0) return;
+		let current = true;
+		void onUpdateAttachmentLeases([], renew).then((missing) => {
+			if (!current || missing.length === 0) return;
+			const gone = new Set(missing);
+			for (const attachment of fileAttachmentsRef.current.getAttachments()) {
+				if (attachment.stagedPath && gone.has(attachment.stagedPath)) fileAttachmentsRef.current.remove(attachment.id);
+			}
+		}, () => undefined);
+		return () => { current = false; };
+	}, [attachmentScopeKey, onUpdateAttachmentLeases]);
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
@@ -1509,9 +1556,15 @@ export const ChatComposer = memo(function ChatComposer({
 	};
 	useEffect(() => {
 		if (!discardedUnsent) return;
-		const timer = window.setTimeout(() => setDiscardedUnsent(undefined), UNSENT_UNDO_MS);
+		const timer = window.setTimeout(() => {
+			// Undo can no longer bring it back, so its files are given up, except
+			// any the composer still shows.
+			const shown = new Set(fileAttachmentsRef.current.getAttachments().flatMap((attachment) => attachment.stagedPath ?? []));
+			releaseStagedPaths((discardedUnsent.draft?.attachments ?? []).map((attachment) => attachment.path).filter((path) => !shown.has(path)));
+			setDiscardedUnsent(undefined);
+		}, UNSENT_UNDO_MS);
 		return () => window.clearTimeout(timer);
-	}, [discardedUnsent]);
+	}, [discardedUnsent, releaseStagedPaths]);
 
 	const approvalActive = Boolean(approval);
 	const previousApprovalActive = useRef(approvalActive);
@@ -1971,6 +2024,22 @@ export const ChatComposer = memo(function ChatComposer({
 				holdOwnDraft(forceSteer);
 			}
 			return;
+		}
+		// A draft left open past the lease expiry can hold a chip whose file was
+		// already reclaimed (by a later stage or the startup pass). Renew right
+		// before sending: a file reported gone loses its chip and nothing is sent,
+		// so the send is not refused, and retried, for a file that no longer exists.
+		const renewPaths = settledPaths.filter((path) => !isCloudAttachmentReference(path));
+		if (onUpdateAttachmentLeases && renewPaths.length > 0 && !recoveringDelivery) {
+			const missing = await onUpdateAttachmentLeases([], renewPaths).catch(() => [] as string[]);
+			if (missing.length > 0) {
+				const gone = new Set(missing);
+				for (const attachment of fileAttachmentsRef.current.getAttachments()) {
+					if (attachment.stagedPath && gone.has(attachment.stagedPath)) fileAttachmentsRef.current.remove(attachment.id);
+				}
+				setSendError({ message: "chat.draft.filesUnavailable", code: "ATTACHMENTS_UNAVAILABLE" });
+				return;
+			}
 		}
 		// Held files carry their bytes, or a large one its handle on disk, to the
 		// send instead of a staged path.
@@ -2725,7 +2794,10 @@ export const ChatComposer = memo(function ChatComposer({
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
-											} else fileAttachments.remove(file.id);
+											} else {
+												fileAttachments.remove(file.id);
+												releaseStagedPaths([path]);
+											}
 											editor.current?.focus();
 										}}
 									/>

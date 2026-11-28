@@ -166,6 +166,12 @@ sampled by install rather than by event:
   Failed onboarding installs and sign-ins also send from every install (see
   "Onboarding errors in Sentry"): they are rare and block a new user's first
   run.
+- Every desktop and daemon event carries a `plan` tag with the install's AO
+  Cloud plan (the `cloud_plan` list in "Signing in to AO Cloud"). The desktop
+  keeps it in memory and passes it to the daemon on the loopback-only
+  `/internal/telemetry/identity` route. An install on `starter`, `pro` or
+  `enterprise` sends non-fatal errors outside the sample; the daily caps below
+  still apply.
 - Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
   and `1` for always-sent events. Multiply counts of `sample_rate:0.1`
   events by 10 to estimate the real volume.
@@ -1731,6 +1737,22 @@ account you signed in with and is never read from git config. The daemon and the
 mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
 is identified.
+
+Desktop events also carry the AO Cloud plan as `cloud_plan` (one of `free`,
+`starter`, `pro`, `enterprise`, `none` when signed out or the org has no
+billing, or `unknown` before billing loads, for a contract org, or for any other
+value) and `cloud_paid` (`true` only for a self-serve org that is entitled, not
+exempt and not on Free) and `cloud_trial` (`true` for a paid plan still on its
+free trial; it counts as paid). All three are also person properties of the
+signed-in AO Cloud person; `install_id` is unchanged. When a fresh billing
+summary shows a different plan, or a different trial state, than the one last
+seen for that org, the desktop sends `ao.billing.plan_changed` with
+`from_plan`, `to_plan` (same list), `direction` (`upgrade`, `downgrade`,
+`cancel` for a move to Free, or `same_tier`, as when a trial converts to paid on
+the same plan) and `from_trial` / `to_trial`, so a trial that ends unpaid is
+told apart from a paying customer cancelling. The last plan and trial state per
+org are kept in the app's local storage, keyed by a hash of the org ID. The first summary for an org, a sign-out and a failed
+billing request send nothing. No price, org name, email or Stripe ID is sent.
 
 A release build returns from the sign-in page through
 `https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.
