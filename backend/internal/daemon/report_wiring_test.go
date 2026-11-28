@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -51,5 +52,28 @@ func TestForwardReportActivityRelaysSessionUpdates(t *testing.T) {
 		recorder.states[0] != domain.ActivityIdle || recorder.terminated[0] ||
 		recorder.states[1] != domain.ActivityActive || !recorder.terminated[1] {
 		t.Fatalf("relayed states=%v terminated=%v", recorder.states, recorder.terminated)
+	}
+}
+
+type workerReportRecorder struct {
+	ids        []domain.SessionID
+	activities []domain.ActivityState
+}
+
+func (r *workerReportRecorder) Observe(_ context.Context, id domain.SessionID, state domain.ActivityState, _ bool, _ time.Time) {
+	r.ids = append(r.ids, id)
+	r.activities = append(r.activities, state)
+}
+
+func TestForwardWorkerReportsRelaysSessionUpdates(t *testing.T) {
+	recorder := &workerReportRecorder{}
+	forward := forwardWorkerReports(t.Context(), recorder)
+	forward(cdc.Event{Type: cdc.EventSessionUpdated, SessionID: "w", Payload: json.RawMessage(`{"id":"w","activity":"active"}`)})
+	forward(cdc.Event{Type: cdc.EventSessionCreated, SessionID: "w", Payload: json.RawMessage(`{"id":"w","activity":"idle"}`)})
+	forward(cdc.Event{Type: cdc.EventSessionUpdated, Payload: json.RawMessage(`not json`)})
+	forward(cdc.Event{Type: cdc.EventSessionUpdated, Payload: json.RawMessage(`{"id":"x","activity":"idle"}`)})
+	if len(recorder.activities) != 2 || recorder.ids[0] != "w" || recorder.ids[1] != "x" ||
+		recorder.activities[0] != domain.ActivityActive || recorder.activities[1] != domain.ActivityIdle {
+		t.Fatalf("relayed ids=%v activities=%v", recorder.ids, recorder.activities)
 	}
 }

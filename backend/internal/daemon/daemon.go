@@ -920,7 +920,9 @@ func Run(buildVersion string) (retErr error) {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
+	unsubscribeWorkerReports := startWorkerReporter(ctx, cdcPipe.Broadcaster, reportsvc.NewWorkerReporter(reportsvc.WorkerReporterDeps{Store: store, Reports: reportSvc, Logger: log}))
 	defer func() {
+		unsubscribeWorkerReports()
 		unsubscribeReportActivity()
 		stop()
 		<-reportDeliveryDone
