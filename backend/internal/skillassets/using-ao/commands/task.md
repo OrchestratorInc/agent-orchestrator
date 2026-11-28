@@ -38,10 +38,10 @@ project's defaults with `ao project set-config <id> --worker-agent <agent>
 | Code | Meaning |
 |---|---|
 | `0` | With `--wait` or `ao task wait`: the task started (`running` or `done`). A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so read `status` before treating it as started. |
-| `1` | The task failed, `--timeout` ran out before it started, or a status read failed. A failed status read (for example a 503 on the final check) does not mean the task failed or never started: if `taskId` is set, check that id with `ao task status <task-id>` before submitting again. |
+| `1` | The task failed: the session could not start, the agent's turn failed, or a status read failed outside a wait. A failed status read does not mean the task failed or never started: if `taskId` is set, check that id with `ao task status <task-id>` before submitting again. |
 | `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
 | `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
-| `4` | The task was submitted but the wait ended before it was confirmed: `--wait` ran out while it was still `queued`, or the wait was interrupted (Ctrl-C, SIGTERM, a calling agent's tool timeout). The JSON still has the `taskId`. Do not start it again; follow it with `ao task wait <task-id>`. |
+| `4` | The task was submitted but the wait ended before it was confirmed: `--timeout` ran out (still queued, still starting, workspace setup unfinished, or running for under 5 seconds), or the wait was interrupted (Ctrl-C, SIGTERM, a calling agent's tool timeout). The JSON still has the `taskId`. Do not start it again; follow it with `ao task wait <task-id>`. |
 
 `status` in the JSON is `starting`, `queued` (accepted; the agent runs it after
 its current turn), `running`, `done`, `failed`, or `needs_input`. A task counts
@@ -57,10 +57,12 @@ agent asks for after that is not seen by that call. Keep calling
 `ao task status <task-id>` (or `ao task wait`) until `status` is `done`,
 `failed` or `needs_input`, and act on `needs_input` when it appears.
 
-That polling works for Chat sessions, which report turns. It does not work for
-a terminal (TUI) task: its one-shot status stays `starting` once the agent is
-back at its prompt, so a task that finishes between polls never reads `done`.
-For a terminal task, check the session itself with `ao session get <id>`.
+That polling works for Chat sessions, which report turns, and for terminal
+(TUI) sessions whose agent records its turns (Claude Code does; `ao session
+history <id>` shows them). There a task reads `done` once its turn is recorded
+with a reply, even if it finished between two polls. A terminal session whose
+agent records no turns only shows idle or working; check it with `ao session
+get <id>`.
 
 On the orchestrator path, the status covers the workers the orchestrator
 started for the task, not just its own turn:
@@ -80,8 +82,9 @@ orchestrator's turn was retried, only the current attempt's workers can fail
 the task. Workers that already existed before the task are not tracked: nothing
 records which of them the orchestrator messaged for it.
 
-A worker in a terminal (TUI) session never reads `done`, so a task with one
-stays `running`; check that worker with `ao session get <id>`.
+A terminal (TUI) worker is read from its recorded turns the same way. One whose
+agent records no turns never reads `done`, so the task stays `running`; check
+that worker with `ao session get <id>`.
 
 ## Reading the result
 
@@ -93,7 +96,8 @@ stays `running`; check that worker with `ao session get <id>`.
   retry``. Show it to the user; signing in is theirs to do.
 - `taskId` is the worker's session id, or `<orchestrator-session>:<turn>` for a
   task sent to a Chat orchestrator. A terminal (TUI) orchestrator's task id is
-  its session id alone. `taskId` is empty when no task id could be reported. That
+  `<orchestrator-session>:tui-<unix ms>`: the first turn that session recorded
+  from when the brief was sent. `taskId` is empty when no task id could be reported. That
   is not proof that no task exists: if the reason says the daemon accepted the
   task without a turn id, or that delivery could not be confirmed, the task may
   still run, so check the session (`ao session history <id>`) before starting it
@@ -105,10 +109,10 @@ stays `running`; check that worker with `ao session get <id>`.
   finished makes the task `failed`.
 - A task id whose turn is not in the session's history (a typo, or an id from
   another session) fails at once; check the id `ao task start` printed.
-- A terminal session reports no turns and is never `done`. If `ao task wait`
-  sees the agent working and then back at its prompt, it reports `running`
-  (started), because that work may predate the task; check the session itself
-  with `ao session get <id>` to see what it did.
+- A terminal session is judged by its recorded turns when its agent records
+  them. Without them it is never `done`: if `ao task wait` sees the agent
+  working and then back at its prompt, it reports `running` (started), because
+  that work may predate the task; check the session with `ao session get <id>`.
 - If the reason says delivery could not be confirmed, check `ao session ls` or
   `ao session history <id>` before starting the task again, so it does not run
   twice.
