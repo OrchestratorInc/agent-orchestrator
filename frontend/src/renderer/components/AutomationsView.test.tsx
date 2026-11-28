@@ -1754,6 +1754,39 @@ describe("AO Cloud automations", () => {
 		}
 	});
 
+	it("names Run now by its own text, with a tooltip only to say why it is off", async () => {
+		const user = userEvent.setup();
+		mocks.cloudAvailable = true;
+		mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: settled }];
+		renderView();
+		const details = await openCloudDetails(user, "Nightly debt");
+		const runNow = within(details).getByRole("button", { name: "Run Nightly debt now" });
+		expect(runNow).toHaveTextContent("Run now");
+		expect(runNow.closest("[data-slot=tooltip-trigger]")).toBeNull();
+		await user.hover(runNow);
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+	});
+
+	it("says when a session of its runs moving to another computer refused Run now, skipped a run or stopped one", async () => {
+		const user = userEvent.setup();
+		mocks.cloudAvailable = true;
+		const skippedWhileMoving = { ...cloudAutomation.latestRun, errorCode: "SESSION_MOVING", errorMessage: "A session is moving." };
+		mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: skippedWhileMoving }];
+		mocks.cloudRuns = [
+			skippedWhileMoving,
+			{ id: "r0", automationId: "c1", scheduledFor: "2026-11-13T07:00:00Z", trigger: "schedule", status: "failed", attemptCount: 1, sessionId: "s-moved", errorCode: "SESSION_MOVED", errorMessage: "moved", createdAt: "2026-11-13T07:00:00Z" },
+		];
+		mocks.runNow.mockRejectedValue(new CloudCpError("A session is moving.", { status: 409, code: "SESSION_MOVING" }));
+		renderView();
+		const details = await openCloudDetails(user, "Nightly debt");
+		expect(within(details).getByRole("alert")).toHaveTextContent("Skipped: a session of this automation was moving to another computer.");
+		// Each run's reason is one hover or focus away, named with its status.
+		expect(within(details).getByRole("button", { name: "Failed: Stopped: the run's session moved to another computer before it finished." })).toBeInTheDocument();
+		await user.click(within(details).getByRole("button", { name: "Run Nightly debt now" }));
+		expect(await screen.findByText("A session of this automation is moving to another computer. Run it again once the move finishes.")).toHaveAttribute("role", "alert");
+	});
+
 	it("keeps showing a run in flight that a newer skipped occurrence hides, with Run now off", async () => {
 		const user = userEvent.setup();
 		mocks.cloudAvailable = true;

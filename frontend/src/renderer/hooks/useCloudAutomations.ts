@@ -240,6 +240,8 @@ const ERROR_CODES = [
 	"AUTOMATION_PROJECT_UNSUPPORTED",
 	// A change or Run now on an automation whose project was deleted.
 	"AUTOMATION_PROJECT_DELETED",
+	// Run now while a session of its runs moves to another computer.
+	"SESSION_MOVING",
 	// Saving checks what a run needs (the control plane's preflight).
 	"repository_not_accessible",
 	"repository_unreachable",
@@ -284,6 +286,9 @@ const RUN_ERROR_CODES = [
 	"agent_provider_required",
 	"forbidden",
 	"PLAN_REQUIRED",
+	// A session of the automation's runs moving to another computer.
+	"SESSION_MOVING",
+	"SESSION_MOVED",
 ] as const;
 
 /** The plan refusals a run is skipped with (the contract's AutomationRunStatus): one message for all. */

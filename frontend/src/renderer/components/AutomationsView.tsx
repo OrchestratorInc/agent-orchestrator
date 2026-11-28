@@ -841,16 +841,17 @@ function CloudAutomationDetails({ item, userId, sessionTerminated, projectName, 
 					<CloseButton ref={closeRef} aria-label={t("common.close")} onClick={onClose} />
 				</div>
 				<div className="flex flex-wrap items-center gap-1">
-					<Tooltip>
-						<TooltipTrigger asChild>
-							{runNowDisabled ? (
-								// A disabled button takes no pointer or focus, so a focusable wrapper
-								// carries the tooltip that says why (Radix's disabled-trigger pattern).
+					{runNowDisabled ? (
+						// The button names itself; a tooltip only says why it is off (DESIGN.md).
+						// A disabled button takes no pointer or focus, so a focusable wrapper
+						// carries that tooltip (Radix's disabled-trigger pattern).
+						<Tooltip>
+							<TooltipTrigger asChild>
 								<span tabIndex={0} className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">{runNowButton}</span>
-							) : runNowButton}
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{t(running ? "automations.cloud.runNow.running" : "automations.cloud.runNow")}</TooltipContent>
-					</Tooltip>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{t(running ? "automations.cloud.runNow.running" : "automations.runStatus.starting")}</TooltipContent>
+						</Tooltip>
+					) : runNowButton}
 					{item.canEdit ? (
 						<>
 							<Button type="button" size="sm" variant="secondary" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}>

@@ -52,7 +52,7 @@ beforeEach(() => {
 describe("cloudAutomationErrorMessage", () => {
 	const t = ((key: string) => key) as unknown as Parameters<typeof cloudAutomationErrorMessage>[1];
 	const refusal = (code: string) => new CloudCpError(`server says ${code}`, { status: 422, code });
-	it.each(["repository_not_accessible", "repository_unreachable", "SANDBOX_QUOTA_EXCEEDED", "PLAN_REQUIRED", "AUTOMATION_PROJECT_DELETED"])("names %s", (code) => {
+	it.each(["repository_not_accessible", "repository_unreachable", "SANDBOX_QUOTA_EXCEEDED", "PLAN_REQUIRED", "AUTOMATION_PROJECT_DELETED", "SESSION_MOVING"])("names %s", (code) => {
 		expect(cloudAutomationErrorMessage(refusal(code), t)).toBe(`automations.cloud.error.${code}`);
 	});
 	it("reads every plan limit as one message, and keeps an unknown code's words", () => {
@@ -85,7 +85,7 @@ describe("cloudAutomationErrorMessage", () => {
 // contract names (AutomationRun.errorCode); an unknown one keeps the server's words.
 describe("cloudRunErrorMessage", () => {
 	const t = ((key: string) => key) as unknown as Parameters<typeof cloudRunErrorMessage>[1];
-	it.each(["STOPPED", "forbidden", "PLAN_REQUIRED", "SESSION_ENDED", "agent_provider_required"])("names %s", (errorCode) => {
+	it.each(["STOPPED", "forbidden", "PLAN_REQUIRED", "SESSION_ENDED", "agent_provider_required", "SESSION_MOVING", "SESSION_MOVED"])("names %s", (errorCode) => {
 		expect(cloudRunErrorMessage({ errorCode, errorMessage: "server words" }, t)).toBe(`automations.cloud.runError.${errorCode}`);
 	});
 	it("keeps the server's words for a code it does not know", () => {
