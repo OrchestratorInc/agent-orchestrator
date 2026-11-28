@@ -141,6 +141,8 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 			const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/device/close", { params: { path: { sessionId } }, body: shutdown ? { shutdown: true } : {} });
 			if (error) throw apiErrorException(error);
 		},
+		// Given back: why its last start failed belongs to that lease, not the next.
+		onSuccess: () => setStartProblem(undefined),
 		onSettled: refresh,
 	});
 
@@ -536,10 +538,11 @@ function DeviceLive({
 	const startRef = useRef(onStart);
 	startRef.current = onStart;
 	useEffect(() => {
-		if (!waitingForRoom || !isActive || starting || device.booted || lease.starting) return;
+		// Not while the device is being given back: a start then would lease it again.
+		if (!waitingForRoom || !isActive || starting || releasing || device.booted || lease.starting) return;
 		const retry = setTimeout(() => startRef.current(), ROOM_RETRY_MS);
 		return () => clearTimeout(retry);
-	}, [device.booted, isActive, lease.starting, starting, waitingForRoom]);
+	}, [device.booted, isActive, lease.starting, releasing, starting, waitingForRoom]);
 	const wokeOnShow = useRef(false);
 	useEffect(() => {
 		if (!asleep || !isActive) {

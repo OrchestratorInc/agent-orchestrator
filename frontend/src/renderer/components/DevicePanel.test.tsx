@@ -331,6 +331,25 @@ describe("DevicePanel", () => {
 		}
 	});
 
+	it("stops waiting for room once the device is being released", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+			postMock.mockResolvedValue({ error: { code: "NO_DEVICE_ROOM", message: "No room." } });
+			renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+			expect(await screen.findByRole("status", { name: "iPhone 17 Pro starts when there's room" })).toBeInTheDocument();
+			// The release hangs: no start may go out meanwhile, or it would lease the device again.
+			postMock.mockImplementation(() => new Promise(() => {}));
+			await userEvent.click(screen.getByRole("button", { name: "Device options" }));
+			await userEvent.click(await screen.findByRole("menuitem", { name: "Release device" }));
+			await act(async () => { await vi.advanceTimersByTimeAsync(ROOM_RETRY_MS * 3); });
+			const opens = postMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/device/open");
+			expect(opens).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("offers Start for a start that failed for good, and does not retry it on its own", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {
