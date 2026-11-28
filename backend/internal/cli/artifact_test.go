@@ -75,7 +75,7 @@ func TestArtifactAddValidation(t *testing.T) {
 
 func TestArtifactAddSummaryWithNothingElse(t *testing.T) {
 	got := artifactAddSummary(artifactRegisterResponse{Registered: []string{"a.md", "b.md"}})
-	if got != "Registered a.md, b.md.\n" {
+	if got != "Registered a.md, b.md.\n"+reviseInPlaceHint {
 		t.Fatalf("summary = %q", got)
 	}
 	got = artifactAddSummary(artifactRegisterResponse{Registered: []string{"a.md"}, OtherFiles: 1})

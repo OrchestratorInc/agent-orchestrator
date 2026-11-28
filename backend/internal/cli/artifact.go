@@ -100,11 +100,16 @@ func expandHome(path, home string) string {
 	return path
 }
 
+// reviseInPlaceHint is printed after every registration: agents otherwise
+// write and register a new file for each feedback round on the same topic.
+const reviseInPlaceHint = "For a later round on the same topic, edit, overwrite, or mv the registered file instead of registering a new one.\n"
+
 // artifactAddSummary tells the agent what the user will and won't see. Files
 // left unregistered do not appear as artifacts, and nothing else says so.
 func artifactAddSummary(r artifactRegisterResponse) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Registered %s.\n", strings.Join(r.Registered, ", "))
+	b.WriteString(reviseInPlaceHint)
 	if r.OtherFiles > 0 {
 		noun := "files stay"
 		if r.OtherFiles == 1 {

@@ -68,6 +68,11 @@ To keep a rendered page as an artifact as well, add `--artifact` to `ao render`
 (or set `artifact: true` in `html_render`). Do this only when the user asks to keep
 the page. Then run `ao artifact add` on the path it prints so the page is listed.
 
+A before/after for one round of feedback is a review visual, not a deliverable:
+render it in the thread. When the user does ask to keep comparisons, keep one
+HTML artifact per thread and add each later round to it rather than writing a
+new file (see [artifact.md](artifact.md)).
+
 ## Layout
 
 - The page sits in the reply column with no frame border, over the same
