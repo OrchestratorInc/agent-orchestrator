@@ -1455,6 +1455,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video the control plane does not serve, 413 artifact_share_video_too_large for one over its size limit, as for a local file (createArtifactShareUpload).
+         *     An HTML page's files go with it when files lists them: the images and other files the page refers to by relative path, which the caller finds in the page and the session's artifact list. Each listed file's current committed version is copied beside the page, and the link then serves exactly those files at their paths. A listed file the session no longer holds, a video the control plane does not serve and one over its size limit are left out and named in pageFiles; the page is still published. Without files, an active link keeps the files it has. A control plane that predates files answers 400 invalid_request to a request that lists them.
          *     Only a person publishes: the route accepts only a signed-in account session, the bearer token of every user route. Worker, sandbox and host credentials get 401, so a cloud session's agent cannot publish its own files. Only the person who created the session shares its files, under their own link limit: another member of the organization, who may read them, gets 403 artifact_share_not_owner, as does anyone for a session with no creator on record; a guest of a shared project gets 404. */
         post: operations["shareSessionArtifact"];
         delete?: never;
@@ -5373,6 +5374,18 @@ export interface components {
             share: components["schemas"]["ArtifactShare"];
             /** @description True when publishing replaced the version of the document's existing link. */
             replaced: boolean;
+            pageFiles?: components["schemas"]["SessionArtifactSharePageFiles"];
+        };
+        /** @description What shareSessionArtifact did with the files its request listed; present only when it listed files. */
+        SessionArtifactSharePageFiles: {
+            /** @description How many files the link serves beside the page now. */
+            included: number;
+            /** @description The paths of listed videos left out because the control plane does not serve them. */
+            refusedVideos: string[];
+            /** @description The paths of listed videos left out for being over the control plane's size limit. */
+            tooLargeVideos: string[];
+            /** @description The paths of listed files left out because the session no longer holds them, or holds another version than the sha256 listed. */
+            missing: string[];
         };
         ArtifactShareList: {
             shares: components["schemas"]["ArtifactShare"][];
@@ -5500,6 +5513,16 @@ export interface components {
             access?: components["schemas"]["ArtifactShareAccess"];
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
+            /** @description The files the HTML page at path uses, to serve beside it. An empty list leaves the link no files; absent, an active link keeps the files it has. */
+            files?: components["schemas"]["SessionArtifactShareFile"][];
+        };
+        SessionArtifactShareFile: {
+            /** @description Where the link serves the file, relative to its root, as the page's relative reference resolves: no empty, "." or ".." segment, and not raw, _ao/ or a first segment starting with ~. */
+            path: string;
+            /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
+            artifactPath: string;
+            /** @description The file's committed version as the page's sharer listed it, as SessionArtifact.sha256. Only that version is copied: one the session committed again since is left out and named in missing. */
+            sha256: string;
         };
         /** @description A link someone else published and shared with the signed-in person, as their Artifacts list shows it. */
         SharedArtifact: {
