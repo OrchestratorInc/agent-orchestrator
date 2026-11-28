@@ -15,6 +15,7 @@ import {
 	terminalFontSizeDelta,
 	TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL,
 	ARTIFACT_ZOOM_SHORTCUT_CHANNEL,
+	ARTIFACT_ESCAPE_CHANNEL,
 	artifactZoomAction,
 	type AppShortcutEvent,
 	type AppShortcutId,
@@ -139,9 +140,22 @@ export function attachAppShortcuts(
 	// Told each chord this handler claims and runs, before the action is sent,
 	// so the shell can count it by id.
 	onPressed: (id: AppShortcutId) => void = () => {},
+	// A full-screen artifact viewer or artifact preview is open. Escape pressed
+	// inside its framed page never reaches the shell's document, so main reports
+	// it. The page still receives the key: it is reported, never consumed.
+	isArtifactEscapeArmed: () => boolean = () => false,
 ): void {
 	contents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown") return;
+		if (
+			input.key === "Escape" &&
+			!input.control && !input.meta && !input.shift && !input.alt &&
+			!input.isAutoRepeat &&
+			!isRecording() &&
+			isArtifactEscapeArmed()
+		) {
+			target.send(ARTIFACT_ESCAPE_CHANNEL);
+		}
 		const chord = {
 			key: input.key,
 			code: input.code,

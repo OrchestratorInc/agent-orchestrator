@@ -17,6 +17,7 @@ import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
 import { ArtifactScrollMemory, ArtifactScrollMemoryContext, useArtifactScrollRestore } from "../lib/artifact-scroll-memory";
 import { ArtifactZoomContext, ArtifactZoomController, MAX_ARTIFACT_ZOOM, MIN_ARTIFACT_ZOOM, ZOOM_CONTROLS_REVEAL_PX, applyZoomShortcut, useArtifactZoomState, useArtifactZoomTarget, wheelZoomFactor, zoomShortcut } from "../lib/artifact-zoom";
+import { useArtifactFrameEscape } from "../lib/artifact-escape";
 import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
@@ -353,7 +354,8 @@ const INLINE_FRAME_CLASS = "flex h-full min-h-0 flex-col outline-none";
 /**
  * The open artifact's viewer, in the inspector or full screen. It renders
  * into one node that moves between its inspector slot and a window overlay,
- * so an edit in progress survives the switch. Escape leaves full screen.
+ * so an edit in progress survives the switch. Escape leaves full screen, also
+ * from inside a framed page, whose keys main reports.
  */
 function ArtifactViewerFrame({
 	children,
@@ -449,6 +451,7 @@ function ArtifactViewerFrame({
 		document.addEventListener("keydown", onKeyDown);
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [frame, fullscreen, onExitFullscreen]);
+	useArtifactFrameEscape(fullscreen, () => frame, onExitFullscreen);
 	return (
 		<div className="h-full min-h-0" ref={slotRef} role="tabpanel">
 			{createPortal(children, frame)}

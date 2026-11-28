@@ -7,6 +7,7 @@ import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { artifactContentUrl } from "../lib/artifact-content-url";
+import { useArtifactFrameEscape } from "../lib/artifact-escape";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { LOCAL_HOST } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
@@ -36,6 +37,8 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const restoreFocusOnClose = useRestoreFocusOnClose(Boolean(artifact));
 	const titleRef = useRef<HTMLHeadingElement>(null);
+	// Escape pressed in the previewed page never reaches the dialog's own handler.
+	useArtifactFrameEscape(Boolean(artifact), () => titleRef.current?.closest("[role='dialog']") ?? null, onClose);
 	const id = artifact ? artifactKey(artifact) : "";
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);

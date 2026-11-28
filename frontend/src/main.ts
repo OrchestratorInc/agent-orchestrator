@@ -131,6 +131,7 @@ import {
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL,
+	SET_ARTIFACT_ESCAPE_ARMED_CHANNEL,
 	APP_MENU_ACTION_CHANNEL,
 	APP_MENU_COMMAND_IDS,
 	SET_APP_MENU_AVAILABILITY_CHANNEL,
@@ -657,6 +658,8 @@ let terminalFocused = false;
 let terminalFontSizeFocused = false;
 // An artifact viewer that can zoom is under the pointer or holds focus.
 let artifactZoomEngaged = false;
+// A full-screen artifact viewer or artifact preview is open.
+let artifactEscapeArmed = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -1459,6 +1462,7 @@ async function createWindowInternal(): Promise<void> {
 		() => terminalFontSizeFocused,
 		() => artifactZoomEngaged,
 		(id) => shellWebContents.send(APP_SHORTCUT_PRESSED_CHANNEL, id),
+		() => artifactEscapeArmed,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -1577,12 +1581,18 @@ async function createWindowInternal(): Promise<void> {
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
 		artifactZoomEngaged = false;
+		artifactEscapeArmed = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
 		artifactZoomEngaged = false;
 		trayLifecycle.clear();
+	});
+	// Main frame only: did-start-loading also fires when an artifact's iframe
+	// loads, which would disarm Escape while its viewer or preview is open.
+	shellWebContents.on("did-navigate", () => {
+		artifactEscapeArmed = false;
 	});
 	shellWebContents.on("render-process-gone", () => {
 		trayLifecycle.clear();
@@ -3770,6 +3780,11 @@ ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSi
 ipcMain.on(SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, (event, engaged: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof engaged !== "boolean") return;
 	artifactZoomEngaged = engaged;
+});
+
+ipcMain.on(SET_ARTIFACT_ESCAPE_ARMED_CHANNEL, (event, armed: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof armed !== "boolean") return;
+	artifactEscapeArmed = armed;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {

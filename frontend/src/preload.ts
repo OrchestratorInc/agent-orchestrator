@@ -4,7 +4,7 @@ import type { VaultListResult } from "./main/browser-vault-ipc";
 import type { VaultAuditEntry, VaultItemInput, VaultItemSummary } from "./main/browser-vault-store";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
-import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, APP_SHORTCUT_PRESSED_CHANNEL, type AppShortcutId, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, APP_SHORTCUT_PRESSED_CHANNEL, type AppShortcutId, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, SET_ARTIFACT_ESCAPE_ARMED_CHANNEL, ARTIFACT_ESCAPE_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseRequest, type SideCloseState } from "./shared/side-close";
 import {
@@ -510,6 +510,17 @@ const api = {
 			ipcRenderer.on(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+	},
+	artifactEscape: {
+		/** Whether a full-screen artifact viewer or artifact preview is open; main then reports Escape, also from inside a framed page. */
+		setArmed: (armed: boolean) => ipcRenderer.send(SET_ARTIFACT_ESCAPE_ARMED_CHANNEL, armed),
+		onEscape: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(ARTIFACT_ESCAPE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(ARTIFACT_ESCAPE_CHANNEL, wrapped);
 			};
 		},
 	},

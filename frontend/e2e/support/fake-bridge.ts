@@ -146,6 +146,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setEngaged: () => undefined,
 					onShortcut: () => () => undefined,
 				},
+				artifactEscape: {
+					setArmed: () => undefined,
+					onEscape: () => () => undefined,
+				},
 				window: {
 					getZoomFactor: async () => 1,
 					onZoomFactor: () => () => undefined,
@@ -1200,6 +1204,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				artifactZoom: {
 					setEngaged: () => undefined,
 					onShortcut: () => () => undefined,
+				},
+				artifactEscape: {
+					setArmed: () => undefined,
+					onEscape: () => () => undefined,
 				},
 				window: {
 					getZoomFactor: async () => 1,

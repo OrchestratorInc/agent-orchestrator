@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, defaultShortcutBindings, type AppShortcutId } from "../shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, ARTIFACT_ESCAPE_CHANNEL, defaultShortcutBindings, type AppShortcutId } from "../shared/shortcuts";
 import { attachAppShortcuts, attachShellReloadGuard } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
@@ -579,6 +579,31 @@ describe("attachAppShortcuts", () => {
 		const appZoomEvent = source.emit({ key: "=", code: "Equal", ...primary });
 		expect(appZoomEvent.preventDefault).not.toHaveBeenCalled();
 		expect(target.send).not.toHaveBeenCalled();
+	});
+
+	it("reports Escape, without consuming it, while a full-screen artifact viewer or preview is open", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		let armed = true;
+		let recording = false;
+		attachAppShortcuts(source, false, target, false, () => ({}), () => recording, () => true, undefined, () => false, () => false, () => false, () => {}, () => armed);
+
+		// The framed page still receives the key.
+		expect(source.emit({ key: "Escape", code: "Escape" }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(ARTIFACT_ESCAPE_CHANNEL);
+
+		target.send.mockClear();
+		for (const modifier of [{ control: true }, { meta: true }, { shift: true }, { alt: true }]) {
+			source.emit({ key: "Escape", code: "Escape", ...modifier });
+		}
+		source.emit({ key: "Escape", code: "Escape", isAutoRepeat: true });
+		source.emit({ key: "Escape", code: "Escape", type: "keyUp" });
+		recording = true;
+		source.emit({ key: "Escape", code: "Escape" });
+		recording = false;
+		armed = false;
+		source.emit({ key: "Escape", code: "Escape" });
+		expect(target.send).not.toHaveBeenCalledWith(ARTIFACT_ESCAPE_CHANNEL);
 	});
 
 	it("lets a focused terminal without font resizing keep Ctrl+W while app zoom stays free", () => {
