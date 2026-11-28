@@ -40,7 +40,7 @@ describe("splitByMentions", () => {
 
 	it("never names a workspace by an email address", () => {
 		expect(mentionWorkspaceName("Northwind")).toBe("Northwind");
-		expect(mentionWorkspaceName("pritom@example.com")).toBeUndefined();
+		expect(mentionWorkspaceName("someone@example.com")).toBeUndefined();
 		expect(mentionWorkspaceName("  ")).toBeUndefined();
 		expect(mentionWorkspaceName(undefined)).toBeUndefined();
 	});

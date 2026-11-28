@@ -260,7 +260,7 @@ describe("the @ menu's source", () => {
 
 	it("titles the workspace's people neutrally when the workspace is named by an email", async () => {
 		recordCloudInboxSupport(BASE, "supported");
-		activeOrg.displayName = "pritom@example.com";
+		activeOrg.displayName = "someone@example.com";
 		renderSurface();
 		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
 		expect(lastProps().composerMentions?.workspaceName).toBeUndefined();
