@@ -886,3 +886,69 @@ describe("linking a website visit at sign-in", () => {
 		expect(stored.join("\n")).not.toContain(VISITOR);
 	});
 });
+
+// Uses the real SDK through initTelemetry and identifyCloudUser. $identify is
+// sent in its own request at once with the event's Date timestamp still on it,
+// so before_send must leave that Date intact for PostHog to accept the event.
+describe("sign-in $identify request with the real SDK", () => {
+	beforeEach(() => {
+		vi.resetModules();
+		vi.clearAllMocks();
+	});
+
+	it("sends $identify with an ISO timestamp and batched events with a numeric offset", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+		localStorage.clear();
+		const requests: Array<{ url: string; data: unknown }> = [];
+		vi.doMock("posthog-js/dist/module.full.no-external", async (importOriginal) => {
+			const actual = await importOriginal<typeof import("posthog-js/dist/module.full.no-external")>();
+			const client = new actual.PostHog();
+			(client as unknown as { _send_request: (options: { url: string; data?: unknown }) => void })._send_request = (options) => {
+				requests.push({ url: options.url, data: options.data });
+			};
+			return { ...actual, default: client };
+		});
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: {
+					getBootstrap: vi.fn(async () => ({
+						appVersion: "1.2.3", platform: "darwin", distinctId: "ins_identify-test",
+						disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+					})),
+					getGithubLogin: vi.fn(async () => null),
+					getLifetimeSessions: vi.fn(async () => undefined),
+					claimFirstOpen: vi.fn(async () => false),
+				},
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		try {
+			const { identifyCloudUser, initTelemetry } = await import("./telemetry");
+			expect(await initTelemetry()).toBe(true);
+			// Let ao.app.loaded go out in its batch first, as it does before a sign-in.
+			await vi.advanceTimersByTimeAsync(5_000);
+			await identifyCloudUser({ id: "user_cloud_1", email: "dev@example.com" });
+			await vi.advanceTimersByTimeAsync(5_000);
+
+			const events = requests
+				.filter((request) => request.data !== undefined && !request.url.includes("/flags"))
+				.flatMap((request) => (Array.isArray(request.data) ? request.data : [request.data])) as Array<Record<string, unknown>>;
+			const batched = events.find((event) => event.event === "ao.app.loaded");
+			const identify = events.find((event) => event.event === "$identify");
+			expect(batched, JSON.stringify(events)).toBeDefined();
+			expect(identify, JSON.stringify(events)).toBeDefined();
+
+			const identifyProperties = identify!.properties as Record<string, unknown>;
+			expect(identifyProperties.distinct_id).toBe("user_cloud_1");
+			expect(identifyProperties.$anon_distinct_id).toBe("ins_identify-test");
+			const identifyBody = JSON.parse(JSON.stringify(identify)) as Record<string, unknown>;
+			expect(typeof identifyBody.timestamp, JSON.stringify(identifyBody.timestamp)).toBe("string");
+			expect(new Date(identifyBody.timestamp as string).toISOString()).toBe(identifyBody.timestamp);
+
+			const batchedBody = JSON.parse(JSON.stringify(batched)) as Record<string, unknown>;
+			expect(typeof batchedBody.offset, JSON.stringify(batchedBody.offset)).toBe("number");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

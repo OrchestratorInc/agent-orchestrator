@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
@@ -69,5 +69,76 @@ describe("AO action batching", () => {
 		expect(screen.getAllByRole("button", { name: /Renamed a session/i })).toHaveLength(1);
 		expect(screen.getByText("name rejected")).toBeInTheDocument();
 		expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
+	});
+});
+
+describe("a failed spawn", () => {
+	const reason = "The default account is signed out or now holds another login, and no other account is signed in.";
+	const activities: ConversationActivity[] = [
+		{
+			kind: "activity", id: "1", sequence: 1, revision: 1, activityKind: "auto_review", status: "completed",
+			summary: "ao spawn --project market-place --name 'background config snapshot'",
+			detail: { status: "approved", riskLevel: "medium", command: "ao spawn --project market-place --name 'background config snapshot'" },
+			createdAt: "",
+		},
+		{
+			kind: "activity", id: "2", sequence: 2, revision: 1, activityKind: "command", status: "failed",
+			summary: "ao spawn --project market-place --name 'background config snapshot'",
+			detail: { command: "ao spawn --project market-place --name 'background config snapshot'", exitCode: 1, output: reason },
+			createdAt: "",
+		},
+		action("3", "session.spawned", { operationId: "failed:req-1", error: reason }),
+	];
+	activities[2]!.status = "failed";
+
+	it("reads as one failed step that opens onto the daemon's reason", async () => {
+		const user = userEvent.setup();
+		render(<ChatLinkProvider><ActivityRun activities={activities} /></ChatLinkProvider>);
+		// The spawn record joins its call: no second row, and the exit is not counted again.
+		const run = screen.getByRole("button", { name: /Ran 2 tool calls/ });
+		expect(run).toHaveTextContent("1 failed");
+		// Both say "failed" in the color of the text beside them, not red.
+		expect(within(run).getByText("1 failed")).not.toHaveClass("text-destructive");
+		expect(run).not.toHaveTextContent("exited");
+		expect(run).not.toHaveTextContent("Spawned an agent");
+		// Folded, the failed spawn stays inside the run rather than repeating under it.
+		expect(screen.queryByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).not.toBeInTheDocument();
+		expect(screen.queryByText(reason)).not.toBeInTheDocument();
+		// Opened, the step that failed is open onto why.
+		await user.click(run);
+		const step = await screen.findByRole("button", { name: /Starting\s*background config snapshot\s*failed/ });
+		expect(step).toHaveAttribute("aria-expanded", "true");
+		expect(within(step).getByText("failed")).toHaveClass("text-muted-foreground");
+		expect(step.querySelector("svg.icon-square-terminal")).not.toBeNull();
+		expect(screen.getByText(reason)).toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("opens onto the daemon's reason when the call printed nothing", async () => {
+		const bare: ConversationActivity = {
+			kind: "activity", id: "2", sequence: 2, revision: 1, activityKind: "command", status: "failed",
+			summary: "ao spawn --project market-place --name 'background config snapshot'",
+			detail: { exitCode: 1 },
+			createdAt: "",
+		};
+		render(<ChatLinkProvider><ActivityRun activities={[activities[0]!, bare, activities[2]!]} /></ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("button", { name: /Ran 2 tool calls/ }));
+		const step = await screen.findByRole("button", { name: /background config snapshot'\s*failed$/ });
+		expect(step).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText(reason)).toBeInTheDocument();
+	});
+
+	it("opens the approval onto the command it allowed, its chevron turned down", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={activities[0]!} />);
+		const row = screen.getByRole("button", { name: /Auto-approved.*medium risk/ });
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		expect(row.querySelector("svg.icon-chevron-right")).not.toHaveClass("rotate-90");
+		// Closed, only the row's one-line summary names it.
+		expect(screen.getAllByText("ao spawn --project market-place --name 'background config snapshot'")).toHaveLength(1);
+		await user.click(row);
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		expect(row.querySelector("svg.icon-chevron-right")).toHaveClass("rotate-90");
+		expect(screen.getAllByText("ao spawn --project market-place --name 'background config snapshot'")).toHaveLength(2);
 	});
 });

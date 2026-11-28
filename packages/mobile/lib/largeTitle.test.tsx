@@ -39,7 +39,7 @@ vi.mock("react-native-reanimated", async () => {
 });
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#textPrimary", borderDefault: "#borderDefault", bgBase: "#bgBase" }) }));
 
-import { LARGE_TITLE_COLLAPSE_AT, largeTitleCollapsed, seamShown, useLargeTitle } from "./largeTitle";
+import { LARGE_TITLE_COLLAPSE_AT, largeTitleCollapsed, seamShown, splitStops, useLargeTitle } from "./largeTitle";
 
 type Result = ReturnType<typeof useLargeTitle>;
 
@@ -112,14 +112,14 @@ describe("useLargeTitle", () => {
 
 	it("scales the title on its crossings alone, and still calls the page's own handler on every move", () => {
 		const onScroll = vi.fn();
-		const result = renderHook(onScroll);
+		const result = renderHook(onScroll, { backdrop: "frost" });
 		for (const y of [10, 20, 40, 60, 80, 20, 5, 0]) result.current.onScroll!(scrollTo(y));
 		expect(fixtures.writes).toEqual(["title:1", "title:0"]);
 		expect(onScroll).toHaveBeenCalledTimes(8);
 	});
 
-	it("always frosts the bar and its tail, even at rest, so the bar never reads as see-through", () => {
-		const result = renderHook();
+	it("with a full frost, frosts the bar and its tail even at rest", () => {
+		const result = renderHook(undefined, { backdrop: "frost" });
 		const edge = mount(<>{result.current.edge}</>);
 		const frost = edge.root.findByType("Frost" as never);
 		expect(frost.props).toMatchObject({ from: "top", stops: [[0, 80]] });
@@ -132,7 +132,7 @@ describe("the title's accessory", () => {
 	function renderWith(accessory: React.ReactNode): { current: Result } {
 		const ref = { current: undefined as unknown as Result };
 		function Probe() {
-			ref.current = useLargeTitle("Workers", undefined, { accessory });
+			ref.current = useLargeTitle("Workers", undefined, { accessory, backdrop: "frost" });
 			return null;
 		}
 		act(() => { renderer = create(<Probe />); });
@@ -305,5 +305,34 @@ describe("a replaced list", () => {
 		const hook = renderKeyed("all|all");
 		hook.rekey("mac|all");
 		expect(fixtures.writes).toEqual([]);
+	});
+});
+
+describe("a lifted frost", () => {
+	const flat = (style: unknown) => Object.assign({}, ...[style].flat(Infinity as 1));
+
+	it("splits a frost at the bar's end into halves that meet at the same cover", () => {
+		const { body, tail } = splitStops([[0, 0.9], [0.5, 0.8], [0.75, 0.4], [1, 0]], 0.6);
+		expect(body[0]).toEqual([0, 0.9]);
+		expect(body.at(-1)![0]).toBe(1);
+		expect(tail[0][0]).toBe(0);
+		expect(tail[0][1]).toBeCloseTo(body.at(-1)![1]);
+		expect(tail[0][1]).toBeCloseTo(0.64);
+		expect(tail.at(-1)).toEqual([1, 0]);
+	});
+
+	// The board's machine chips sat in the frost's tail and read dimmed at rest.
+	it("is the default: keeps the frost over the bar, the bar's height, and fades its tail in once the list leaves the top", () => {
+		const onScroll = vi.fn();
+		const result = renderHook(onScroll);
+		const edge = mount(createElement("Edge", null, result.current.edge!));
+		const frosts = edge.root.findAllByType("Frost" as never);
+		expect(frosts).toHaveLength(2);
+		expect(flat(frosts[0].props.style)).toMatchObject({ top: 0, height: 80 });
+		const tail = edge.root.findByType("AnimatedView" as never);
+		expect(flat(tail.props.style)).toMatchObject({ top: 80, height: 32 });
+		expect(tail.props.pointerEvents).toBe("none");
+		for (const y of [-40, 0, 4, 40, 0]) result.current.onScroll!(scrollTo(y));
+		expect(fixtures.writes).toEqual(["seam:1", "title:1", "title:0", "seam:0"]);
 	});
 });

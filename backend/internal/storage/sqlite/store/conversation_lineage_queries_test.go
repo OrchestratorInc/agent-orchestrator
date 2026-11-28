@@ -22,9 +22,10 @@ import (
 // conversation_id bound it scanned the whole message and activity tables, and
 // once sqlite_stat1 exists the planner skip-scans (branch_id, sequence) across
 // every branch in the database instead. Bound by conversation_id, it
-// range-seeks the (conversation_id, sequence) index. The turn_id indexes the
-// session delete needs are narrower still, and with statistics the planner may
-// seek those instead.
+// range-seeks the (conversation_id, sequence) index, which still reads the
+// conversation's history once per turn (#7545). The (turn_id, conversation_id,
+// sequence) indexes answer it from the turn's own rows, with or without
+// statistics.
 const (
 	lineageMessageBound  = "lineage_message.conversation_id = conversation_turns.conversation_id"
 	lineageActivityBound = "lineage_activity.conversation_id = conversation_turns.conversation_id"
@@ -252,8 +253,7 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 					t.Fatalf("%s: %v", name, err)
 				}
 
-				// Plan: the lineage lookups seek the conversation's own range,
-				// or the turn's own rows.
+				// Plan: the lineage lookups seek the turn's own rows.
 				plan := probe.plan(t)
 				for _, table := range []string{"lineage_message", "lineage_activity"} {
 					found := false
@@ -262,11 +262,11 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 							continue
 						}
 						found = true
-						// An AUTOMATIC index on turn_id is built by reading the whole table.
-						seeks := strings.Contains(line, "conversation_id=?") ||
-							(strings.Contains(line, "(turn_id=?") && !strings.Contains(line, "AUTOMATIC"))
+						// A range of the conversation's (conversation_id, sequence)
+						// index is still a scan of its history per turn (#7545).
+						seeks := strings.Contains(line, "_turn_lineage (turn_id=? AND conversation_id=? AND sequence<?)")
 						if !seeks || strings.Contains(line, "ANY(") || strings.HasPrefix(strings.TrimSpace(line), "SCAN") {
-							t.Errorf("%s does not seek by conversation_id or turn_id: %q\nfull plan:\n%s", table, line, plan)
+							t.Errorf("%s does not seek the turn's own rows in the turn lineage index: %q\nfull plan:\n%s", table, line, plan)
 						}
 					}
 					if !found {

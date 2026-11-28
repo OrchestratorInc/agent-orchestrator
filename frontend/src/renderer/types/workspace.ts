@@ -2,6 +2,7 @@ import { deliverableArtifacts, type Deliverable } from "../../../../packages/sha
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,
+	agentLabel,
 	toKanbanColumn,
 	toSessionActivity,
 	toSessionStatus,
@@ -149,6 +150,12 @@ export type WorkspaceSession = {
 	/** Raw issue/task identifier from the daemon. Intake ids are provider-prefixed. */
 	issueId?: string;
 	provider: AgentProvider;
+	/**
+	 * The agent the project named for this session's role when the session's
+	 * agent was last chosen: at spawn, or by switching agents. Absent for
+	 * sessions from before the daemon recorded it.
+	 */
+	roleAgent?: AgentProvider;
 	/** Reviewer selected for this session; absent means use the project default. */
 	reviewerHarness?: ReviewerHarnessId;
 	/** Per-session reviewer override, including hidden fields preserved across saves. */
@@ -230,6 +237,10 @@ export type WorkspaceSession = {
 	autoInjectReview?: boolean;
 	/** Whether CI failures are automatically injected into the worker. */
 	autoInjectCI?: boolean;
+	/** The Orchestrator Cloud session this session moved to; it is archived here and continues there. */
+	movedTo?: { orgId: string; sessionId: string; at?: string };
+	/** The move to Orchestrator Cloud whose export pushed this session and did not finish. */
+	moveStarted?: string;
 	/** ISO timestamp from the daemon — used for relative time in the inspector. */
 	createdAt?: string;
 	/** ISO timestamp from the daemon. */
@@ -305,6 +316,8 @@ export type WorkspaceSession = {
 		startupError?: { code: string; message: string; at: string; detail?: string };
 		/** Bring-your-own Coder workspace page; absent for managed compute. */
 		coderWorkspaceUrl?: string;
+		/** The session moved to another computer and continues there; it cannot be restored. */
+		movedAway?: true;
 	};
 };
 
@@ -607,15 +620,27 @@ export function hasConfiguredOrchestratorAgent(
 	return Boolean(workspace?.orchestratorAgent);
 }
 
-export function orchestratorNeedsRestart(workspace: WorkspaceSummary, orchestrator?: WorkspaceSession): boolean {
-	if (!orchestrator || !workspace.orchestratorAgent) return false;
-	return orchestrator.provider !== workspace.orchestratorAgent;
+/**
+ * Whether the project's orchestrator agent setting changed after the running
+ * orchestrator's agent was chosen, and the orchestrator is not on the new
+ * agent. Like a worker, an orchestrator may run another agent than the
+ * project's setting: a spawn can pick one and switching agents picks another,
+ * so the running agent alone is never drift. Without a record of the setting
+ * at that choice (sessions from before it was kept) nothing is reported.
+ */
+export function orchestratorAgentSettingChanged(
+	workspace: Pick<WorkspaceSummary, "orchestratorAgent">,
+	orchestrator?: Pick<WorkspaceSession, "provider" | "roleAgent">,
+): boolean {
+	const configured = workspace.orchestratorAgent;
+	if (!orchestrator?.roleAgent || !configured) return false;
+	return orchestrator.roleAgent !== configured && orchestrator.provider !== configured;
 }
 
 export type OrchestratorHealth =
 	| { state: "ok" }
 	| { state: "restarting"; message: string }
-	| { state: "restart_needed"; message: string }
+	| { state: "agent_setting_changed"; message: string }
 	| { state: "missing"; message: string }
 	| { state: "duplicates"; message: string };
 
@@ -638,10 +663,10 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 	if (!orchestrator) {
 		return { state: "missing", message: "No orchestrator is running for this project." };
 	}
-	if (orchestratorNeedsRestart(workspace, orchestrator)) {
+	if (workspace.orchestratorAgent && orchestratorAgentSettingChanged(workspace, orchestrator)) {
 		return {
-			state: "restart_needed",
-			message: `Configured orchestrator agent is ${workspace.orchestratorAgent}; running agent is ${orchestrator.provider}.`,
+			state: "agent_setting_changed",
+			message: `This project's orchestrator agent is now ${agentLabel(workspace.orchestratorAgent)}. The running orchestrator stays on ${agentLabel(orchestrator.provider)}; a restart starts a new one on ${agentLabel(workspace.orchestratorAgent)}.`,
 		};
 	}
 	return { state: "ok" };

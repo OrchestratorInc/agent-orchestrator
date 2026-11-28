@@ -8,12 +8,12 @@ import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 export const PLAYBACK_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
-const SKIP_SECONDS = 5;
-const VOLUME_STEP = 0.05;
+export const SKIP_SECONDS = 5;
+export const VOLUME_STEP = 0.05;
 /** Videos start at half volume, so one with loud audio does not blast when it autoplays. */
-const DEFAULT_VOLUME = 0.5;
+export const DEFAULT_VOLUME = 0.5;
 /** Controls a narrow player leaves out; see the controls row. */
-const COMPACT_HIDDEN = "@max-[26rem]:hidden";
+export const COMPACT_HIDDEN = "@max-[26rem]:hidden";
 
 /** `m:ss`, or `h:mm:ss` once the time passes an hour. Unknown times read 0:00. */
 export function formatMediaTime(seconds: number): string {
@@ -333,7 +333,8 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 	);
 }
 
-function ControlButton({ children, className, disabled, label, onClick, portal, pressed }: {
+/** An icon button of the player's controls row, with its label as a tooltip. Shared with the artifact comments player. */
+export function ControlButton({ children, className, disabled, label, onClick, portal, pressed }: {
 	children: ReactNode;
 	className?: string;
 	disabled?: boolean;
@@ -361,7 +362,7 @@ function ControlButton({ children, className, disabled, label, onClick, portal, 
  * and keyboard focus show the thumb through --slider-thumb rather than a
  * group-has variant, which would restyle the whole app on DOM changes.
  */
-function MediaSlider({ className, disabled, label, max, onChange, secondary = 0, step, trackRef, value, valueText, volume }: {
+export function MediaSlider({ className, disabled, label, max, onChange, secondary = 0, step, trackRef, value, valueText, volume }: {
 	className?: string;
 	disabled?: boolean;
 	label: string;

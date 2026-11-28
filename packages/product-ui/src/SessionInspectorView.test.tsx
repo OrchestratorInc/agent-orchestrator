@@ -7,7 +7,6 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
-  commentTextLines,
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
@@ -16,6 +15,7 @@ import {
   SessionInspectorSummaryView,
   type InspectorReviewLabels,
 } from "./SessionInspectorView";
+import { commentTextLines } from "./comment-text";
 import type { ExternalLinkProps } from "./external-link";
 
 function ExternalLink({

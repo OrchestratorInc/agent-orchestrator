@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 	items: new Map<string, string>(),
 	nav: { pathname: "/", params: {} as Record<string, string>, segments: [] as string[] },
 	push: vi.fn(),
+	openedBy: vi.fn(),
 	initialURL: null as string | null,
 	launch: { resolve: (_: unknown) => {} },
 	failRead: false,
@@ -33,6 +34,7 @@ vi.mock("react-native", () => ({ AppState: { addEventListener: (_: string, liste
 	mocks.appState.listener = listener;
 	return { remove: () => { mocks.appState.listener = null; } };
 } } }));
+vi.mock("./telemetry/uiUsageRegistry", async (importOriginal) => ({ ...(await importOriginal<object>()), reportOpenedBy: mocks.openedBy }));
 vi.mock("./launchNotification", () => ({
 	launchNotificationResponse: () => new Promise((resolve) => { mocks.launch.resolve = resolve; }),
 }));
@@ -49,6 +51,7 @@ beforeEach(() => {
 	mocks.initialURL = null;
 	mocks.failRead = false;
 	mocks.push.mockClear();
+	mocks.openedBy.mockClear();
 });
 
 afterEach(() => {
@@ -70,6 +73,15 @@ describe("RouteRestorer", () => {
 	it("reopens the screen the phone closed the app on", async () => {
 		await launch(null);
 		expect(mocks.push).toHaveBeenCalledWith("/session/web-1?hostId=a");
+		// The reopened session counts as restored, not opened from the board.
+		expect(mocks.openedBy).toHaveBeenCalledWith("restore", { sessionId: "web-1", hostId: "a" });
+	});
+
+	it("marks no restore for a screen that is not a session", async () => {
+		mocks.items.set(LAST_ROUTE_KEY, JSON.stringify({ href: "/files/web-1", leftAt: Date.now() - 60_000 }));
+		await launch(null);
+		expect(mocks.push).toHaveBeenCalledWith("/files/web-1");
+		expect(mocks.openedBy).not.toHaveBeenCalled();
 	});
 
 	// PushManager routes the tap that launched the app; the saved screen must
@@ -92,6 +104,7 @@ describe("RouteRestorer", () => {
 		mocks.initialURL = "ao-app://session/web-9";
 		await launch(null);
 		expect(mocks.push).not.toHaveBeenCalled();
+		expect(mocks.openedBy).not.toHaveBeenCalled();
 	});
 
 	// Left during the launch's reads and then closed by the phone: the screen

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
-import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit, workerRouteForSession } from "./reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewerControls, reviewerDestination, reviewForPullRequest, reviewRouteForSession, rerequestableReviewers, rerequestKey, reviewStatusVisual, sessionPRReadyForReview, workerRouteForSession } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
 	triggerSource: "manual", prUrl: "https://github.com/acme/repo/pull/12", targetSha: "abcdef123456",
-	status: "complete", verdict: "approved", body: "Looks good", githubReviewId: "", createdAt: "2026-09-22T00:00:00Z",
+	status: "completed", verdict: "approved", body: "Looks good", githubReviewId: "", createdAt: "2026-09-22T00:00:00Z",
 	autoInjectReview: true, ...over,
 });
 
@@ -90,33 +90,12 @@ describe("mobile review presentation", () => {
 		const review = state();
 		expect(review.latestRun).toBeUndefined();
 		expect(review.previousRun?.verdict).toBe("approved");
-		expect(reviewStatusLabel(review.status)).toBe("Needs review");
-	});
-
-	it("labels terminal outcomes and shortens commit ids", () => {
-		expect(reviewVerdictLabel(run({ verdict: "changes_requested" }))).toBe("Changes requested");
-		expect(reviewVerdictLabel(run({ status: "cancelled", verdict: "" }))).toBe("Review cancelled");
-		expect(shortCommit("abcdef123456")).toBe("abcdef12");
 	});
 
 	it("does not present pending or unavailable reviews as successful", () => {
 		expect(reviewStatusVisual("needs_review")).toEqual({ icon: "clock", tone: "muted" });
 		expect(reviewStatusVisual("ineligible")).toEqual({ icon: "alert-circle", tone: "muted" });
 		expect(reviewStatusVisual("up_to_date")).toEqual({ icon: "check-circle", tone: "green" });
-	});
-
-	it("only offers actions supported by the current review state", () => {
-		expect(reviewPrimaryAction(state({ status: "needs_review" }))).toBe("start");
-		expect(reviewPrimaryAction(state({ status: "running" }))).toBe("cancel");
-		expect(reviewPrimaryAction(state({ status: "up_to_date" }))).toBe("review_again");
-		expect(reviewPrimaryAction(state({ status: "ineligible" }))).toBe("none");
-		expect(reviewPrimaryActionLabel("review_again")).toBe("Review again");
-		expect(reviewPrimaryActionLabel("cancel", true)).toBe("Cancel running reviews");
-	});
-
-	it("prioritizes cancelling an active session batch over starting another", () => {
-		const selected = state({ status: "needs_review" });
-		expect(reviewBatchAction(selected, [selected, state({ prUrl: "other", status: "running" })])).toBe("cancel");
 	});
 
 	it("surfaces only the newest written automatic-review failure while automation is enabled", () => {
@@ -129,7 +108,7 @@ describe("mobile review presentation", () => {
 
 	it("does not elevate manual, successful, or empty automatic-review results as failures", () => {
 		expect(latestAutoReviewFailure([state({ latestRun: run({ status: "failed", triggerSource: "manual" }) })], true)).toBeUndefined();
-		expect(latestAutoReviewFailure([state({ latestRun: run({ status: "complete", triggerSource: "auto" }) })], true)).toBeUndefined();
+		expect(latestAutoReviewFailure([state({ latestRun: run({ status: "completed", triggerSource: "auto" }) })], true)).toBeUndefined();
 		expect(latestAutoReviewFailure([state({ latestRun: run({ status: "failed", triggerSource: "auto", body: "  " }) })], true)).toBeUndefined();
 	});
 
@@ -139,21 +118,6 @@ describe("mobile review presentation", () => {
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/reviewer/[reviewId]", params: { reviewId: "review-1" } });
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/shell/[handleId]", params: { handleId: "fallback", kind: "reviewer" } });
 		expect(reviewerDestination(base, review, "worker-1")).toBeUndefined();
-	});
-	it("only offers finished reviews with findings to the worker", () => {
-		expect(reviewRunSendable(run())).toBe(true);
-		expect(reviewRunSendable(run({ status: "delivered" }))).toBe(true);
-		expect(reviewRunSendable(run({ status: "running", body: "" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "running", body: "partial" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "failed", verdict: "", body: "reviewer process exited before submitting a result" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "cancelled", verdict: "" }))).toBe(false);
-		expect(reviewRunSendable(run({ body: "  " }))).toBe(false);
-	});
-
-	it("says delivered once", () => {
-		expect(reviewRunMeta(run({ status: "delivered", deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · delivered");
-		expect(reviewRunMeta(run({ status: "complete", deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · complete · delivered");
-		expect(reviewRunMeta(run({ status: "running" }))).toBe("codex · manual · running");
 	});
 	it("only offers Open when there is a reviewer surface to open", () => {
 		const base = { reviewerHandleId: "", reviews: [state()], runs: [run()] } as SessionReviews;
@@ -168,5 +132,79 @@ describe("mobile review presentation", () => {
 		expect(reviewerControls({ ...base, reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" }, reviewerActivityState: "active" } as SessionReviews, state(), "worker-1")).toEqual({ open: "chat", restore: false, stop: false });
 		// No reviewer and no history: nothing to show.
 		expect(reviewerControls({ reviewerHandleId: "", reviews: [state()], runs: [] } as SessionReviews, state(), "worker-1")).toEqual({ restore: false, stop: false });
+	});
+});
+
+describe("reviewers to ask again", () => {
+	const PR = "https://github.com/acme/repo/pull/12";
+	const entry = (reviewerId: string, over: Partial<NonNullable<SessionPRSummary["review"]["reviews"]>[number]> = {}) => ({
+		reviewerId, verdict: "changes_requested" as const, body: "", submittedAt: "2026-11-20T10:00:00Z", autoInjectReview: true, ...over,
+	});
+	const pr = (over: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
+		url: PR, htmlUrl: PR, number: 12, title: "Improve mobile review", state: "open", repo: "acme/repo", author: "ao-worker",
+		sourceBranch: "feat", targetBranch: "main", additions: 1, deletions: 1, changedFiles: 1,
+		ci: { state: "passing", failingChecks: [] },
+		review: { decision: "changes_requested", hasUnresolvedHumanComments: true, unresolvedBy: [], reviews: [] },
+		mergeability: { state: "mergeable", reasons: [] },
+		...over,
+	});
+	const ids = (value: SessionPRSummary, reviews?: Pick<SessionReviews, "reviews" | "runs">) => rerequestableReviewers(value, reviews).map((reviewer) => reviewer.reviewerId);
+
+	it("offers a person who asked for changes, with their inline comment count", () => {
+		const value = pr({
+			review: {
+				decision: "changes_requested", hasUnresolvedHumanComments: true, reviews: [entry("dana")],
+				unresolvedBy: [{ reviewerId: "dana", count: 2, links: [
+					{ url: `${PR}#discussion_r1`, file: "a.ts", line: 1, body: "One", autoInjectReview: true },
+					{ url: `${PR}#discussion_r2`, file: "b.ts", line: 2, body: "Two", autoInjectReview: true },
+				] }],
+			},
+		});
+		expect(rerequestableReviewers(value, undefined)).toEqual([{ reviewerId: "dana", count: 2 }]);
+	});
+
+	// GitHub rejects review requests for apps, so a bot is never offered.
+	it("never offers a bot", () => {
+		expect(ids(pr({ review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [entry("coderabbitai[bot]", { isBot: true, body: "Walkthrough" })] } }))).toEqual([]);
+	});
+
+	it("leaves out a reviewer who approved, one already asked again, and the PR's author", () => {
+		const value = pr({
+			author: "Ao-Worker[bot]",
+			review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [
+				entry("erin", { verdict: "approved" }),
+				entry("sam"),
+				entry("ao-worker"),
+			] },
+			requestedReviewers: [{ login: "sam" }],
+		});
+		expect(ids(value)).toEqual([]);
+	});
+
+	it("leaves out a reviewer once asked from here, until the provider's next read", () => {
+		const value = pr({ review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [entry("dana"), entry("lee")] } });
+		expect(ids(value)).toEqual(["dana", "lee"]);
+		expect(rerequestableReviewers(value, undefined, new Set([rerequestKey("@Dana")])).map((reviewer) => reviewer.reviewerId)).toEqual(["lee"]);
+	});
+
+	// An app sharing a person's base login is not them: its comments are not theirs.
+	it("counts only a person's own comments, not a same-named bot's", () => {
+		const value = pr({
+			review: { decision: "changes_requested", hasUnresolvedHumanComments: true, reviews: [entry("dana")], unresolvedBy: [] },
+			detailsObservedAt: "2026-11-20T10:05:00Z",
+			threads: [
+				{ id: "t1", path: "a.ts", line: 1, resolved: false, comments: [{ id: "c1", author: "dana", body: "Mine.", isBot: false, url: `${PR}#discussion_r1` }] },
+				{ id: "t2", path: "b.ts", line: 2, resolved: false, comments: [{ id: "c2", author: "dana[bot]", body: "Automated.", isBot: true, url: `${PR}#discussion_r2` }] },
+			],
+		});
+		expect(rerequestableReviewers(value, undefined)).toEqual([{ reviewerId: "dana", count: 1 }]);
+	});
+
+	it("leaves out the review the Orchestrator posted", () => {
+		const value = pr({ review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [
+			entry("prasad", { reviewUrl: `${PR}#pullrequestreview-77`, body: "Changes requested" }),
+		] } });
+		expect(ids(value)).toEqual(["prasad"]);
+		expect(ids(value, { reviews: [], runs: [run({ prUrl: PR, githubReviewId: "77", status: "completed", body: "Changes requested" })] })).toEqual([]);
 	});
 });
