@@ -281,11 +281,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			!previous.readiness || previous.readiness === "ready") return;
 		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 	}, [hostId, queryClient, session.id, statusReadiness]);
-	const heldSends = useRef<(() => void)[]>([]);
+	const heldSends = useRef<(() => void)[] | undefined>(undefined);
 	const agentPending = statusReadiness === "checking" || Boolean(agentResuming) || commands.resumingAgent;
 	useEffect(() => {
-		if (agentPending) return;
-		for (const release of heldSends.current.splice(0)) release();
+		if (!agentPending) return;
+		const held: (() => void)[] = [];
+		heldSends.current = held;
+		return () => {
+			heldSends.current = undefined;
+			for (const release of held.splice(0)) release();
+		};
 	}, [agentPending]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
@@ -616,6 +621,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	const startupHold = statusReadiness === "checking" && sessionIsActive(session) && renderSnapshot?.controller.state === "stopped";
+	const sendWhenReady = (input: Parameters<typeof commands.send>[0]) => {
+		const held = startupHold ? heldSends.current : undefined;
+		return held ? commands.send(input, new Promise<void>((release) => { held.push(release); })) : commands.send(input);
+	};
 	// A held search match is applied to the conversation the daemon holds. An
 	// orchestrator with nothing cached, and a switch from the terminal, first
 	// render a placeholder under another conversation id. Find opened on that
@@ -835,10 +845,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					};
 					// A new message replaces an earlier switch's failure.
 					clearSwitchError();
-					if (!pendingSwitch) {
-						if (statusReadiness !== "checking" || renderSnapshot?.controller.state !== "stopped") return commands.send(message);
-						return commands.send(message, new Promise<void>((release) => { heldSends.current.push(release); }));
-					}
+					if (!pendingSwitch) return sendWhenReady(message);
 					// The bar shows the mode the agent will start in only once its modes are known
 					// (Pi runs only with permissions bypassed); nothing goes before then.
 					if (!pendingPermissionModes) {
@@ -868,7 +875,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// The daemon switches and sends in one request, attachments included, so no other
 					// switch can take the message; it shows at once.
 					try {
-						const sent = await commands.send({ ...message, providerSwitch: switchRequest, switchDisplay });
+						const sent = await sendWhenReady({ ...message, providerSwitch: switchRequest, switchDisplay });
 						switched();
 						return sent;
 					} catch (error) {
@@ -971,12 +978,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				// harness that cannot steer. The refusal check stays as a backstop: it
 				// covers the window before the controller reports, and it is the last word
 				// afterwards, since the capability is a property of the driver.
-				onSteer={can(renderSnapshot, "steer") && !commands.steerUnsupported ? commands.steer : undefined}
+				onSteer={can(renderSnapshot, "steer") && !commands.steerUnsupported && !startupHold ? commands.steer : undefined}
 				sendPending={commands.sendPending}
 				steerPending={commands.steerPending}
 				steerRefusal={commands.steerRefusal}
 				onPromoteQueuedTurn={
-					can(renderSnapshot, "steer") && !commands.steerUnsupported
+					can(renderSnapshot, "steer") && !commands.steerUnsupported && !startupHold
 						? commands.promoteQueuedTurn
 						: undefined
 				}

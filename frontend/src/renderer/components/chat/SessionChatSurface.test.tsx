@@ -548,6 +548,44 @@ describe("SessionChatSurface pending switch effort", () => {
 	});
 });
 
+describe("SessionChatSurface startup check", () => {
+	const sendDuringCheck = async (target: WorkspaceSession) => {
+		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+		conversationCommandState.send = vi.fn().mockResolvedValue({});
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={target} /></Wrapper>);
+		await act(async () => {
+			await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+		});
+		const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void> | undefined;
+		let released = false;
+		void whenReady?.then(() => { released = true; });
+		await act(async () => {});
+		return { client, view, whenReady, released: () => released };
+	};
+
+	it("holds a message sent during the check until the check is over", async () => {
+		const { client, view, whenReady, released } = await sendDuringCheck({ ...session, statusReadiness: "checking" });
+		expect(whenReady).toBeInstanceOf(Promise);
+		expect(released()).toBe(false);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		await act(async () => {});
+		expect(released()).toBe(true);
+	});
+
+	it("lets a held message go when the chat view goes away", async () => {
+		const { view, released } = await sendDuringCheck({ ...session, statusReadiness: "checking" });
+		view.unmount();
+		await act(async () => {});
+		expect(released()).toBe(true);
+	});
+
+	it("restores an archived chat instead of holding its message", async () => {
+		const { whenReady } = await sendDuringCheck({ ...session, isTerminated: true, statusReadiness: "checking" });
+		expect(whenReady).toBeUndefined();
+	});
+});
+
 describe("SessionChatSurface search reveal", () => {
 	it("forwards a search result's matched message to the timeline", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

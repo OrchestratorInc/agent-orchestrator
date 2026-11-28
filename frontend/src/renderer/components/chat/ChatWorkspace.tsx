@@ -2093,7 +2093,7 @@ function ChatWorkspaceContent({
 	// reads as idle). A failed send drops its echo; one kept to show a failure is
 	// not waiting on anything, and an opening brief has the startup's own words.
 	const sentTurnPending = useMemo(() => sendAwaitingTurn || (localEchos ?? []).some((echo) =>
-		!echo.opening && !echo.delivery &&
+		!echo.opening && (!echo.delivery || echo.delivery === "held") &&
 		!(echo.turnId && snapshot.turns.some((entry) => entry.id === echo.turnId)) &&
 		!snapshot.items.some((item) => echoMatchesItem(echo, item, NO_TURN_IDS))),
 	[localEchos, sendAwaitingTurn, snapshot.items, snapshot.turns]);
