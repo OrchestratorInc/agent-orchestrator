@@ -600,7 +600,14 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 					nil,
 				)
 			}
-			return newestSession(existing), 0, 0, nil
+			// An explicit spawn must not silently hand back the existing
+			// orchestrator (ignoring options such as the display name).
+			current := newestSession(existing)
+			return domain.Session{}, 0, 0, apierr.Conflict(
+				"ORCHESTRATOR_ALREADY_EXISTS",
+				fmt.Sprintf("Project %s already has an active orchestrator (%s); a project can have only one. Use the existing orchestrator or replace it with a clean spawn.", cfg.ProjectID, current.ID),
+				map[string]any{"projectId": string(cfg.ProjectID), "sessionId": string(current.ID)},
+			)
 		}
 	}
 	return s.spawnUnlessAutoPaused(ctx, cfg, func(spawnCtx context.Context) (domain.Session, int, int, error) { return s.spawn(spawnCtx, cfg) })
