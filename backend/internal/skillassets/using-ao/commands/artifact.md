@@ -37,13 +37,18 @@ ao artifact add report.html
 A later round on the same thread or topic is a revision, not a new deliverable,
 even when it covers a new detail. Do not write a new file and register it.
 
-- Edit or overwrite the existing artifact. Rename it with `mv` to retitle it for
-  the latest state, for example `mv draft-report.html q3-report.html`.
-- For running before/after comparisons, keep one HTML page per thread, such as
-  `design-polish.html`, register it once, and add each round to it. Its images
-  are supporting files and stay unregistered.
-- Review visuals nobody asked to keep go in the chat thread (`ao render` or
-  `html_render`) or in the system temp directory, not in the artifact directory.
+- Edit or overwrite the existing artifact. To retitle it for the latest state,
+  rename it with `mv` to an unused name, for example
+  `mv draft-report.html q3-report.html`. Moving it onto another artifact's path
+  drops the moved artifact's history.
+- When the user asks to keep before/after comparisons, keep one HTML page per
+  thread, such as `design-polish.html`, register it once, and add each round to
+  it. Its images are supporting files and stay unregistered.
+- A before/after the user asked to see but not keep goes in the chat thread
+  (`ao render` or `html_render`). A terminal session has no thread, so it uses
+  the one comparison page above.
+- Review visuals nobody asked to see go in the system temp directory, not in
+  the artifact directory.
 
 The command prints how many files stay unlisted and names the ones at the root
 of the directory. If one of those is a deliverable, register it too.

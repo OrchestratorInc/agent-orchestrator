@@ -315,10 +315,12 @@ func TestArtifactGuidanceTreatsIterationAsRevision(t *testing.T) {
 	for _, want := range []string{
 		"## Iterating on a deliverable",
 		"A later round on the same thread or topic is a revision, not a new deliverable",
-		"Rename it with `mv` to retitle it for the latest state",
-		"keep one HTML page per thread",
+		"rename it with `mv` to an unused name",
+		"When the user asks to keep before/after comparisons, keep one HTML page per thread",
 		"register it once, and add each round to it",
-		"Review visuals nobody asked to keep go in the chat thread",
+		"A before/after the user asked to see but not keep goes in the chat thread",
+		"A terminal session has no thread, so it uses the one comparison page above.",
+		"Review visuals nobody asked to see go in the system temp directory",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("artifact guidance missing %q", want)
