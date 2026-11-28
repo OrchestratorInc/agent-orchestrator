@@ -1,4 +1,9 @@
-import { Stack, useNavigation, useRouter } from "expo-router";
+import { AoError } from "../../../shared/telemetry/ao-error";
+import { ApprovalOverlay } from "../approvals/ApprovalOverlay";
+import { decideCloudApproval, listCloudApprovals } from "../approvals/cloudApprovals";
+import { APPROVAL_POLL_MS } from "../approvals/localApprovals";
+import type { ApprovalCard, ApprovalDecision } from "../approvals/types";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight, useIsFocused } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
@@ -504,6 +509,23 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		},
 	}), [bareFiles, fileOpenStillHere, filesBackend, router, sessionId, title, workspaceLive]);
 	const changeSummary = useBackendChangeSummary(workspaceLive ? filesBackend : null, sessionId, changeSignal);
+	// Agent browser actions waiting for approval; read-only for a non-decider.
+	const { approval: openedApproval } = useLocalSearchParams<{ approval?: string }>();
+	const approvalOrgId = org?.id;
+	const subscribeBrowserApprovals = useCallback((onChange: (cards: ApprovalCard[]) => void) => {
+		if (!approvalOrgId || !focused) return () => {};
+		let stopped = false;
+		let last = "";
+		const read = () => void listCloudApprovals(client, approvalOrgId, sessionId).then((cards) => {
+			const key = JSON.stringify(cards);
+			if (!stopped && key !== last) { last = key; onChange(cards); }
+		}).catch(() => {});
+		read();
+		const timer = setInterval(read, APPROVAL_POLL_MS);
+		return () => { stopped = true; clearInterval(timer); };
+	}, [client, focused, approvalOrgId, sessionId]);
+	const decideBrowserApproval = useCallback((id: string, decision: ApprovalDecision) =>
+		approvalOrgId ? decideCloudApproval(client, approvalOrgId, sessionId, id, decision) : Promise.reject(new AoError("BROWSER_APPROVAL_NO_ORG", "No organization")), [client, approvalOrgId, sessionId]);
 	const nameOfSession = useCallback((id: string) => {
 		const named = sessions.find((item) => item.id === id);
 		return named?.displayName?.trim() || (named ? cloudAgentLabel(named.harness) : undefined);
@@ -543,6 +565,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 
 	const banners = (
 		<>
+			<ApprovalOverlay subscribe={subscribeBrowserApprovals} decide={decideBrowserApproval} openedFor={openedApproval} />
 			{terminated ? (
 				<InlineBanner tone="muted" icon="archive" title="This session is archived" body="Restore it to continue where it left off." action={busyAction === "restore" ? "Restoring…" : "Restore"} onPress={busyAction ? undefined : restore} />
 			) : problem?.phase === "failed" ? (

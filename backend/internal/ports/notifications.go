@@ -26,6 +26,13 @@ type NotificationIntent struct {
 	PRTargetBranch     string
 	Provider           string
 	Repo               string
+
+	// ApprovalCategory is a browser approval's kind (payment, message, ...).
+	// Only the kind and site reach the notification: the approval's summary
+	// and reason are agent- and page-supplied and can carry typed text.
+	ApprovalCategory string
+	// ApprovalSite is the origin the approval acts on.
+	ApprovalSite string
 }
 
 // NotificationResolution is the lifecycle-to-notification-producer contract for
@@ -36,8 +43,11 @@ type NotificationIntent struct {
 // PRURL wins when set (a PR-scoped notification can outlive its session's
 // activity churn); otherwise the resolution is scoped to SessionID.
 type NotificationResolution struct {
-	Type       domain.NotificationType
-	SessionID  domain.SessionID
-	PRURL      string
+	Type      domain.NotificationType
+	SessionID domain.SessionID
+	PRURL     string
+	// SourceKey, when set, closes only the notification with that key (one
+	// browser approval among a session's several). It wins over PRURL.
+	SourceKey  string
 	ResolvedAt time.Time
 }

@@ -249,3 +249,39 @@ func TestManagerReconcilePublishesRecoveredResolutions(t *testing.T) {
 		t.Fatal("expected published resolution")
 	}
 }
+
+func (f *fakeStore) ResolveNotificationBySourceKey(_ context.Context, sourceKey string, at time.Time) ([]domain.NotificationRecord, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.resolveMatching(at, func(rec domain.NotificationRecord) bool { return rec.SourceKey == sourceKey }), nil
+}
+
+// An approval resolves alone: the same session's other approvals stay open.
+func TestManagerResolveBySourceKey(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	st := &fakeStore{rows: []domain.NotificationRecord{
+		{ID: "ntf_1", SessionID: "mer-1", Type: domain.NotificationBrowserApproval, SourceKey: "browser_approval:apr_1"},
+		{ID: "ntf_2", SessionID: "mer-1", Type: domain.NotificationBrowserApproval, SourceKey: "browser_approval:apr_2"},
+	}}
+	hub := NewHub()
+	ch, unsub := hub.Subscribe("")
+	defer unsub()
+	mgr := New(Deps{Store: st, Publisher: hub, Clock: func() time.Time { return now }})
+
+	res := Resolution{Type: domain.NotificationBrowserApproval, SessionID: "mer-1", SourceKey: "browser_approval:apr_1"}
+	if err := mgr.Resolve(context.Background(), res); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !st.rows[0].Resolved() || st.rows[1].Resolved() {
+		t.Fatalf("rows = %+v, want only ntf_1 resolved", st.rows)
+	}
+	select {
+	case got := <-ch:
+		if got.Kind != domain.NotificationResolved || got.Record.ID != "ntf_1" {
+			t.Fatalf("published = %+v", got)
+		}
+	default:
+		t.Fatal("expected published resolution")
+	}
+}

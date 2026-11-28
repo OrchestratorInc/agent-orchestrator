@@ -709,3 +709,20 @@ func TestDispatcherReceiptAmbiguitySurvivesCapacityEviction(t *testing.T) {
 		t.Errorf("pending = %d, want %d unresolved fresh tickets", len(d.pending), maxPendingReceipts-1)
 	}
 }
+
+// An approval push names the approval so the phone can open its card, and
+// carries the category whose Deny button acts from the notification.
+func TestMessageForBrowserApproval(t *testing.T) {
+	rec := domain.NotificationRecord{
+		ID: "ntf_1", SessionID: "sess-1", Type: domain.NotificationBrowserApproval,
+		Title: "Approval needed", Body: "x wants to click", SourceKey: "browser_approval:apr_1",
+	}
+	msg := messageFor(rec, "tok", "host-1", "Mac")
+	if msg.Data["approvalId"] != "apr_1" || msg.CategoryID != "browser_approval" {
+		t.Fatalf("message = %+v", msg)
+	}
+	other := messageFor(domain.NotificationRecord{ID: "n", SessionID: "s", Type: domain.NotificationNeedsInput, Title: "t"}, "tok", "host-1", "Mac")
+	if _, ok := other.Data["approvalId"]; ok || other.CategoryID != "" {
+		t.Fatalf("needs-input message = %+v", other)
+	}
+}

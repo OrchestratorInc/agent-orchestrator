@@ -81,6 +81,8 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
 			return { icon: "git-pull-request-arrow", color: t.green, label: "Review completed" };
 		case "review_changes_requested":
 			return { icon: "message-square-dot", color: t.amber, label: "Review changes requested" };
+		case "browser_approval":
+			return { icon: "bell", color: t.amber, label: "Approval needed" };
 		// Orchestrator Cloud's types, which share this list.
 		case "agent_failed":
 			return { icon: "bell", color: t.red, label: "Agent failed" };
@@ -107,7 +109,7 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
  * opening it from the tray agree — the rule lives here rather than being written
  * twice.
  */
-export function notificationTarget(n: { type: string; sessionId?: string; hostId?: string; prUrl?: string }, knownHosts: string | ReadonlySet<string> | undefined): string {
+export function notificationTarget(n: { type: string; sessionId?: string; hostId?: string; prUrl?: string; approvalId?: string }, knownHosts: string | ReadonlySet<string> | undefined): string {
 	// An older push has no machine identity. It cannot safely open (or mark read)
 	// a same-ID session on whichever machine is currently selected. History passes
 	// its current host; push taps can name any paired host.
@@ -116,6 +118,11 @@ export function notificationTarget(n: { type: string; sessionId?: string; hostId
 	const hostId = encodeURIComponent(n.hostId);
 	if ((n.type === "review_completed" || n.type === "review_changes_requested") && sessionId && n.prUrl) {
 		return `/review/${encodeURIComponent(sessionId)}?prUrl=${encodeURIComponent(n.prUrl)}&hostId=${hostId}`;
+	}
+	if (n.type === "browser_approval" && sessionId) {
+		// The session's browser, with the approval's card over it.
+		const approval = n.approvalId ? `&approval=${encodeURIComponent(n.approvalId)}` : "";
+		return `/preview/${encodeURIComponent(sessionId)}?hostId=${hostId}${approval}`;
 	}
 	return n.type === "needs_input" && sessionId ? `/session/${encodeURIComponent(sessionId)}?hostId=${hostId}` : `/prs?hostId=${hostId}`;
 }

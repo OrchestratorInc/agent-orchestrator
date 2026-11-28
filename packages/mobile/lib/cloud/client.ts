@@ -1,4 +1,5 @@
 import { noteRequestAnswered } from "../answeredRequests";
+import type { ApprovalDecision, CloudApproval } from "../approvals/types";
 import { CLOUD_API_PREFIX, cloudAddressIsSafe, cloudWebSocketBase } from "./config";
 import { CloudAuthError, CloudError, isPlanRefusal } from "./errors";
 import type {
@@ -361,6 +362,11 @@ export function createCloudClient(options: CloudClientOptions) {
 			json<{ event: unknown }>("POST", `${session(orgId, sessionId)}/turns/${seg(turnId)}/steer`, { body: { text }, idempotencyKey }),
 		decideApproval: (orgId: string, sessionId: string, requestId: string, decisionId: string) =>
 			json<{ ok: boolean }>("POST", `${session(orgId, sessionId)}/approvals/${seg(requestId)}/decide`, { body: { decisionId } }),
+		/** Agent browser actions waiting for a person's approval (#8601). */
+		listBrowserApprovals: (orgId: string, sessionId: string) =>
+			json<{ pending: CloudApproval[] }>("GET", `${session(orgId, sessionId)}/browser-approvals`),
+		decideBrowserApproval: (orgId: string, sessionId: string, approvalId: string, decision: ApprovalDecision) =>
+			json<{ id: string; decision: string }>("POST", `${session(orgId, sessionId)}/browser-approvals/${seg(approvalId)}/decide`, { body: { decision }, idempotencyKey: options.newKey() }),
 		listChatModels: (orgId: string, sessionId: string) =>
 			json<CloudChatModels>("GET", `${session(orgId, sessionId)}/chat-models`, { timeoutMs: WORKER_TIMEOUT_MS }),
 		/** The models a new task can pick for an agent, before any session exists. */

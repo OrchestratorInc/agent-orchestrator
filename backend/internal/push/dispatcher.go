@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/approvalnotify"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
@@ -296,7 +297,7 @@ func messageFor(rec domain.NotificationRecord, token, hostID, hostName string) M
 	if runes := []rune(label); len(runes) > 40 {
 		label = string(runes[:40]) + "…"
 	}
-	return Message{
+	msg := Message{
 		To:        token,
 		Title:     fmt.Sprintf("%s · %s", label, rec.Title),
 		Body:      rec.Body,
@@ -312,4 +313,15 @@ func messageFor(rec domain.NotificationRecord, token, hostID, hostName string) M
 			"notificationId": rec.ID,
 		},
 	}
+	if rec.Type == domain.NotificationBrowserApproval {
+		if id := approvalnotify.ApprovalID(rec.SourceKey); id != "" {
+			msg.Data["approvalId"] = id
+			msg.CategoryID = browserApprovalCategory
+		}
+	}
+	return msg
 }
+
+// browserApprovalCategory is the phone's notification category for an
+// approval: Deny acts from the notification, Allow opens the app.
+const browserApprovalCategory = "browser_approval"

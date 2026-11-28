@@ -96,7 +96,7 @@ export const MOBILE_ALLOWLIST: Record<string, Readonly<Record<string, PropRule>>
 	[MOBILE_EVENTS.notificationOpened]: {
 		// notificationView maps a push to a small set of destinations; `cloud` is
 		// an Orchestrator Cloud notification, opened on its Cloud page.
-		target: { oneOf: ["session", "review", "prs", "cloud"] },
+		target: { oneOf: ["session", "review", "prs", "preview", "cloud"] },
 		cold_start: { flag: true },
 	},
 	[MOBILE_EVENTS.featureUsed]: {

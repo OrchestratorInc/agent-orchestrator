@@ -9,12 +9,15 @@ import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
 import { Alert, AppState, Platform } from "react-native";
 import { markNotificationRead } from "./api";
+import { approvalPushAction } from "./approvals/approvalPush";
+import { decideCloudApproval } from "./approvals/cloudApprovals";
+import { decideApproval } from "./approvals/localApprovals";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
 import { launchNotificationResponse, markNotificationResponseHandled } from "./launchNotification";
 import { findHost } from "./hosts";
 import { notificationTarget } from "./notificationView";
-import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
+import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, ensureApprovalCategory, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
 import { useCloud } from "./cloud/CloudProvider";
 import { CLOUD_HOST_ID } from "./cloud/mapping";
@@ -22,6 +25,9 @@ import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarge
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 import { reportOpenedBy, sessionTargetInPath } from "./telemetry/uiUsageRegistry";
+
+/** How long a Deny from the notification waits for its machine or organization. */
+const DENY_WAIT_MS = 2 * 60_000;
 
 // Set the foreground presentation policy before any notification can arrive.
 configurePushHandler();
@@ -33,6 +39,8 @@ type PushData = {
 	projectId?: string;
 	prUrl?: string;
 	notificationId?: string;
+	/** A browser approval's id (type "browser_approval"). */
+	approvalId?: string;
 	/** "cloud" for a notification Orchestrator Cloud sent rather than a paired machine. */
 	source?: string;
 	orgId?: string;
@@ -50,6 +58,8 @@ export function PushManager(): null {
 	const cloud = useCloud();
 	const cloudRef = useRef(cloud);
 	cloudRef.current = cloud;
+	// Denies from the notification still waiting for their machine or organization.
+	const pendingDenies = useRef<Array<{ data: PushData; at: number }>>([]);
 	const connected = shouldPoll(AppState.currentState)
 		? hostStates.flatMap(({ config, connection }) => config && connection === "open" ? [config] : [])
 		: [];
@@ -59,9 +69,26 @@ export function PushManager(): null {
 	const connectedRef = useRef(connected);
 	connectedRef.current = connected;
 
+	// A waiting Deny goes out once its machine connects or Cloud is ready. Past
+	// the approval's own timeout it would only read "already decided": dropped.
+	const openHosts = hostStates.filter(({ connection, config }) => connection === "open" && config).map(({ hostId }) => hostId).join(",");
+	const cloudOrgId = cloud.org?.id;
+	useEffect(() => {
+		const waiting = pendingDenies.current;
+		if (waiting.length === 0) return;
+		pendingDenies.current = [];
+		for (const entry of waiting) {
+			if (Date.now() - entry.at > DENY_WAIT_MS) continue;
+			void sendDeny(entry.data).then((sent) => { if (!sent) pendingDenies.current.push(entry); });
+		}
+		// sendDeny reads the latest hosts and organization through refs.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [openHosts, cloudOrgId]);
+
 	// Create the Android channel once at startup.
 	useEffect(() => {
 		void ensureAndroidChannel();
+		void ensureApprovalCategory().catch(() => {});
 	}, []);
 
 	// Runs even with zero paired hosts, including onboarding after forgetting
@@ -108,7 +135,12 @@ export function PushManager(): null {
 
 		const handle = (resp: Notifications.NotificationResponse | null, coldStart: boolean) => {
 			if (!resp) return;
-			void route((resp.notification.request.content.data ?? {}) as PushData, coldStart);
+			const data = (resp.notification.request.content.data ?? {}) as PushData;
+			if (approvalPushAction(data, resp.actionIdentifier)?.kind === "deny") {
+				void denyFromNotification(data);
+				return;
+			}
+			void route(data, coldStart);
 		};
 
 		// The launch's own tap only: one handled before (an earlier launch, or the
@@ -125,6 +157,37 @@ export function PushManager(): null {
 		// route() reads the latest host snapshots through hostsRef.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [navState?.key]);
+
+	// Deny from the notification, without opening a screen. If it can't send,
+	// the approval times out, which also refuses the action. On a cold start
+	// (iOS wakes the app in the background for the action) no machine is
+	// connected and Cloud has no organization yet, so the Deny waits for them
+	// rather than being dropped.
+	async function denyFromNotification(data: PushData) {
+		if (approvalPushAction(data, "deny")?.kind !== "deny") return;
+		if (!(await sendDeny(data))) pendingDenies.current.push({ data, at: Date.now() });
+	}
+
+	/** Sends a Deny now; false when its machine or organization isn't ready yet. */
+	async function sendDeny(data: PushData): Promise<boolean> {
+		const action = approvalPushAction(data, "deny");
+		if (action?.kind !== "deny") return true;
+		try {
+			if (data.source === "cloud") {
+				const { client, org } = cloudRef.current;
+				if (!org) return false;
+				if (action.orgId && action.orgId !== org.id) return true;
+				await decideCloudApproval(client, org.id, action.sessionId, action.approvalId, "deny");
+				return true;
+			}
+			const source = hostsRef.current.find(({ hostId }) => hostId === data.hostId);
+			if (!source?.config || source.connection !== "open") return false;
+			await decideApproval(source.config, action.approvalId, "deny");
+		} catch (e) {
+			console.warn("[push] deny from notification failed", e);
+		}
+		return true;
+	}
 
 	async function route(data: PushData, coldStart = false) {
 		const cloudTarget = cloudPushTarget(data);
@@ -148,7 +211,7 @@ export function PushManager(): null {
 		// saved pairing is the authority for whether this host may be opened.
 		const paired = data.hostId ? await findHost(data.hostId).catch(() => null) : null;
 		const hosts = hostsRef.current;
-		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId, prUrl: data.prUrl, hostId: data.hostId }, paired?.id);
+		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId, prUrl: data.prUrl, hostId: data.hostId, approvalId: data.approvalId }, paired?.id);
 		if (destination === "/") {
 			// Legacy or forgotten-machine push has no safe destination here.
 			router.navigate("/");
@@ -157,7 +220,7 @@ export function PushManager(): null {
 		const source = hosts.find(({ hostId }) => hostId === data.hostId);
 		const target = destination.startsWith("/review")
 			? "review"
-			: destination.startsWith("/session") ? "session" : "prs";
+			: destination.startsWith("/session") ? "session" : destination.startsWith("/preview") ? "preview" : "prs";
 		mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target, cold_start: coldStart });
 		// Best-effort mark-read so unread counts stay consistent with the dashboard.
 		if (source?.config && source.connection === "open" && data.notificationId) {

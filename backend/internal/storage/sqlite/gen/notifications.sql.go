@@ -47,7 +47,7 @@ SELECT COUNT(*)
 FROM notifications
 WHERE resolved_at IS NULL
   AND dismissed_at IS NULL
-  AND type IN ('needs_input', 'ready_to_merge')
+  AND type IN ('needs_input', 'ready_to_merge', 'browser_approval')
 `
 
 func (q *Queries) CountUnresolvedNotifications(ctx context.Context) (int64, error) {
@@ -108,6 +108,21 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 	return i, err
 }
 
+const deleteDismissedNotificationBySourceKey = `-- name: DeleteDismissedNotificationBySourceKey :execrows
+DELETE FROM notifications
+WHERE source_key = ?1
+  AND resolved_at IS NULL
+  AND dismissed_at IS NOT NULL
+`
+
+func (q *Queries) DeleteDismissedNotificationBySourceKey(ctx context.Context, sourceKey string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteDismissedNotificationBySourceKey, sourceKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteDismissedPRNotificationsByType = `-- name: DeleteDismissedPRNotificationsByType :execrows
 DELETE FROM notifications
 WHERE pr_url = ?1
@@ -146,6 +161,21 @@ type DeleteDismissedSessionNotificationsByTypeParams struct {
 // resolves they have no remaining purpose and must not emit resolved events.
 func (q *Queries) DeleteDismissedSessionNotificationsByType(ctx context.Context, arg DeleteDismissedSessionNotificationsByTypeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteDismissedSessionNotificationsByType, arg.SessionID, arg.Type)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteOpenDismissedBrowserApprovalNotifications = `-- name: DeleteOpenDismissedBrowserApprovalNotifications :execrows
+DELETE FROM notifications
+WHERE type = 'browser_approval'
+  AND resolved_at IS NULL
+  AND dismissed_at IS NOT NULL
+`
+
+func (q *Queries) DeleteOpenDismissedBrowserApprovalNotifications(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteOpenDismissedBrowserApprovalNotifications)
 	if err != nil {
 		return 0, err
 	}
@@ -457,7 +487,7 @@ SELECT id, session_id, project_id, pr_url, type, title, body, status, created_at
 FROM notifications
 WHERE resolved_at IS NULL
   AND dismissed_at IS NULL
-  AND type IN ('needs_input', 'ready_to_merge')
+  AND type IN ('needs_input', 'ready_to_merge', 'browser_approval')
   AND (
     CAST(?1 AS TEXT) = ''
     OR created_at < ?2
@@ -474,7 +504,8 @@ type ListUnresolvedNotificationsPageParams struct {
 }
 
 // Unresolved is the still-actionable set: the underlying issue has not gone
-// away yet. Terminal facts (pr_merged, pr_closed_unmerged) describe something
+// away yet (an agent waiting on input or an approval, a PR waiting on a
+// merge). Terminal facts (pr_merged, pr_closed_unmerged) describe something
 // that already happened, so they are unseen-only and never listed here.
 func (q *Queries) ListUnresolvedNotificationsPage(ctx context.Context, arg ListUnresolvedNotificationsPageParams) ([]Notification, error) {
 	rows, err := q.db.QueryContext(ctx, listUnresolvedNotificationsPage, arg.BeforeID, arg.BeforeCreatedAt, arg.PageLimit)
@@ -554,6 +585,105 @@ func (q *Queries) MarkNotificationRead(ctx context.Context, id string) (Notifica
 		&i.SourceKey,
 	)
 	return i, err
+}
+
+const resolveNotificationBySourceKey = `-- name: ResolveNotificationBySourceKey :many
+UPDATE notifications
+SET resolved_at = ?1
+WHERE source_key = ?2
+  AND resolved_at IS NULL
+  AND dismissed_at IS NULL
+RETURNING id, session_id, project_id, pr_url, type, title, body, status, created_at, resolved_at, dismissed_at, source_key
+`
+
+type ResolveNotificationBySourceKeyParams struct {
+	ResolvedAt sql.NullTime
+	SourceKey  string
+}
+
+// A browser approval resolves on its own: one session can hold several, each
+// keyed by its approval id.
+func (q *Queries) ResolveNotificationBySourceKey(ctx context.Context, arg ResolveNotificationBySourceKeyParams) ([]Notification, error) {
+	rows, err := q.db.QueryContext(ctx, resolveNotificationBySourceKey, arg.ResolvedAt, arg.SourceKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Notification{}
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.PRURL,
+			&i.Type,
+			&i.Title,
+			&i.Body,
+			&i.Status,
+			&i.CreatedAt,
+			&i.ResolvedAt,
+			&i.DismissedAt,
+			&i.SourceKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveOpenBrowserApprovalNotifications = `-- name: ResolveOpenBrowserApprovalNotifications :many
+UPDATE notifications
+SET resolved_at = ?1
+WHERE type = 'browser_approval'
+  AND resolved_at IS NULL
+  AND dismissed_at IS NULL
+RETURNING id, session_id, project_id, pr_url, type, title, body, status, created_at, resolved_at, dismissed_at, source_key
+`
+
+// Pending approvals live in the daemon's memory, so none survives a restart:
+// startup closes every approval row still open.
+func (q *Queries) ResolveOpenBrowserApprovalNotifications(ctx context.Context, resolvedAt sql.NullTime) ([]Notification, error) {
+	rows, err := q.db.QueryContext(ctx, resolveOpenBrowserApprovalNotifications, resolvedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Notification{}
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.PRURL,
+			&i.Type,
+			&i.Title,
+			&i.Body,
+			&i.Status,
+			&i.CreatedAt,
+			&i.ResolvedAt,
+			&i.DismissedAt,
+			&i.SourceKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const resolvePRNotificationsByType = `-- name: ResolvePRNotificationsByType :many

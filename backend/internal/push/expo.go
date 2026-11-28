@@ -29,6 +29,8 @@ type Message struct {
 	Sound     string         `json:"sound,omitempty"`
 	Priority  string         `json:"priority,omitempty"`
 	ChannelID string         `json:"channelId,omitempty"`
+	// CategoryID picks the notification's action buttons on the phone.
+	CategoryID string `json:"categoryId,omitempty"`
 }
 
 // Ticket is Expo's synchronous per-message result. Status is "ok" or "error";

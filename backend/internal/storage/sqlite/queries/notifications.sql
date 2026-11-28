@@ -21,14 +21,15 @@ ORDER BY created_at DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
 -- Unresolved is the still-actionable set: the underlying issue has not gone
--- away yet. Terminal facts (pr_merged, pr_closed_unmerged) describe something
+-- away yet (an agent waiting on input or an approval, a PR waiting on a
+-- merge). Terminal facts (pr_merged, pr_closed_unmerged) describe something
 -- that already happened, so they are unseen-only and never listed here.
 -- name: ListUnresolvedNotificationsPage :many
 SELECT *
 FROM notifications
 WHERE resolved_at IS NULL
   AND dismissed_at IS NULL
-  AND type IN ('needs_input', 'ready_to_merge')
+  AND type IN ('needs_input', 'ready_to_merge', 'browser_approval')
   AND (
     CAST(sqlc.arg(before_id) AS TEXT) = ''
     OR created_at < sqlc.arg(before_created_at)
@@ -60,7 +61,7 @@ SELECT COUNT(*)
 FROM notifications
 WHERE resolved_at IS NULL
   AND dismissed_at IS NULL
-  AND type IN ('needs_input', 'ready_to_merge');
+  AND type IN ('needs_input', 'ready_to_merge', 'browser_approval');
 
 -- name: MarkNotificationRead :one
 UPDATE notifications
@@ -146,6 +147,38 @@ WHERE type = 'needs_input'
     WHERE is_terminated = TRUE
        OR activity_state NOT IN ('waiting_input', 'blocked')
   );
+
+-- A browser approval resolves on its own: one session can hold several, each
+-- keyed by its approval id.
+-- name: ResolveNotificationBySourceKey :many
+UPDATE notifications
+SET resolved_at = sqlc.arg(resolved_at)
+WHERE source_key = sqlc.arg(source_key)
+  AND resolved_at IS NULL
+  AND dismissed_at IS NULL
+RETURNING *;
+
+-- name: DeleteDismissedNotificationBySourceKey :execrows
+DELETE FROM notifications
+WHERE source_key = sqlc.arg(source_key)
+  AND resolved_at IS NULL
+  AND dismissed_at IS NOT NULL;
+
+-- Pending approvals live in the daemon's memory, so none survives a restart:
+-- startup closes every approval row still open.
+-- name: ResolveOpenBrowserApprovalNotifications :many
+UPDATE notifications
+SET resolved_at = sqlc.arg(resolved_at)
+WHERE type = 'browser_approval'
+  AND resolved_at IS NULL
+  AND dismissed_at IS NULL
+RETURNING *;
+
+-- name: DeleteOpenDismissedBrowserApprovalNotifications :execrows
+DELETE FROM notifications
+WHERE type = 'browser_approval'
+  AND resolved_at IS NULL
+  AND dismissed_at IS NOT NULL;
 
 -- name: GetOpenNotificationByDedupe :one
 SELECT *

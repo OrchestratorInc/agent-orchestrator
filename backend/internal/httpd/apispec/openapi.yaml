@@ -25088,6 +25088,7 @@ components:
           - pr_closed_unmerged
           - review_completed
           - review_changes_requested
+          - browser_approval
           type: string
       required:
       - id

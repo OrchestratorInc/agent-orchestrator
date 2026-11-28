@@ -5,6 +5,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewNavigation } from "react-native-webview";
 import { getPreview } from "../../lib/api";
 import { AppSymbol } from "../../lib/AppSymbol";
+import { AoError } from "../../../shared/telemetry/ao-error";
+import { ApprovalOverlay } from "../../lib/approvals/ApprovalOverlay";
+import { decideApproval, subscribeApprovals } from "../../lib/approvals/localApprovals";
+import type { ApprovalCard, ApprovalDecision } from "../../lib/approvals/types";
 import { authHeaders } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { rowDividerWidth } from "../../lib/divider";
@@ -28,7 +32,7 @@ export default function SessionPreviewScreen() {
 }
 
 function SessionPreviewContent() {
-	const { id: rawID, title, hostId: routeHostId } = useLocalSearchParams<{ id: string; title?: string; hostId?: string }>();
+	const { id: rawID, title, hostId: routeHostId, approval: openedApproval } = useLocalSearchParams<{ id: string; title?: string; hostId?: string; approval?: string }>();
 	const sessionID = String(rawID ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
@@ -158,6 +162,14 @@ function SessionPreviewContent() {
 		return () => subscription.remove();
 	}, [canGoBack, showingApp]));
 
+	// Approvals the agent waits on in this session, over whichever view shows.
+	const subscribeSessionApprovals = useCallback((onChange: (cards: ApprovalCard[]) => void) =>
+		config && hostMatches ? subscribeApprovals(config, sessionID, onChange) : () => {}, [config, hostMatches, sessionID]);
+	const decideSessionApproval = useCallback((id: string, decision: ApprovalDecision) => {
+		if (!currentConfig.current) return Promise.reject(new AoError("BROWSER_APPROVAL_OFFLINE", "Not connected to this machine"));
+		return decideApproval(currentConfig.current, id, decision);
+	}, []);
+
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
 		const route = `${routeHostId ?? ""}|${sessionID}`;
@@ -230,6 +242,7 @@ function SessionPreviewContent() {
 				<Button variant="ghost" title="Retry" onPress={reloadApp} />
 			</View> : null}
 		</View>}
+		<ApprovalOverlay subscribe={subscribeSessionApprovals} decide={decideSessionApproval} openedFor={openedApproval} bottom={insets.bottom + space.lg} />
 	</View>;
 }
 

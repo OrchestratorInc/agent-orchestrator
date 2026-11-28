@@ -6,8 +6,12 @@ import { CLOUD_HOST_ID } from "./mapping";
  * else the cloud inbox. Null for a notification a paired machine sent, which
  * keeps its own routing.
  */
-export function cloudPushTarget(data: { source?: string; sessionId?: string; projectId?: string }): Href | null {
+export function cloudPushTarget(data: { source?: string; type?: string; sessionId?: string; projectId?: string; approvalId?: string }): Href | null {
 	if (data.source !== "cloud") return null;
+	// A browser approval opens its session with the approval's card.
+	if (data.type === "browser_approval" && data.sessionId && data.approvalId) {
+		return { pathname: "/session/[id]", params: { id: data.sessionId, hostId: CLOUD_HOST_ID, approval: data.approvalId } };
+	}
 	if (data.sessionId) return { pathname: "/session/[id]", params: { id: data.sessionId, hostId: CLOUD_HOST_ID } };
 	if (data.projectId) return { pathname: "/project/[id]", params: { id: data.projectId, hostId: CLOUD_HOST_ID } };
 	return "/notifications";

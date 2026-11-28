@@ -30,6 +30,7 @@ type Store interface {
 		at time.Time,
 	) ([]domain.NotificationRecord, error)
 	ReconcileResolvedNotifications(ctx context.Context, at time.Time) ([]domain.NotificationRecord, error)
+	ResolveNotificationBySourceKey(ctx context.Context, sourceKey string, at time.Time) ([]domain.NotificationRecord, error)
 }
 
 // Publisher pushes notification events to live dashboard subscribers.
@@ -128,7 +129,9 @@ func (m *Manager) Resolve(ctx context.Context, res Resolution) error {
 		resolved []domain.NotificationRecord
 		err      error
 	)
-	if res.PRURL != "" {
+	if res.SourceKey != "" {
+		resolved, err = m.store.ResolveNotificationBySourceKey(ctx, res.SourceKey, at)
+	} else if res.PRURL != "" {
 		resolved, err = m.store.ResolvePRNotifications(ctx, res.PRURL, res.Type, at)
 	} else {
 		if res.SessionID == "" {
