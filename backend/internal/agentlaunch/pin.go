@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,7 +17,9 @@ var pinMu sync.Mutex
 
 // pinDirectory uses the install directory only when it contains no sibling
 // executables. Shared installs get a shim so pinning ao cannot promote node,
-// git, or other tools ahead of the agent's selected runtime.
+// git, or other tools ahead of the agent's selected runtime. Windows also
+// prefers a shim for a single-executable install so the pinned directory has
+// the user profile's ACLs rather than a per-user install's owner-only ones.
 func pinDirectory(exe, dataDir string) (string, error) {
 	dir := pinnedDirForExecutable(exe)
 	if dir == "" {
@@ -50,9 +53,34 @@ func pinDirectory(exe, dataDir string) (string, error) {
 			shared = true
 		}
 	}
-	if !shared {
+	// Windows prefers a shim even when the install directory holds no sibling
+	// executables. A per-user install lives under %LOCALAPPDATA%\Programs, whose
+	// ACLs grant only the installing user, so a harness that runs agent commands
+	// as another local identity (Codex's Windows sandbox) cannot read or execute
+	// that directory. A shim under the data directory inherits the profile's
+	// ACLs, which those sandboxes can read (issue #7171).
+	if !shared && runtime.GOOS != "windows" {
 		return dir, nil
 	}
+	shimDir, err := ensureShimDir(exe, dataDir)
+	if err != nil {
+		if shared {
+			// A shared install must not be pinned directly: its siblings would
+			// land ahead of the agent's own runtime on PATH.
+			return "", err
+		}
+		// A single-executable install directory is still a usable pin for any
+		// caller that can read it, and losing the pin breaks `ao hooks`. This is
+		// also the path that brings #7171 back, so it cannot fail silently.
+		slog.Warn("could not create the ao shim; pinning the install directory instead, which sandboxed agents may not be able to read", "dir", dir, "error", err)
+		return dir, nil
+	}
+	return shimDir, nil
+}
+
+// ensureShimDir creates (or refreshes) the directory holding the pinned ao shim
+// and returns its path.
+func ensureShimDir(exe, dataDir string) (string, error) {
 	if !filepath.IsAbs(dataDir) {
 		return "", fmt.Errorf("the Orchestrator shim data directory must be absolute, got %q", dataDir)
 	}
@@ -66,7 +94,20 @@ func pinDirectory(exe, dataDir string) (string, error) {
 	script := "#!/bin/sh\nexec '" + strings.ReplaceAll(absolute, "'", `'"'"'`) + "' \"$@\"\n"
 	if runtime.GOOS == "windows" {
 		name = "ao.cmd"
-		script = "@echo off\r\n\"" + strings.ReplaceAll(absolute, "%", "%%") + "\" %*\r\n"
+		// The batch sibling runs the copy beside it. cmd has to resolve that path
+		// itself rather than read it from the file: Go writes UTF-8, while cmd
+		// parses a batch file in the console's OEM code page, so an embedded
+		// non-ASCII data directory came out garbled ("The system cannot find the
+		// path specified"). %~dp0 is the script's own directory for a bare or
+		// fully qualified call; a quoted `"ao.cmd"` resolved from PATH expands %0
+		// against the working directory, so %~dp$PATH:0 searches PATH for the
+		// batch file in that case. %PATHEXT% prefers ao.exe, so only an explicit
+		// `ao.cmd` reaches this file.
+		script = "@echo off\r\n" +
+			"setlocal\r\n" +
+			"set \"AO_SHIM_DIR=%~dp0\"\r\n" +
+			"if not exist \"%AO_SHIM_DIR%ao.exe\" set \"AO_SHIM_DIR=%~dp$PATH:0\"\r\n" +
+			"\"%AO_SHIM_DIR%ao.exe\" %*\r\n"
 	}
 	pinMu.Lock()
 	defer pinMu.Unlock()
@@ -109,19 +150,24 @@ func pinDirectory(exe, dataDir string) (string, error) {
 	return shimDir, nil
 }
 
+// ensureWindowsAOExecutable installs the shim's ao.exe as a copy of the daemon
+// executable. It copies rather than hard-links because a hard link shares its
+// target's security descriptor: linking into the shim directory would keep the
+// install directory's ACLs, which sandboxes that run agent commands as another
+// local identity cannot read (issue #7171). A fresh copy inherits the shim
+// directory's profile-derived ACLs instead.
 func ensureWindowsAOExecutable(shimDir, executable string) error {
-	return ensureWindowsAOExecutableWithLink(shimDir, executable, os.Link)
-}
-
-func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(string, string) error) error {
 	target := filepath.Join(shimDir, "ao.exe")
 	sourceInfo, err := os.Stat(executable)
 	if err != nil {
 		return fmt.Errorf("stat Orchestrator executable: %w", err)
 	}
-	if targetInfo, targetErr := os.Stat(target); targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
-		return nil
-	} else if targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) {
+	if targetInfo, targetErr := os.Stat(target); targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) && !os.SameFile(sourceInfo, targetInfo) {
+		// Same size and mtime means same bytes. A shim left by an older AO build
+		// can be a hard link, which reports exactly the source's metadata while
+		// still carrying the install directory's ACLs, so that one is copied
+		// through instead of trusted.
+		removeStaleShimExecutables(shimDir)
 		return nil
 	}
 	temp, err := os.CreateTemp(shimDir, ".ao-exe-*")
@@ -136,18 +182,66 @@ func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(str
 	if err := os.Remove(tempPath); err != nil {
 		return err
 	}
-	if err := link(executable, tempPath); err != nil {
-		if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
-			return fmt.Errorf("copy Orchestrator executable after link failed: %w", err)
+	if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
+		return fmt.Errorf("copy Orchestrator executable: %w", err)
+	}
+	// Windows refuses to replace a running image (an in-session `ao mcp` holds
+	// its own exe), and an antivirus scanner can keep the freshly written copy
+	// open. Both moves retry a bounded number of times, because the alternative
+	// is dropping the pin back to the unreadable install directory.
+	//
+	// Replacing in place keeps the common case free of any moment where the shim
+	// directory has no ao.exe. Only a running image needs the rename-aside
+	// sequence: renaming the old file frees the name without disturbing the
+	// process that still has it mapped.
+	if err := retryShimRename(func() error { return os.Rename(tempPath, target) }); err != nil {
+		aside := filepath.Join(shimDir, fmt.Sprintf("ao.exe.old-%d", time.Now().UnixNano()))
+		if err := retryShimRename(func() error { return os.Rename(target, aside) }); err != nil {
+			return fmt.Errorf("replace Orchestrator executable shim: %w", err)
+		}
+		if err := retryShimRename(func() error { return os.Rename(tempPath, target) }); err != nil {
+			_ = os.Rename(aside, target)
+			return fmt.Errorf("install Orchestrator executable shim: %w", err)
 		}
 	}
-	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("replace Orchestrator executable shim: %w", err)
-	}
-	if err := os.Rename(tempPath, target); err != nil {
-		return fmt.Errorf("install Orchestrator executable shim: %w", err)
-	}
+	removeStaleShimExecutables(shimDir)
 	return nil
+}
+
+const (
+	shimRenameAttempts = 3
+	shimRenameDelay    = 100 * time.Millisecond
+)
+
+// retryShimRename retries a move that failed because the file is briefly held
+// open. Any other error returns immediately.
+func retryShimRename(move func() error) error {
+	var err error
+	for attempt := 0; attempt < shimRenameAttempts; attempt++ {
+		if err = move(); err == nil {
+			return nil
+		}
+		if !retryableShimRenameError(err) {
+			return err
+		}
+		if attempt < shimRenameAttempts-1 {
+			time.Sleep(shimRenameDelay)
+		}
+	}
+	return err
+}
+
+// removeStaleShimExecutables drops copies that an earlier pin renamed aside
+// while their process still held the image open. Removal keeps failing until
+// that process exits, so every pass retries and ignores the failures.
+func removeStaleShimExecutables(shimDir string) {
+	matches, err := filepath.Glob(filepath.Join(shimDir, "ao.exe.old-*"))
+	if err != nil {
+		return
+	}
+	for _, match := range matches {
+		_ = os.Remove(match)
+	}
 }
 
 func copyExecutable(source, target string, modTime time.Time) error {
