@@ -153,6 +153,7 @@ export type BrowserBoundsApplied = BrowserBoundsInput;
 export type BrowserNavigateInput = {
 	viewId: string;
 	url: string;
+	preview?: boolean;
 };
 
 export type ImportFolderMode = "project" | "workspace";
@@ -771,7 +772,7 @@ const api = {
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
 		muteTab: (input: { viewId: string; tabId: string; muted: boolean }) =>
 			ipcRenderer.invoke("browser:muteTab", input) as Promise<BrowserTabsState>,
-		openTab: (input: { viewId: string; url?: string }) =>
+		openTab: (input: { viewId: string; url?: string; preview?: boolean }) =>
 			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		getProfile: (viewId: string) =>
 			ipcRenderer.invoke("browser:profile:get", viewId) as Promise<BrowserProfileViewState>,
@@ -1112,6 +1113,7 @@ const api = {
 		// A preview's address for a browser outside AO; any other URL unchanged.
 		externalUrl: (hostId: string, url: string) =>
 			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
+		loopbackReach: (hostId: string) => ipcRenderer.invoke("remotes:loopbackReach", hostId) as Promise<boolean>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

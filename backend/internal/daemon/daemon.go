@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -1540,6 +1541,9 @@ func Run(buildVersion string) (retErr error) {
 	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
 	lan.UseDeviceCredentials(accessDevices, pairingCodes)
+	if tcp, ok := srv.Addr().(*net.TCPAddr); ok {
+		lan.SetDaemonPort(tcp.Port)
+	}
 	bs.LAN = lan
 
 	// Restore Connect Mobile across a daemon restart: if the bridge was left
