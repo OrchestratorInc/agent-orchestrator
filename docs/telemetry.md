@@ -1489,7 +1489,8 @@ It shows only when all of these are true at the moment of quitting:
 The question depends on how far the install got: one version for an install
 with no project, another for an install with a project but no work. The user
 can tap one of five answers, type up to 500 characters in an optional box,
-skip, press Escape, quit again or do nothing. With no input it closes itself
+skip, press Escape (ignored once they have typed, or while an input method
+is composing), quit again or do nothing. With no input it closes itself
 after 15 seconds; once the user types, it waits for an answer or a skip. The
 dialog can never keep the app open on its own: if the check, the dialog or
 sending fails, the app quits normally.

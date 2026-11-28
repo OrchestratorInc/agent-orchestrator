@@ -97,13 +97,26 @@ describe("ExitFeedbackPrompt", () => {
 		["a second quit", "second_close"],
 	])("records %s as a skip without the typed text", async (action, how) => {
 		const dialog = await open("no_project");
-		fireEvent.change(screen.getByPlaceholderText("Anything else? (optional)"), { target: { value: "private note" } });
+		// Escape is ignored once something is typed, so it is pressed on an empty box.
+		if (how !== "escape") fireEvent.change(screen.getByPlaceholderText("Anything else? (optional)"), { target: { value: "private note" } });
 		if (how === "skip") fireEvent.click(screen.getByRole("button", { name: action }));
 		else if (how === "escape") fireEvent.keyDown(dialog, { key: "Escape" });
 		else await act(async () => secondClose?.());
 		await waitFor(() => expect(report).toHaveBeenCalledWith("done"));
 		expect(eventsNamed("ao.exit_feedback.dismissed")).toEqual([{ version: "no_project", how, seconds_open: 0 }]);
 		expect(JSON.stringify(telemetry.captureRendererEvent.mock.calls)).not.toContain("private note");
+	});
+
+	it("keeps the dialog and the text when Escape follows typing or ends an input method composition", async () => {
+		const dialog = await open("no_project");
+		fireEvent.keyDown(dialog, { key: "Escape", isComposing: true });
+		fireEvent.keyDown(dialog, { key: "Escape", keyCode: 229 });
+		const box = screen.getByPlaceholderText("Anything else? (optional)");
+		fireEvent.change(box, { target: { value: "half a thought" } });
+		fireEvent.keyDown(box, { key: "Escape" });
+		expect(screen.getByRole("dialog")).toBeInTheDocument();
+		expect(eventsNamed("ao.exit_feedback.dismissed")).toEqual([]);
+		expect(box).toHaveValue("half a thought");
 	});
 
 	it("times out after 15 seconds of nothing, and typing stops the countdown for good", async () => {

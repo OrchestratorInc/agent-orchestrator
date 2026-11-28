@@ -108,6 +108,9 @@ export function ExitFeedbackDialog({ version, onDone }: { version: ExitFeedbackV
 				}}
 				onEscapeKeyDown={(event) => {
 					event.preventDefault();
+					// Escape cancels an input method's composition, and must never throw
+					// away text already written; Skip and close still skips.
+					if (event.isComposing || event.keyCode === 229 || typing.current) return;
 					dismiss("escape");
 				}}
 				onInteractOutside={(event) => event.preventDefault()}
