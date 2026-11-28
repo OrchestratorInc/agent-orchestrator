@@ -231,6 +231,16 @@ describe("desktop quit", () => {
 		expect(controller.isOutsideQuit()).toBe(false);
 	});
 
+	it("keeps an outside quit's continuation classified after the tray is torn down", () => {
+		let trayUp = true;
+		const { controller, event } = setup({ hasTray: () => trayUp });
+		controller.handleBeforeQuit(event);
+		trayUp = false;
+		expect(controller.isOutsideQuit()).toBe(true);
+		controller.cancelQuit();
+		expect(controller.isOutsideQuit()).toBe(false);
+	});
+
 	it("reports no outside quit off macOS, without the tray, or during an update restart", () => {
 		expect(setup({ platform: "win32" }).controller.isOutsideQuit()).toBe(false);
 		expect(setup({ hasTray: () => false }).controller.isOutsideQuit()).toBe(false);

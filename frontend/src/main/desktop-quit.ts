@@ -75,12 +75,14 @@ export function createDesktopQuitController(options: {
 		 * nothing (such as a feedback prompt) may hold it.
 		 */
 		isOutsideQuit(): boolean {
+			// Recorded first: quit cleanup tears the tray down before the last continuation.
+			if (externalQuitRequested) return true;
 			if (
 				options.platform !== "darwin" ||
 				!options.hasTray() ||
 				options.isUpdateRestartRequested()
 			) return false;
-			return externalQuitRequested || (!quitCompletelyRequested && !backgroundQuitRequested);
+			return !quitCompletelyRequested && !backgroundQuitRequested;
 		},
 		/** Whether before-quit is running inside Orchestrator's own Quit. */
 		isBackgroundQuit(): boolean {

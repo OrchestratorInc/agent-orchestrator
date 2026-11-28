@@ -536,6 +536,8 @@ let quitAttempt = 0;
 function cancelPendingQuit(): void {
 	quitAttempt += 1;
 	preserveAgentsOnQuit = false;
+	// A later quit starts its own cleanup instead of waiting on the canceled one.
+	agentQuitCleanupPromise = null;
 }
 let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;

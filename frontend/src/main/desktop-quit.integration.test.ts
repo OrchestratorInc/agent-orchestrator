@@ -205,3 +205,56 @@ it("still only hides to the tray when an in-app Quit resumes after the exit feed
 	expect(request).toHaveBeenCalledOnce();
 	vm.runInContext("desktopQuit.cancelQuit()", context);
 });
+
+it("runs its own cleanup for a quit that arrives before a canceled cleanup settles", async () => {
+	const app = Object.assign(new EventEmitter(), { quit: vi.fn(), exit: vi.fn() });
+	const request = vi.fn(async () => ({ ok: true, status: 202 }));
+	let reads = 0;
+	const context: vm.Context = vm.createContext({
+		app, console, setTimeout, clearTimeout, AbortSignal,
+		process: { platform: "darwin", env: {} },
+		createDesktopQuitController,
+		trayController: {}, mainWindow: null, createWindowPromise: null,
+		browserQuitRequested: false, preserveAgentsOnQuit: false,
+		isUpdateRestartRequested: () => false,
+		chatDraftRisks: [], chatDraftQuitConfirmed: false, chatDraftDialog: {},
+		confirmUnsafeChatDraftLeave: () => true,
+		dialog: { showMessageBoxSync: vi.fn() },
+		cancelDaemonAutoRestart: vi.fn(),
+		lifecycleLog: vi.fn(),
+		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null,
+		requestDesktopShutdown, keepDaemonAlive: () => false, appRunId: "test-run",
+		daemonStatus: { state: "ready", port: 3002 }, daemonProcess: null,
+		desktopAgentShutdownAccepted: false,
+		runFilePath: () => "/isolated/running.json", parseRunFile,
+		readFile: async () => {
+			reads += 1;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			if (reads === 1) {
+				// The window declines the first quit, and a second outside quit
+				// arrives while the canceled cleanup is still in flight.
+				vm.runInContext("if (desktopQuit.windowCloseCanceled()) cancelPendingQuit()", context);
+				app.emit("before-quit", { preventDefault: vi.fn() });
+			}
+			return JSON.stringify({ pid: 42, port: 3002, owner: "app", appRunId: "test-run" });
+		},
+		fetch: request,
+		disposeBrowserRuntimeLink: vi.fn(), disposeBrowserStreamLink: vi.fn(),
+		trayLifecycle: { dispose: vi.fn() }, browserCleanupComplete: true,
+		exitFeedbackGate: { intercept: () => false, reset: vi.fn() },
+	});
+	vm.runInContext(script, context);
+	try {
+		app.emit("before-quit", { preventDefault: vi.fn() });
+		await vi.waitFor(() => expect(app.quit).toHaveBeenCalledOnce());
+		expect(reads).toBe(2);
+		expect(request).toHaveBeenCalledOnce();
+		expect(request).toHaveBeenCalledWith("http://127.0.0.1:3002/shutdown", expect.objectContaining({
+			body: JSON.stringify({ stopAgents: false, appRunId: "test-run" }),
+		}));
+		expect(context.agentQuitCleanupComplete).toBe(true);
+		expect(app.exit).not.toHaveBeenCalled();
+	} finally {
+		vm.runInContext("desktopQuit.cancelQuit()", context);
+	}
+});
