@@ -76,6 +76,7 @@ import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { useValueFeed } from "../useValueFeed";
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
@@ -678,6 +679,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
 	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	// The account sheet follows the accounts while it is up (see `AccountPickerEntry`).
+	const accountPicker = useMemo(() => ({ options: agentAccountOptions(agentAccounts.accounts), selected: agentAccounts.current ?? "" }), [agentAccounts.accounts, agentAccounts.current]);
+	const subscribeAccountPicker = useValueFeed(accountPicker);
 	const limitedTurnId = useMemo(() => conversation.snapshot ? usageLimitedTurn(conversation.snapshot)?.id : undefined, [conversation.snapshot]);
 	const { retryTurn, setTurnAutoResume } = conversation;
 	const turnRecovery = useMemo((): TurnRecovery => ({
@@ -752,6 +756,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				subtitle: "The agent resumes this conversation on the account you choose.",
 				options: agentAccountOptions(accounts),
 				selected: current ?? "",
+				subscribe: subscribeAccountPicker,
 				onSelect: (accountId) => {
 					if (!turnActive) return move(accountId, false);
 					const target = accounts.find((account) => account.id === accountId);
