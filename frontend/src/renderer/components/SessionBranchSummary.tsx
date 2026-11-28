@@ -1,13 +1,14 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { branchTopic, InspectorSection } from "@aoagents/product-ui";
+import { branchTopic, InspectorSection, type BoardTrackerIssue } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
 	ArrowUpFromLine,
 	ChevronDown,
 	ChevronRight,
+	CircleDot,
 	GitBranch,
 	GitCommitHorizontal,
 	GitMerge,
@@ -29,6 +30,8 @@ import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode"
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { type SessionBranchState, type WorkspaceSession, sessionIsActive, sessionWorkspaceReady } from "../types/workspace";
+import { ProductExternalLink } from "./ProductExternalLink";
+import { useSessionIssueLink } from "../hooks/useSessionIssueLink";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -118,6 +121,7 @@ export function SessionBranchSummary({
 	title: string;
 }) {
 	const { t } = useTranslation();
+	const issue = useSessionIssueLink(session, hostId);
 	// Cloud sessions have no local workspace facts; orchestrators coordinate
 	// workers rather than shipping a branch of their own. An imported chat has
 	// no branch until it is opened.
@@ -144,7 +148,10 @@ export function SessionBranchSummary({
 	};
 	if (!showGit) {
 		const cards = renderCards(undefined);
-		return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+		return issue || cards ? <InspectorSection surface={false} title={title}>
+			{issue ? <section aria-label={t("inspector.branch")} data-testid="inspector-branch"><SessionIssueLine issue={issue} /></section> : null}
+			{cards}
+		</InspectorSection> : null;
 	}
 
 	const commitsRow = commitsRowView(facts, t);
@@ -153,7 +160,7 @@ export function SessionBranchSummary({
 	const behind = behindBase ? (facts.branch?.behind ?? 0) : 0;
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null || behind > 0;
 	const { branch, naming } = sessionBranchPresentation(session);
-	if (!branch && !naming && !pullRequests && !hasWork) return null;
+	if (!issue && !branch && !naming && !pullRequests && !hasWork) return null;
 
 	let action: ReactNode = null;
 	if (pending) {
@@ -236,12 +243,30 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
+				{issue ? <SessionIssueLine issue={issue} /> : null}
 				{/* A PR's card names its own branches; the line is for a branch without one. */}
 				{(branch || naming) && !pullRequests ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
 				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep, diff: commitsRow ? { additions: committedAdditions, deletions: committedDeletions } : undefined } : undefined)}
 				{workInPR ? null : workRows}
 			</section>
 		</InspectorSection>
+	);
+}
+
+export function SessionIssueLine({ issue }: { issue: BoardTrackerIssue }) {
+	const { t } = useTranslation();
+	const id = `${issue.repo}#${issue.number}`;
+	return (
+		<div className="flex min-w-0 pb-1.5 last:pb-0">
+			<ProductExternalLink
+				ariaLabel={t("shell.intakeIssue", { id })}
+				className="inline-flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+				href={issue.url}
+			>
+				<CircleDot aria-hidden="true" className="size-icon-2xs shrink-0" />
+				<span className="min-w-0 truncate">{id}</span>
+			</ProductExternalLink>
+		</div>
 	);
 }
 

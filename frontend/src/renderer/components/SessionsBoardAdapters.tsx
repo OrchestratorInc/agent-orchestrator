@@ -31,10 +31,11 @@ import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { sessionPRMix } from "../lib/session-pr-mix";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace";
+import { sessionDeliverables, trackerIssueLink } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
+import { useSessionIssueLink } from "../hooks/useSessionIssueLink";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -65,6 +66,7 @@ import { useSessionContentExpired } from "../stores/content-expired-sessions-sto
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
+	issue = trackerIssueLink(session.issueId),
 ): BoardSessionPresentation {
 	const provisioningStatus =
 		session.provisionState === "provisioning"
@@ -105,7 +107,7 @@ export function toBoardSessionPresentation(
 		statusReadiness: session.statusReadiness,
 		statusPresentation: provisioningStatus ?? failedStartStatus ?? importStatus,
 		title: session.title,
-		trackerIssueId: canonicalTrackerIssueId(session.issueId),
+		trackerIssue: issue,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};
@@ -300,6 +302,7 @@ function DesktopSessionCard({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const issue = useSessionIssueLink(session);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [renameOpen, setRenameOpen] = useState(false);
 	const menuPrefetchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -447,8 +450,8 @@ function DesktopSessionCard({
 			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={
 				hideTerminatedStatus
-					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
-					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session, issue))
+					: withSharedWorkStatus(toBoardSessionPresentation(session, issue), participants, me, t)
 			}
 			selected={selected}
 			still={still}

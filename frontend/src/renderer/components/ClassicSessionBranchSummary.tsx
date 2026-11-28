@@ -20,6 +20,8 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
+import { SessionIssueLine } from "./SessionBranchSummary";
+import { useSessionIssueLink } from "../hooks/useSessionIssueLink";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import { type SessionBranchState, type WorkspaceSession, sessionWorkspaceReady } from "../types/workspace";
@@ -77,6 +79,7 @@ export function ClassicSessionBranchSummary({
 	title: string;
 }) {
 	const { t } = useTranslation();
+	const issue = useSessionIssueLink(session, hostId);
 	const key = sessionUiKey(session.id, hostId);
 	const pending = useSessionGitActionStore((state) => state.pending[key]);
 	const startPending = useSessionGitActionStore((state) => state.start);
@@ -138,12 +141,15 @@ export function ClassicSessionBranchSummary({
 	}, [clearPending, key, pending]);
 
 	const cards = pullRequests ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{pullRequests}</div> : null;
-	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+	if (!showGit) return issue || cards ? <InspectorSection surface={false} title={title}>
+		{issue ? <section aria-label={t("inspector.branch")} data-testid="inspector-branch"><SessionIssueLine issue={issue} /></section> : null}
+		{cards}
+	</InspectorSection> : null;
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
 	const { branch, naming } = sessionBranchPresentation(session);
-	if (!branch && !naming && !pullRequests && !hasWork) return null;
+	if (!issue && !branch && !naming && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
 	let action: ReactNode = null;
@@ -168,6 +174,7 @@ export function ClassicSessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
+				{issue ? <SessionIssueLine issue={issue} /> : null}
 				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
 				{cards}
 				{facts.uncommitted.length > 0 ? (
