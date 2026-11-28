@@ -1,5 +1,12 @@
+import { readRenderSelection, type RenderRect } from "../lib/render-frame";
 import { selectionToolbarPosition } from "../lib/selection-toolbar";
-import { useLayoutEffect, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+
+export interface ChatSelectionFrame {
+	element: HTMLIFrameElement;
+	first: RenderRect;
+	extent: RenderRect;
+}
 
 /** Follow the selection's first line without changing the reader's scroll. */
 export function useChatSelectionPosition(
@@ -8,35 +15,47 @@ export function useChatSelectionPosition(
 	buttonRef: RefObject<HTMLDivElement | null>,
 	onInvalid: () => void,
 	pinned = false,
+	frame?: ChatSelectionFrame,
 ) {
 	const [position, setPosition] = useState<{ left: number; top: number; visible: boolean }>();
+	const moved = useRef<{ frame: ChatSelectionFrame; first: RenderRect; extent: RenderRect }>(undefined);
 	useLayoutEffect(() => {
 		const viewport = viewportRef.current;
 		const button = buttonRef.current;
 		if (!range || !viewport || !button) return;
 		const anchor = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
-		const source = anchor?.closest("[data-chat-message-id]");
+		const source = frame?.element ?? anchor?.closest("[data-chat-message-id]");
 		if (!source) {
 			onInvalid();
 			return;
 		}
-		let frame: number | undefined;
+		let animation: number | undefined;
 		const update = () => {
-			frame = undefined;
+			animation = undefined;
 			const selection = window.getSelection();
 			const current = selection?.rangeCount ? selection.getRangeAt(0) : undefined;
-			if (!source?.isConnected || !viewport.contains(source) || !range.startContainer.isConnected || !range.endContainer.isConnected ||
+			if (!source?.isConnected || !viewport.contains(source) || (!frame && (!range.startContainer.isConnected || !range.endContainer.isConnected ||
 				(!pinned && (!current || selection?.isCollapsed ||
 				current.startContainer !== range.startContainer || current.startOffset !== range.startOffset ||
-				current.endContainer !== range.endContainer || current.endOffset !== range.endOffset))) {
+				current.endContainer !== range.endContainer || current.endOffset !== range.endOffset))))) {
 				onInvalid();
 				return;
 			}
-			const lines = range.getClientRects();
-			let rect = range.getBoundingClientRect();
-			const extent = rect;
-			for (let i = 0; i < lines.length; i++) {
-				if (lines[i].width > 0 && lines[i].height > 0) { rect = lines[i]; break; }
+			let rect: DOMRect;
+			let extent: DOMRect;
+			if (frame) {
+				const box = source.getBoundingClientRect();
+				const place = (each: RenderRect) => new DOMRect(box.left + each.left, box.top + each.top, each.width, each.height);
+				const latest = moved.current?.frame === frame ? moved.current : frame;
+				rect = place(latest.first);
+				extent = place(latest.extent);
+			} else {
+				const lines = range.getClientRects();
+				rect = range.getBoundingClientRect();
+				extent = rect;
+				for (let i = 0; i < lines.length; i++) {
+					if (lines[i].width > 0 && lines[i].height > 0) { rect = lines[i]; break; }
+				}
 			}
 			const visual = window.visualViewport;
 			const bounds = { left: visual?.offsetLeft ?? 0, top: visual?.offsetTop ?? 0,
@@ -61,7 +80,14 @@ export function useChatSelectionPosition(
 			setPosition((previous) => previous?.left === left && previous.top === top && previous.visible === visible
 				? previous : { left, top, visible });
 		};
-		const schedule = () => { frame ??= window.requestAnimationFrame(update); };
+		const schedule = () => { animation ??= window.requestAnimationFrame(update); };
+		const onMessage = (event: MessageEvent) => {
+			const report = event.source === frame?.element.contentWindow ? readRenderSelection(event.data) : undefined;
+			if (frame && report && "first" in report) {
+				moved.current = { frame, first: report.first, extent: report.extent };
+				schedule();
+			}
+		};
 		const onScroll = (event: Event) => {
 			if (event.target instanceof Node && event.target.contains(viewport)) schedule();
 		};
@@ -76,9 +102,11 @@ export function useChatSelectionPosition(
 		window.visualViewport?.addEventListener("scroll", schedule);
 		window.addEventListener("resize", schedule);
 		document.addEventListener("selectionchange", schedule);
+		if (frame) window.addEventListener("message", onMessage);
 		update();
 		return () => {
-			if (frame !== undefined) window.cancelAnimationFrame(frame);
+			if (animation !== undefined) window.cancelAnimationFrame(animation);
+			window.removeEventListener("message", onMessage);
 			resize.disconnect();
 			mutation.disconnect();
 			document.removeEventListener("scroll", onScroll, true);
@@ -87,6 +115,6 @@ export function useChatSelectionPosition(
 			window.removeEventListener("resize", schedule);
 			document.removeEventListener("selectionchange", schedule);
 		};
-	}, [range, viewportRef, buttonRef, onInvalid, pinned]);
+	}, [range, viewportRef, buttonRef, onInvalid, pinned, frame]);
 	return position;
 }

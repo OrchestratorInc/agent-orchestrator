@@ -2,6 +2,8 @@ import { useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
+import { readRenderSelection } from "../../lib/render-frame";
+import type { ChatSelectionFrame } from "../../hooks/useChatSelectionPosition";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
@@ -3721,6 +3723,7 @@ export function Timeline({
 	const [selectionAction, setSelectionAction] = useState<{
 		excerpt: ChatDraftExcerptReference;
 		range: Range;
+		frame?: ChatSelectionFrame;
 	} | null>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
 	const selectionComment = useRef("");
@@ -3882,6 +3885,36 @@ export function Timeline({
 			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
 			? previous : next);
 	}, [excerptsEnabled, snapshot]);
+	const captureFrameSelection = useCallback((event: MessageEvent) => {
+		const posted = readRenderSelection(event.data);
+		const text = posted?.text;
+		if (!posted || text === undefined) return;
+		const frame = Array.from(scrollContent.current?.querySelectorAll("iframe") ?? []).find((each) => each.contentWindow === event.source);
+		if (!frame) return;
+		if (!text.trim() || !("first" in posted)) {
+			if (selectionActionRef.current?.frame?.element === frame && !selectionComment.current.trim()) setSelectionAction(null);
+			return;
+		}
+		const activityId = frame.closest<HTMLElement>("[data-chat-activity-id]")?.dataset.chatActivityId;
+		const activity = snapshot.items.find((item) => item.kind === "activity" && item.id === activityId);
+		if (!activity || document.activeElement !== frame) return;
+		const range = document.createRange();
+		range.selectNode(frame);
+		setEditingAnnotation(null);
+		setSelectionAction((previous) => previous?.frame?.element === frame && previous.excerpt.text === text ? previous : {
+			excerpt: {
+				id: crypto.randomUUID(),
+				conversationId: snapshot.conversationId,
+				messageId: activity.id,
+				revision: activity.revision,
+				text,
+				role: "assistant",
+				snapshot: { version: 1, rawText: "", captureMode: "legacy" },
+			},
+			range,
+			frame: { element: frame, first: posted.first, extent: posted.extent },
+		});
+	}, [snapshot]);
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
@@ -3915,7 +3948,9 @@ export function Timeline({
 		document.addEventListener("pointerup", capture);
 		document.addEventListener("keyup", capture);
 		document.addEventListener("keydown", escape, true);
+		window.addEventListener("message", captureFrameSelection);
 		return () => {
+			window.removeEventListener("message", captureFrameSelection);
 			document.removeEventListener("pointerup", capture);
 			document.removeEventListener("keyup", capture);
 			document.removeEventListener("keydown", escape, true);
@@ -3923,7 +3958,7 @@ export function Timeline({
 			document.removeEventListener("keyup", release);
 			window.removeEventListener("blur", blur);
 		};
-	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
+	}, [captureFrameSelection, captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
 	const addSelectionToChat = useCallback(async (comment: string) => {
 		if (!selectionAction) return;
@@ -4908,8 +4943,8 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 			return;
 		}
-		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
-			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
+		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id], [data-chat-activity-id]") ?? [])
+			.find((element) => (element.dataset.chatMessageId ?? element.dataset.chatActivityId) === annotationTarget.messageId);
 		if (!source) {
 			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
 			if (keys.some((key) => !activityDisclosureOverrides[key])) {

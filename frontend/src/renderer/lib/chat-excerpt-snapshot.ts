@@ -1,5 +1,5 @@
 import { EXCERPT_TURN_BYTES, truncateExcerptUtf8, utf8Bytes, type ChatExcerptSnapshot } from "../../shared/chat-excerpt";
-import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
+import type { ConversationSnapshot } from "../types/conversation";
 import type { ChatDraftExcerptReference } from "./chat-drafts";
 import { codeSourceOffsets, excerptSourceOffsets } from "./rehype-excerpt-source";
 
@@ -134,7 +134,7 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 /** Freeze only completed-turn context already available at attachment time. */
 export function captureExcerptTurn(ref: ChatDraftExcerptReference, snapshot: ConversationSnapshot): ChatDraftExcerptReference {
 	if (!ref.snapshot) return ref;
-	const source = snapshot.items.find((item): item is ConversationMessage => item.kind === "message" && item.id === ref.messageId);
+	const source = snapshot.items.find((item) => item.id === ref.messageId);
 	const next = { ...ref.snapshot, sourceTurnId: source?.turnId };
 	const turn = snapshot.turns.find(turn => turn.id === source?.turnId);
 	if (!source || source.revision !== ref.revision || !turn || turn.state !== "completed" || turn.rolledBack) return { ...ref, snapshot: next };

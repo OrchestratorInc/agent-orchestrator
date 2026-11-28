@@ -210,6 +210,48 @@
     if (!/^data:image\//i.test(src)) return;
     notify("ao/open-image", { src: src, alt: img.alt });
   });
+  var selectionShown = false, selectionPending = false, selectionWithText = false;
+  function selectionRect(r) {
+    return { left: r.left, top: r.top, width: r.width, height: r.height };
+  }
+  function reportSelection(withText) {
+    selectionWithText = selectionWithText || withText === true;
+    if (selectionPending) return;
+    selectionPending = true;
+    window.requestAnimationFrame(function () {
+      var full = selectionWithText;
+      selectionPending = selectionWithText = false;
+      var selection = document.getSelection();
+      var range = selection && selection.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
+      var text = range && full ? selection.toString() : "";
+      if (!range || (full && !text.trim())) {
+        if (selectionShown) notify("ao/selection", { text: "" });
+        selectionShown = false;
+        return;
+      }
+      if (!full && !selectionShown) return;
+      var extent = range.getBoundingClientRect(), first = extent, lines = range.getClientRects();
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].width > 0 && lines[i].height > 0) { first = lines[i]; break; }
+      }
+      var params = { first: selectionRect(first), extent: selectionRect(extent) };
+      if (full) params.text = text;
+      selectionShown = true;
+      notify("ao/selection", params);
+    });
+  }
+  document.addEventListener("pointerup", function () { reportSelection(true); }, true);
+  document.addEventListener("keyup", function (e) {
+    if (/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift)$/.test(e.key) ||
+        ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a")) reportSelection(true);
+  }, true);
+  document.addEventListener("selectionchange", function () {
+    var selection = document.getSelection();
+    if (selectionShown && (!selection || selection.isCollapsed)) reportSelection(false);
+  });
+  document.addEventListener("scroll", function () {
+    if (selectionShown) reportSelection(false);
+  }, { passive: true });
   var reportedHeight, scheduled = false;
   function scheduleHeight() {
     if (scheduled) return;
