@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
+import type { CloudCpHarnessVersion, CloudCpHarnessVersionsResponse, CloudCpManagedHarness } from "../../lib/cloud-cp";
 import { aoBridge } from "../../lib/bridge";
 import { connectHost, disconnectHost } from "../../lib/host-clients";
 import { isAgentLoginPending, resetAgentLoginLifecycle } from "../../lib/agent-login-lifecycle";
@@ -33,6 +34,19 @@ vi.mock("../../hooks/useCloudOrg", () => ({
 vi.mock("../../hooks/useProviderConnections", () => ({
 	useProviderConnections: () => ({ data: cloudMocks.connections, isSuccess: true }),
 }));
+
+// The org's harness-versions answer, when a test loads one; otherwise the real hook's.
+const cloudVersionMocks = vi.hoisted(() => ({ data: undefined as CloudCpHarnessVersionsResponse | undefined }));
+vi.mock("../../hooks/useCloudHarnessVersions", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useCloudHarnessVersions")>();
+	return {
+		...actual,
+		useCloudHarnessVersions: (enabled?: boolean) => {
+			const versions = actual.useCloudHarnessVersions(enabled);
+			return cloudVersionMocks.data ? { ...versions, data: cloudVersionMocks.data, isPending: false, isError: false } : versions;
+		},
+	};
+});
 
 // A connected remote host, off by default; the remote diagnostics test turns it on.
 const hostMocks = vi.hoisted(() => {
@@ -245,6 +259,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.cloudEnabled = false;
 		cloudMocks.org = undefined;
 		cloudMocks.connections = [];
+		cloudVersionMocks.data = undefined;
 		accountMocks.enabled = false;
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
@@ -1736,6 +1751,10 @@ describe("HarnessSettingsSection", () => {
 		// A disclosure and one cloud login action; no local install controls.
 		expect(within(claudeRow).getAllByRole("button")).toHaveLength(2);
 		expect(within(claudeRow).getByText("API version not reported")).toBeInTheDocument();
+		// The cloud does not manage OpenCode's release, so there is no version to report.
+		const opencodeRow = document.querySelector<HTMLElement>('[data-agent="opencode"]')!;
+		expect(within(opencodeRow).queryByText("API version not reported")).toBeNull();
+		expect(within(opencodeRow).queryByText("·")).toBeNull();
 		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
 		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
 		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
@@ -1749,6 +1768,32 @@ describe("HarnessSettingsSection", () => {
 		await user.click(within(codexRow).getByRole("button", { name: "Expand Codex options" }));
 		await user.click(within(codexRow).getByRole("button", { name: "Refresh login" }));
 		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
+	});
+
+	it("shows cloud versions only for the harnesses the harness-versions answer lists", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		cloudMocks.connections = [{ provider: "opencode", label: "default", validationState: "valid" }];
+		const listed = (agentId: CloudCpManagedHarness, currentVersion?: string): CloudCpHarnessVersion => ({
+			agentId, defaultVersion: "",
+			plan: { agentId, automatic: true, available: true, documentationUrl: "", method: "npm", methods: [] },
+			advisory: { agentId, checkedAt: "2026-11-27T00:00:00Z", currentVersion, status: "current" },
+		});
+		// Codex is listed with no version; Cursor and OpenCode are not listed at all.
+		cloudVersionMocks.data = { editable: false, agents: [listed("claude-code", "2.1.0"), listed("codex")] };
+		const user = userEvent.setup();
+		renderSection();
+		await screen.findByText("Goose");
+		await user.click(screen.getByRole("radio", { name: "Cloud" }));
+
+		const row = (agentId: string) => document.querySelector<HTMLElement>(`[data-agent="${agentId}"]`)!;
+		expect(within(row("claude-code")).getByText("v2.1.0")).toBeInTheDocument();
+		expect(within(row("codex")).getByText("API version not reported")).toBeInTheDocument();
+		for (const agentId of ["cursor", "opencode"]) {
+			expect(within(row(agentId)).queryByText("API version not reported")).toBeNull();
+			expect(within(row(agentId)).queryByText("·")).toBeNull();
+		}
+		expect(within(row("opencode")).getByText("Connected")).toBeInTheDocument();
 	});
 
 	it("reads a harness as connected only from its valid default connection", async () => {

@@ -137,6 +137,17 @@ export interface CloudHarnessDetails {
 	adapterVersion?: string;
 }
 
+/**
+ * AO Cloud manages the release of this harness, so it has a version to show.
+ * A loaded harness-versions answer decides by listing it; until one is loaded
+ * (or from a control plane without harness versions) the harnesses AO Cloud
+ * is known to manage stand in.
+ */
+export function isCloudVersionedHarness(data: CloudCpHarnessVersionsResponse | null | undefined, agentId: AgentId): boolean {
+	if (data) return data.agents.some((candidate) => candidate.agentId === agentId);
+	return CLOUD_VERSIONED_HARNESSES.has(agentId);
+}
+
 export function describeCloudHarness(data: CloudCpHarnessVersionsResponse | null | undefined, agentId: AgentId): CloudHarnessDetails | undefined {
 	const entry = data?.agents.find((candidate) => candidate.agentId === agentId);
 	if (!data || !entry) return undefined;
