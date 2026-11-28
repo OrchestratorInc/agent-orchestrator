@@ -159,7 +159,9 @@ don't start or restart it to collect this evidence.
 - `models?catalogOnly=true` returns the persisted model catalog, but any read may start
   background model discovery or revalidation, even when a catalog is cached, and can
   replace the catalog the reporter saw. Read it only for model-list symptoms, record the
-  time, and include `refreshState` from the response. See
+  time, and include `refreshState` from the response. Claude Code discovers models
+  under the default saved account when one exists, not the computer login readiness
+  reports, so compare a Claude catalog with that account. See
   `docs/harnesses/model-catalogs.md` for catalog sources and what **Configured** does
   and does not prove.
 
@@ -188,10 +190,13 @@ session's account. Don't use `--refresh`, `account switch`, or `account default`
   | jq 'del(.accounts[].email, .accounts[].orgName, .accounts[].keyHint)'
 ```
 
-Don't call the `POST` agent routes (`readiness/ensure`, `refresh`, `probe`, `verify`,
-`models/refresh`, `install`, `auth`, `logout`), `?refresh=true`, or `agent ls` just to
-collect evidence: they run native install or auth checks, model discovery, or change
-state. Don't run the harness's own login, logout, auth status, doctor, or update
+Don't call any non-GET `/agents/*` route just to collect evidence; they run native
+install or auth checks or model discovery, or change state. Examples include
+`readiness/ensure`, `refresh`, `probe`, `verify`, `models/refresh`, `install`, `auth`,
+`logout`, the account login, API-key, default, session-switch, and `DELETE` routes, and
+`accounts/{id}/reset-credit`, which spends one of the account's Codex usage-limit
+resets. Also avoid `?refresh=true`, `agent ls`, and `account ls --refresh`,
+`account default`, or `account switch`. Don't run the harness's own login, logout, auth status, doctor, or update
 commands; they can refresh tokens or rewrite credential stores. Running `--version` on
 the executable reported above is fine when the advisory has no version. If a fresh check
 would help, ask the reporter to press **Check again** on the Health tab, and note when.
