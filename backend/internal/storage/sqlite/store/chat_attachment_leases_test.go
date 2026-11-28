@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -267,6 +268,68 @@ func TestChatAttachmentReclaimedImageReferenceRefused(t *testing.T) {
 		DeliveryContentJSON: `[{"type":"resource_link","uri":".ao/attachments/` + leasedDropped + `","name":"x"}]`}
 	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", link, "turn-3", at.Add(3*time.Second)); err != nil {
 		t.Fatalf("a mention and link of a reclaimed file were refused: %v", err)
+	}
+}
+
+// A fork copies its parent's staged files under the same names. Its own send
+// of such an image, by path, neither commits the parent's lease nor is refused
+// for it; a name mentioned in text still matches every session, as before.
+func TestChatAttachmentForkImageLeavesParentLeaseAlone(t *testing.T) {
+	s, parent, _ := conversationFixture(t)
+	ctx := context.Background()
+	forkRecord := sampleRecord("hist")
+	forkRecord.Mode = domain.SessionModeChat
+	fork, err := s.CreateSession(ctx, forkRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forkConversation, err := s.CreateConversation(ctx, "conv-fork", domain.ConversationScopeSession, "hist", fork.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClaimChatControllerGeneration(ctx, fork.ID, "gen-fork"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{leasedSent, leasedDropped} {
+		if err := s.LeaseChatAttachment(ctx, parent, name, histClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// leasedDropped is being deleted in the parent.
+	if err := s.ReleaseChatAttachmentLeases(ctx, parent, []string{leasedDropped}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimChatAttachmentLease(ctx, parent, leasedDropped, histClock.Add(time.Second)); err != nil || !claimed {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	image := func(name string) string {
+		return `[{"type":"image","data":"aW1hZ2U=","mimeType":"image/png","uri":".ao/attachments/` + name + `"}]`
+	}
+	at := histClock.Add(2 * time.Second)
+	for i, name := range []string{leasedSent, leasedDropped} {
+		msg := domain.ConversationMessage{ID: "fork-m" + string(rune('1'+i)), Text: "look", Origin: domain.MessageOriginHuman, DeliveryContentJSON: image(name)}
+		if _, err := s.AppendUserMessage(ctx, forkConversation.ID, fork.ID, "gen-fork", msg, "fork-turn-"+string(rune('1'+i)), at); err != nil {
+			t.Fatalf("fork sending its copy of %s was refused: %v", name, err)
+		}
+	}
+	steer := `{"text":"look","content":` + image(leasedDropped) + `,"origin":"human","settings":{}}`
+	if _, _, err := s.ReserveSteerDelivery(ctx, forkConversation.ID, "fork-steer", steer, at); err != nil {
+		t.Fatalf("fork steering its copy was refused: %v", err)
+	}
+	// The parent's draft still owns leasedSent: discarding it releases the file.
+	if err := s.ReleaseChatAttachmentLeases(ctx, parent, []string{leasedSent}, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := releasedNames(t, s, parent); !slices.Contains(got, leasedSent) {
+		t.Fatalf("parent released = %v, want %s among them (the fork must not commit it)", got, leasedSent)
+	}
+	// Text still names a file for every session.
+	mention := domain.ConversationMessage{ID: "fork-m3", Text: "see .ao/attachments/" + leasedSent, Origin: domain.MessageOriginHuman}
+	if _, err := s.AppendUserMessage(ctx, forkConversation.ID, fork.ID, "gen-fork", mention, "fork-turn-3", at.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := releasedNames(t, s, parent); slices.Contains(got, leasedSent) {
+		t.Fatalf("parent released = %v, want a text mention to commit %s as before", got, leasedSent)
 	}
 }
 

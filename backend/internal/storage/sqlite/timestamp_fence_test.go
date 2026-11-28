@@ -123,10 +123,10 @@ func TestTimestampRepairTriggerInventory(t *testing.T) {
 	// sessions_cdc_update also watches role_agent, which repair never writes.
 	// telemetry_lifetime_work_sessions_* fire on INSERT and on
 	// is_task_preparation updates; repair does neither.
-	// chat_attachment_leases_commit_* and _refuse_reclaimed_image_* fire on
-	// inserts, or on updates OF text and delivery_content_json only, so a
-	// representation-only timestamp rewrite never fires them.
-	const reviewed = "20ec1ad416842041cee8738829e777be29d9b09496cc50236877506bf8eae5a0"
+	// chat_attachment_leases_commit_* fire on inserts, or on updates OF text and
+	// delivery_content_json only, so a representation-only timestamp rewrite
+	// never fires them.
+	const reviewed = "6766778fe2835b18aadb7cbb164588fbbac8553bee4536ca153044f277b8e9db"
 	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != reviewed {
 		t.Fatalf("timestamp trigger inventory changed; review preservation logic before updating fingerprint: %s", got)
 	}
