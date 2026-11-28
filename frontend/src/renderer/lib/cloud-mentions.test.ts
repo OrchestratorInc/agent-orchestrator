@@ -1,0 +1,124 @@
+import { describe, expect, it } from "vitest";
+import { CloudCpError } from "./cloud-cp/errors";
+import { isPathQuery, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionSections, mentionToken, parseEventMentions, mentionWorkspaceName, splitByMentions, uniqueMentions } from "./cloud-mentions";
+
+describe("mention tokens", () => {
+	it("sends a person by userId and a team by teamId, never a name", () => {
+		expect(mentionToken({ kind: "person", id: "u-1" })).toEqual({ kind: "person", userId: "u-1" });
+		expect(mentionToken({ kind: "team", id: "t-1" })).toEqual({ kind: "team", teamId: "t-1" });
+	});
+
+	it("keeps each person or team once, in the order first named", () => {
+		expect(uniqueMentions([
+			{ kind: "person", id: "a", name: "A" },
+			{ kind: "team", id: "a", name: "Team A" },
+			{ kind: "person", id: "a", name: "A" },
+		])).toEqual([{ kind: "person", id: "a", name: "A" }, { kind: "team", id: "a", name: "Team A" }]);
+	});
+});
+
+describe("splitByMentions", () => {
+	const chen = { kind: "person" as const, id: "u-chen", name: "Chen Wei" };
+	const chenShort = { kind: "person" as const, id: "u-c", name: "Chen" };
+
+	it("picks out each @Name at a word start, longest name first", () => {
+		expect(splitByMentions("ask @Chen Wei and @Chen now", [chenShort, chen])).toEqual(["ask ", chen, " and ", chenShort, " now"]);
+	});
+
+	it("leaves an email address and a name inside a longer word alone", () => {
+		expect(splitByMentions("mail ana@Chen or @Chenna", [chenShort])).toEqual(["mail ana@Chen or @Chenna"]);
+	});
+
+	it("reads a whole character after a name, so a letter outside the basic plane continues it", () => {
+		const alex = { kind: "person" as const, id: "u-alex", name: "Alex" };
+		expect(splitByMentions("@Alex\u{10400} hi", [alex])).toEqual(["@Alex\u{10400} hi"]);
+		expect(splitByMentions("@Alex! hi", [alex])).toEqual([alex, "! hi"]);
+	});
+
+	it("gives each @Name the mention written there, in order, when a person and a team share a name", () => {
+		const person = { kind: "person" as const, id: "u-platform", name: "Platform" };
+		const team = { kind: "team" as const, id: "t-platform", name: "Platform" };
+		expect(splitByMentions("@Platform and @Platform", [person, team])).toEqual([person, " and ", team]);
+		const alexOne = { kind: "person" as const, id: "u-alex-1", name: "Alex" };
+		const alexTwo = { kind: "person" as const, id: "u-alex-2", name: "Alex" };
+		expect(splitByMentions("@Alex @Alex @Alex", [alexOne, alexTwo, alexOne])).toEqual([alexOne, " ", alexTwo, " ", alexOne]);
+	});
+
+	it("never names a workspace by an email address", () => {
+		expect(mentionWorkspaceName("Northwind")).toBe("Northwind");
+		expect(mentionWorkspaceName("someone@example.com")).toBeUndefined();
+		expect(mentionWorkspaceName("  ")).toBeUndefined();
+		expect(mentionWorkspaceName(undefined)).toBeUndefined();
+	});
+
+	it("still draws every repeat of a name a list holds once", () => {
+		expect(splitByMentions("@Chen Wei, @Chen Wei", [chen])).toEqual([chen, ", ", chen]);
+	});
+});
+
+describe("parseEventMentions", () => {
+	it("reads {kind, id, name} as the event records them and drops anything else", () => {
+		expect(parseEventMentions([
+			{ kind: "person", id: "u-1", name: "Priya Shah" },
+			{ kind: "team", id: "t-1", name: "Platform" },
+			{ kind: "person", id: "u-2" },
+			{ kind: "robot", id: "x", name: "X" },
+			"junk",
+		])).toEqual([
+			{ kind: "person", id: "u-1", name: "Priya Shah" },
+			{ kind: "team", id: "t-1", name: "Platform" },
+		]);
+		expect(parseEventMentions(undefined)).toEqual([]);
+	});
+});
+
+describe("mentionRefusal", () => {
+	it("names the reason of a 422 on the mentions field", () => {
+		const refused = new CloudCpError("Mention not allowed.", { status: 422, code: "validation_error", details: { field: "mentions", reason: "no_access" } });
+		expect(mentionRefusal(refused)).toBe("no_access");
+	});
+
+	it("is undefined for any other validation error or failure", () => {
+		expect(mentionRefusal(new CloudCpError("Bad text.", { status: 422, code: "validation_error", details: { field: "text" } }))).toBeUndefined();
+		expect(mentionRefusal(new CloudCpError("Down.", { status: 503 }))).toBeUndefined();
+	});
+
+	it("has a message for every reason the control plane gives, teams that reach too many people included", () => {
+		expect(mentionRefusalKey("too_many")).toBe("mention.refused.tooMany");
+		expect(mentionRefusalKey("no_access")).toBe("mention.refused.noAccess");
+		expect(mentionRefusalKey("outside_session")).toBe("mention.refused.outsideSession");
+		expect(mentionRefusalKey("team_too_large")).toBe("mention.refused.teamTooLarge");
+		expect(mentionRefusalKey("unknown")).toBe("mention.refused.unknown");
+	});
+
+	it("reads a mention rate limit's wait from its Retry-After, and nothing else as one", () => {
+		expect(mentionRateLimit(new CloudCpError("Slow down.", { status: 429, code: "rate_limited", retryAfterMs: 1_500 }))).toBe(2);
+		expect(mentionRateLimit(new CloudCpError("Slow down.", { status: 429, code: "rate_limited" }))).toBe(60);
+		expect(mentionRateLimit(new CloudCpError("Busy.", { status: 429, code: "tunnel_rate_limited" }))).toBeUndefined();
+		expect(mentionRateLimit(new CloudCpError("Down.", { status: 503 }))).toBeUndefined();
+	});
+});
+
+describe("mentionSections", () => {
+	const candidates = {
+		people: [
+			{ userId: "u-ben", name: "Ben Ortiz", present: false, inSession: true },
+			{ userId: "u-chen", name: "Chen Wei", present: true, inSession: true },
+			{ userId: "u-me", name: "Me", present: true, inSession: true },
+			{ userId: "u-cara", name: "Cara Diaz", present: false, inSession: false },
+		],
+		teams: [{ teamId: "t-platform", name: "Platform" }],
+	};
+
+	it("puts the people here now first, then the rest in the session, teams, and the workspace", () => {
+		const sections = mentionSections(candidates, "", "u-me");
+		expect(sections.inSession.map((person) => person.userId)).toEqual(["u-chen", "u-ben"]);
+		expect(sections.teams.map((team) => team.teamId)).toEqual(["t-platform"]);
+		expect(sections.workspace.map((person) => person.userId)).toEqual(["u-cara"]);
+	});
+
+	it("offers nothing but files for a path", () => {
+		expect(isPathQuery("src/app")).toBe(true);
+		expect(mentionSections(candidates, "src/app", "u-me")).toEqual({ inSession: [], teams: [], workspace: [] });
+	});
+});

@@ -11,6 +11,7 @@ import { forwardRef, useId, type ForwardRefExoticComponent, type RefAttributes, 
 import {
 	Activity as MynaActivity,
 	Archive as MynaArchive,
+	At as MynaAt,
 	ArrowDown as MynaArrowDown,
 	ArrowLeft as MynaArrowLeft,
 	ArrowLeftRight as MynaArrowLeftRight,
@@ -162,6 +163,7 @@ import {
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
+	BellOff as LucideBellOff,
 	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
@@ -224,6 +226,7 @@ import {
 	Ellipsis as LucideEllipsis,
 	GalleryHorizontal as LucideGalleryHorizontal,
 	EllipsisVertical as LucideEllipsisVertical,
+	MessagesSquare as LucideMessagesSquare,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
 	Play as LucidePlay,
@@ -290,10 +293,12 @@ export const ArrowRightLeft = fromMyna(MynaArrowLeftRight, "arrow-right-left");
 export const ArrowUp = fromMyna(MynaArrowUp, "arrow-up", "full");
 export const ArrowUpFromLine = fromMyna(MynaUpload, "arrow-up-from-line");
 export const ArrowUpRight = fromMyna(MynaArrowUpRight, "arrow-up-right", "full");
+export const AtSign = fromMyna(MynaAt, "at-sign");
 export const BadgeCheck = fromMyna(MynaCheckWaves, "badge-check", "full");
 export const Ban = fromMyna(MynaBan, "ban");
 export const Bell = fromMyna(MynaBell, "bell");
 export const BellRing = fromMyna(MynaBellOn, "bell-ring");
+export const BellOff = fromLucide(LucideBellOff, "bell-off");
 export const Bold = fromMyna(MynaTypeBold, "bold", "full");
 export const BookOpen = fromMyna(MynaBookOpen, "book-open");
 export const Bot = fromLucide(LucideBot, "bot");
@@ -428,6 +433,7 @@ export const Monitor = fromMyna(MynaMonitor, "monitor");
 export const MonitorCog = fromLucide(LucideMonitorCog, "monitor-cog");
 export const MonitorSmartphone = fromLucide(LucideMonitorSmartphone, "monitor-smartphone");
 export const MoreHorizontal = fromLucide(LucideEllipsis, "ellipsis");
+export const MessagesSquare = fromLucide(LucideMessagesSquare, "messages-square");
 export const MoreVertical = fromLucide(LucideEllipsisVertical, "ellipsis-vertical");
 export const Music = fromMyna(MynaMusic, "music");
 export const MousePointer2 = fromMyna(MynaMousePointer, "mouse-pointer-2", "full");

@@ -1,0 +1,293 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cloudChatEventsKey } from "../../lib/cloud-chat-history";
+import type { CloudCpClientEvent, CloudCpNotification } from "../../lib/cloud-cp/types";
+import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { clearMentionFocus, mentionOpenTarget, peekMentionFocus, requestMentionFocus } from "../../lib/cloud-mention-open";
+import { recordCloudInboxSupport, resetCloudInboxSupport } from "../../lib/cloud-notifications";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
+import type { WorkspaceSession } from "../../types/workspace";
+import { CloudSessionChatSurface, toSnapshot } from "./CloudSessionChatSurface";
+
+const cloudMocks = vi.hoisted(() => ({
+	listChatEvents: vi.fn(),
+	sendSessionMessage: vi.fn(),
+	steerTurn: vi.fn(),
+	listChatModels: vi.fn(),
+	listUserAgentModels: vi.fn(),
+	listMentionCandidates: vi.fn(),
+	me: vi.fn(),
+	chatProps: vi.fn(),
+}));
+const BASE = "https://cp.test";
+// The sign-in's own id; on a WorkOS deployment it is the identity provider's, not the control plane's.
+const signIn = vi.hoisted(() => ({ userId: "u-priya" }));
+vi.mock("../../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: signIn.userId }),
+}));
+const meAs = (id: string) => ({ user: { id, email: "someone@example.com", displayName: "Priya Shah", authProvider: "workos" }, organizations: [] });
+// The control plane offers mentions and comment threads unless a test says it does not.
+const offering = vi.hoisted(() => ({ features: ["mentions"] as string[] }));
+vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
+const activeOrg = vi.hoisted(() => ({ displayName: "Northwind" }));
+vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1", displayName: activeOrg.displayName, slug: "northwind", role: "member" } }) }));
+vi.mock("./ChatWorkspace", () => ({
+	ChatWorkspace: (props: unknown) => {
+		cloudMocks.chatProps(props);
+		return <div data-testid="cloud-chat" />;
+	},
+}));
+
+const session = {
+	id: "session-1",
+	workspaceId: "project-1",
+	workspaceName: "checkout-service",
+	title: "Fix flaky payment retry test",
+	provider: "codex",
+	kind: "worker",
+	mode: "chat",
+	status: "working",
+	runtimeConnected: true,
+	updatedAt: "2026-11-13T10:00:00Z",
+	prs: [],
+	cloud: { orgId: "org-1" },
+} satisfies WorkspaceSession;
+
+const at = "2026-11-13T10:00:00Z";
+const events: CloudCpClientEvent[] = [
+	{ sessionId: session.id, sequence: 40, type: "chat.user_message", payload: { text: "The payment retry test fails about 1 run in 20.", turnId: "turn-1", authorUserId: "u-marco", authorName: "Marco Rossi" }, createdAt: at },
+	{ sessionId: session.id, sequence: 41, type: "chat.assistant_delta", payload: { text: "The retry uses a real backoff.", turnId: "turn-1", itemId: "reply" }, createdAt: at },
+	{
+		sessionId: session.id, sequence: 42, type: "chat.user_message",
+		payload: {
+			text: "Can you check the retry backoff before we merge? @Priya Shah @Platform", turnId: "turn-2", authorUserId: "u-chen", authorName: "Chen Li",
+			mentions: [{ kind: "person", id: "u-priya", name: "Priya Shah" }, { kind: "team", id: "t-platform", name: "Platform" }],
+		},
+		createdAt: at,
+	},
+];
+
+const notification: CloudCpNotification = {
+	id: "n-1",
+	source: "cloud",
+	orgId: "org-1",
+	projectId: "project-1",
+	sessionId: session.id,
+	type: "mentioned",
+	title: "Chen Li mentioned you",
+	body: "Can you check the retry backoff before we merge? @Priya Shah @Platform",
+	status: "unread",
+	metadata: { authorUserId: "u-chen", authorName: "Chen Li", sequence: 42, turnId: "turn-2" },
+	createdAt: at,
+	updatedAt: at,
+};
+
+type ChatProps = {
+	snapshot: { items: Array<ConversationMessage | ConversationActivity> };
+	historyPending?: boolean;
+	focusMessage?: { messageId: string; key: string };
+	onFocusMessageDone?: (key: string) => void;
+	composerMentions?: { onQuery: (query: string | undefined) => void; candidates?: unknown; workspaceName?: string; selfUserId?: string };
+	onSend: (...args: unknown[]) => Promise<unknown>;
+	onSteer?: (...args: unknown[]) => Promise<unknown>;
+};
+const firstProps = () => cloudMocks.chatProps.mock.calls[0]?.[0] as ChatProps;
+const lastProps = () => cloudMocks.chatProps.mock.lastCall?.[0] as ChatProps;
+const messageTexts = (props: ChatProps) => props.snapshot.items.flatMap((item) => item.kind === "message" ? [item.text] : []);
+
+function renderSurface(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+	const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={session} /></QueryClientProvider>);
+	return { queryClient, view };
+}
+
+beforeEach(() => {
+	localStorage.clear();
+	signIn.userId = "u-priya";
+	cloudMocks.me.mockReset().mockResolvedValue(meAs("u-priya"));
+	offering.features = ["mentions"];
+	activeOrg.displayName = "Northwind";
+	resetCloudInboxSupport();
+	const pending = peekMentionFocus();
+	if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
+	cloudMocks.chatProps.mockClear();
+	cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+	cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
+	cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 42, hasOlder: false });
+	cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: events[2] });
+	cloudMocks.steerTurn.mockReset();
+	cloudMocks.listMentionCandidates.mockReset().mockResolvedValue({ people: [], teams: [] });
+});
+
+describe("chips in the timeline", () => {
+	it("keeps a message's mentions, with the names they had, for drawing chips", () => {
+		const snapshot = toSnapshot(session, events, "u-priya");
+		const mentioned = snapshot.items.find((item): item is ConversationMessage => item.kind === "message" && item.sequence === 42);
+		expect(mentioned?.mentions).toEqual([
+			{ kind: "person", id: "u-priya", name: "Priya Shah" },
+			{ kind: "team", id: "t-platform", name: "Platform" },
+		]);
+		expect(snapshot.items.find((item) => item.kind === "message" && item.sequence === 40)).not.toHaveProperty("mentions");
+	});
+
+	it("keeps a steer's mentions", () => {
+		const steered: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Go", turnId: "turn-1" }, createdAt: at },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: at },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_steered", payload: { turnId: "turn-1", text: "@Platform check this", clientMessageId: "c-1", mentions: [{ kind: "team", id: "t-platform", name: "Platform" }] }, createdAt: at },
+		];
+		const steer = toSnapshot(session, steered).items.find((item): item is ConversationActivity => item.kind === "activity" && item.detail?.event === "steer");
+		expect(steer?.detail?.mentions).toEqual([{ kind: "team", id: "t-platform", name: "Platform" }]);
+	});
+});
+
+describe("opening a mention", () => {
+	it("draws the session at the message from the cache its arrival filled, with no loading state", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(cloudChatEventsKey("org-1", session.id), events);
+		const request = requestMentionFocus(mentionOpenTarget(notification)!);
+		renderSurface(queryClient);
+		// The very first frame already holds the message, and asks to land on it.
+		const first = firstProps();
+		expect(first.historyPending).toBe(false);
+		expect(messageTexts(first)).toContain("Can you check the retry backoff before we merge? @Priya Shah @Platform");
+		expect(first.focusMessage).toEqual({ messageId: "cloud-event-42", key: `${request.nonce}:loaded` });
+		// Once the chat landed, the request is done.
+		act(() => first.onFocusMessageDone?.(`${request.nonce}:loaded`));
+		expect(peekMentionFocus()).toBeUndefined();
+		await waitFor(() => expect(lastProps().focusMessage).toBeUndefined());
+	});
+
+	it("lands on an agent's answer by its first event (Open in session from the threads view)", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(cloudChatEventsKey("org-1", session.id), events);
+		const request = requestMentionFocus({ notificationId: "thread:c-1:41", kind: "aside_reply", orgId: "org-1", projectId: "project-1", sessionId: session.id, sequence: 41, body: "", asideId: "c-1", createdAt: at });
+		renderSurface(queryClient);
+		const first = firstProps();
+		const answer = first.snapshot.items.find((item) => item.kind === "message" && item.role === "assistant");
+		expect(answer?.sequence).toBe(41);
+		expect(first.focusMessage).toEqual({ messageId: answer?.id, key: `${request.nonce}:loaded` });
+		// Not a user message's id: the answer is no user message.
+		expect(first.focusMessage?.messageId).not.toBe("cloud-event-41");
+	});
+
+	it("opens at once with nothing cached, showing the message from the notification's text until the rest loads", async () => {
+		let answer!: (page: unknown) => void;
+		cloudMocks.listChatEvents.mockReset().mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }))
+			.mockResolvedValue({ events: [], hasMore: false, nextAfter: 42, hasOlder: false });
+		const request = requestMentionFocus(mentionOpenTarget(notification)!);
+		renderSurface();
+		const first = firstProps();
+		expect(first.historyPending).toBe(true);
+		const fallback = first.snapshot.items.find((item): item is ConversationMessage => item.kind === "message");
+		expect(fallback).toMatchObject({ id: "cloud-event-42", text: notification.body, authorName: "Chen Li" });
+		expect(first.focusMessage).toEqual({ messageId: "cloud-event-42", key: `${request.nonce}:fallback` });
+		// Landing on the stand-in keeps the request, to land again on the real row.
+		act(() => first.onFocusMessageDone?.(`${request.nonce}:fallback`));
+		expect(peekMentionFocus()?.nonce).toBe(request.nonce);
+		await act(async () => answer({ events, hasMore: false, nextAfter: 42, hasOlder: false }));
+		await waitFor(() => expect(lastProps().historyPending).toBe(false));
+		expect(lastProps().focusMessage).toEqual({ messageId: "cloud-event-42", key: `${request.nonce}:loaded` });
+		// The real conversation took the stand-in's place, its row included.
+		expect(messageTexts(lastProps())).toHaveLength(3);
+		expect(lastProps().snapshot.items.filter((item) => item.id === "cloud-event-42")).toHaveLength(1);
+	});
+});
+
+describe("sending mentions", () => {
+	it("sends a message's chips as typed tokens beside the text", async () => {
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await act(async () => {
+			await lastProps().onSend("@Priya Shah can you look?", undefined, "client-1", undefined, undefined, undefined,
+				[{ kind: "person", id: "u-priya", name: "Priya Shah" }, { kind: "team", id: "t-platform", name: "Platform" }]);
+		});
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({
+			text: "@Priya Shah can you look?",
+			mentions: [{ kind: "person", userId: "u-priya" }, { kind: "team", teamId: "t-platform" }],
+		}), { idempotencyKey: "client-1" });
+	});
+
+	it("sends no mentions field for a message without chips", async () => {
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await act(async () => { await lastProps().onSend("plain", undefined, "client-2"); });
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("mentions");
+	});
+
+	it("says a refused mention in the reader's words and keeps the draft's validation code", async () => {
+		cloudMocks.sendSessionMessage.mockRejectedValue(new CloudCpError("mentions: no access", {
+			status: 422, code: "validation_error", details: { field: "mentions", reason: "no_access" },
+		}));
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await expect(lastProps().onSend("@Cara hi", undefined, "client-3", undefined, undefined, undefined, [{ kind: "person", id: "u-cara", name: "Cara" }]))
+			.rejects.toMatchObject({ message: "Someone you mentioned can't open this session. Nothing was sent.", code: "validation_error" });
+	});
+
+	it("says a send paused for its mentions (429 rate_limited) in the reader's words, and hands the draft back", async () => {
+		cloudMocks.sendSessionMessage.mockRejectedValue(new CloudCpError("rate limited", { status: 429, code: "rate_limited", retryAfterMs: 30_000 }));
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await expect(lastProps().onSend("@Priya hi", undefined, "client-5", undefined, undefined, undefined, [{ kind: "person", id: "u-priya", name: "Priya Shah" }]))
+			.rejects.toMatchObject({ message: "Too many mentions in this session for now. Try again in 30 s, or send it without mentions. Nothing was sent.", code: "validation_error" });
+		// A send without mentions is never limited for them: its error stays as it was.
+		await expect(lastProps().onSend("plain", undefined, "client-6")).rejects.toMatchObject({ status: 429, code: "rate_limited" });
+	});
+
+	it("says a refusal for teams that reach too many people in the reader's words", async () => {
+		cloudMocks.sendSessionMessage.mockRejectedValue(new CloudCpError("mentions: too large", {
+			status: 422, code: "validation_error", details: { field: "mentions", reason: "team_too_large" },
+		}));
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await expect(lastProps().onSend("@Everyone hi", undefined, "client-4", undefined, undefined, undefined, [{ kind: "team", id: "t-all", name: "Everyone" }]))
+			.rejects.toMatchObject({ message: "Your mentions reach more than 100 people. Mention fewer people or a smaller team. Nothing was sent.", code: "validation_error" });
+	});
+});
+
+describe("the @ menu's source", () => {
+	it("offers no people or teams while the control plane does not offer mentions, and files stay", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		offering.features = [];
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(lastProps().composerMentions).toBeUndefined();
+		expect(cloudMocks.listMentionCandidates).not.toHaveBeenCalled();
+	});
+
+	it("offers no people or teams on a control plane without mentions", async () => {
+		recordCloudInboxSupport(BASE, "unsupported");
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		expect(lastProps().composerMentions).toBeUndefined();
+	});
+
+	it("titles the workspace's people neutrally when the workspace is named by an email", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		activeOrg.displayName = "someone@example.com";
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
+		expect(lastProps().composerMentions?.workspaceName).toBeUndefined();
+	});
+
+	it("leaves the person out of their own @ menu by the control plane's id for them, not the sign-in's", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		signIn.userId = "user_01SIGNIN";
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerMentions?.selfUserId).toBe("u-priya"));
+	});
+
+	it("offers them, as the control plane lists them, on one that has mentions", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		const candidates = { people: [{ userId: "u-chen", name: "Chen Li", present: true, inSession: true }], teams: [] };
+		cloudMocks.listMentionCandidates.mockResolvedValue(candidates);
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
+		expect(lastProps().composerMentions).toMatchObject({ workspaceName: "Northwind", selfUserId: "u-priya" });
+		act(() => lastProps().composerMentions?.onQuery("ch"));
+		await waitFor(() => expect(cloudMocks.listMentionCandidates).toHaveBeenCalledWith("org-1", session.id, { q: "ch", limit: 20 }, expect.anything()));
+		await waitFor(() => expect(lastProps().composerMentions?.candidates).toEqual(candidates));
+	});
+});

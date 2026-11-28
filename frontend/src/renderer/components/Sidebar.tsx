@@ -44,6 +44,7 @@ import {
 	TriangleAlert,
 	User,
 	ArrowLeft,
+	MessagesSquare,
 } from "@/components/app-icons";
 import {
 	useCallback,
@@ -92,6 +93,7 @@ import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useUnreadCommentThreads } from "../hooks/useCommentThreads";
 import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
@@ -561,6 +563,7 @@ function useSelection() {
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
+	const goThreads = useCallback(() => void navigate({ to: "/threads" }), [navigate]);
 	const goUsage = useCallback(() => void navigate({ to: "/usage" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
@@ -588,6 +591,7 @@ function useSelection() {
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
+		isThreads: pathname === "/threads",
 		isUsage: pathname === "/usage",
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
@@ -597,6 +601,7 @@ function useSelection() {
 		goHome,
 		goAutomations,
 		goArtifacts,
+		goThreads,
 		goUsage,
 		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
@@ -606,7 +611,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goThreads, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // The sidebar's resize line traces the center panel's left border, wherever its inset puts it.
@@ -794,6 +799,8 @@ export const Sidebar = memo(function Sidebar({
 	const cloudArtifacts = useCloudOffering().artifacts;
 	// Kept artifacts are listed there too.
 	const kept = useKeptArtifacts().data;
+	// The Threads item and its unread count, once the control plane has the threads view.
+	const threads = useUnreadCommentThreads();
 	const artifactTotal = useMemo(
 		() => artifactCount(withKeptArtifacts(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud")), kept, workspaces, "")),
 		[cloudArtifacts, workspaces, kept],
@@ -1213,6 +1220,21 @@ export const Sidebar = memo(function Sidebar({
 							trailing={artifactTotal > 0 ? String(artifactTotal) : undefined}
 						/>
 					</SidebarMenuItem>
+					{/* The comment threads the person is in, once the control plane has the view. */}
+					{threads.supported ? (
+						<SidebarMenuItem>
+							<SidebarTopNavRow
+								active={selection.isThreads}
+								icon={<MessagesSquare aria-hidden="true" />}
+								label={t("threads.title")}
+								onClick={selection.goThreads}
+								tooltip={isCollapsed ? t("threads.title") : undefined}
+								trailing={threads.count > 0 ? String(threads.count) : undefined}
+								trailingLabel={threads.count > 0 ? t("threads.unreadCount", { count: threads.count }) : undefined}
+								trailingTone="unread"
+							/>
+						</SidebarMenuItem>
+					) : null}
 				</SidebarMenu>
 			</div>
 
@@ -3770,6 +3792,8 @@ function SidebarTopNavRow({
 	onClick,
 	tooltip,
 	trailing,
+	trailingLabel,
+	trailingTone,
 }: {
 	active?: boolean;
 	disabled?: boolean;
@@ -3778,10 +3802,14 @@ function SidebarTopNavRow({
 	onClick: () => void;
 	tooltip?: string;
 	trailing?: string;
+	/** Says what the trailing number counts, for assistive tech. */
+	trailingLabel?: string;
+	/** "unread": a count of things the person hasn't read, in the working blue. */
+	trailingTone?: "unread";
 }) {
 	return (
 		<SidebarMenuButton
-			aria-label={label}
+			aria-label={trailingLabel ? `${label}, ${trailingLabel}` : label}
 			className={cn(
 				NAV_ROW_CLASS,
 				SIDEBAR_ROW_CLASS,
@@ -3801,7 +3829,13 @@ function SidebarTopNavRow({
 				{label}
 			</span>
 			{trailing ? (
-				<span className="sidebar-expanded-chrome relative z-[1] ml-auto shrink-0 font-sans text-caption text-passive group-data-[collapsible=icon]:hidden">
+				<span
+					className={cn(
+						"sidebar-expanded-chrome relative z-[1] ml-auto shrink-0 font-sans text-caption group-data-[collapsible=icon]:hidden",
+						trailingTone === "unread" ? "font-medium text-status-working" : "text-passive",
+					)}
+					data-trailing-tone={trailingTone}
+				>
 					{trailing}
 				</span>
 			) : null}

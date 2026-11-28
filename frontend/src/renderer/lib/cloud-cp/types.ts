@@ -207,10 +207,314 @@ export interface CloudCpNotification {
 	title: string;
 	body: string;
 	status: "unread" | "read";
+	/** Kind-specific detail; a `mentioned` row's is a CloudCpMentionNotificationMetadata. */
+	metadata?: Record<string, unknown>;
 	resolvedAt?: string;
 	createdAt: string;
 	updatedAt: string;
 }
+
+/**
+ * A `mentioned` notification's metadata: who wrote it, the message's event,
+ * the team that named the recipient (when only a team did), and what to show
+ * on the row's "session · project · time" line.
+ */
+export interface CloudCpMentionNotificationMetadata {
+	authorUserId?: string;
+	authorName?: string;
+	/** The session event (the message or steer) that named them. */
+	sequence?: number;
+	turnId?: string;
+	teamId?: string;
+	teamName?: string;
+	sessionTitle?: string;
+	projectName?: string;
+	/** The aside the mention is in: the one its message started, or the one whose reply named them. */
+	asideId?: string;
+	/** Set when a reply in the aside named them. */
+	replyId?: string;
+}
+
+/**
+ * POST /me/notifications/state: marks some of the caller's notifications read.
+ * Exactly one target: ids, all, or orgId with sessionId (the session's mentions).
+ */
+export type CloudCpMyNotificationStateChange =
+	| { ids: string[]; read: true }
+	| { all: true; read: true }
+	| { orgId: string; sessionId: string; read: true };
+
+/** GET/PUT /me/notification-preferences: which notifications alert on the desktop and the phone. */
+export interface CloudCpNotificationPreferences {
+	/** Someone mentions me. */
+	mentions: boolean;
+	/** Someone mentions a team I'm in. */
+	teamMentions: boolean;
+	/** New replies in asides I'm in. Absent from a control plane that predates asides. */
+	asideReplies?: boolean;
+}
+
+/**
+ * An `aside_reply` notification's metadata: the aside, its newest reply and
+ * who wrote it, the event of the message that started the aside, and what to
+ * show on the row's "session · project · time" line.
+ */
+export interface CloudCpAsideReplyNotificationMetadata {
+	asideId?: string;
+	replyId?: string;
+	authorUserId?: string;
+	authorName?: string;
+	/** The session event of the message that started the aside. */
+	sequence?: number;
+	turnId?: string;
+	sessionTitle?: string;
+	projectName?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Mentions
+// ---------------------------------------------------------------------------
+
+/** A person or team named in a message or steer, as the composer sends it. */
+export type CloudCpMentionToken =
+	| { kind: "person"; userId: string }
+	| { kind: "team"; teamId: string };
+
+/** A mention as a message's or steer's event records it, with the name it had then. */
+export interface CloudCpEventMention {
+	kind: "person" | "team";
+	id: string;
+	name: string;
+}
+
+export interface CloudCpMentionPerson {
+	userId: string;
+	name: string;
+	/** Has the session open now ("Here now"). */
+	present: boolean;
+	/** In the session (In this session); false for the workspace's other people who can open it. */
+	inSession: boolean;
+}
+
+export interface CloudCpMentionTeam {
+	teamId: string;
+	name: string;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/mention-candidates: only people who can open the session, never the caller. */
+export interface CloudCpMentionCandidates {
+	people: CloudCpMentionPerson[];
+	teams: CloudCpMentionTeam[];
+}
+
+export interface CloudCpMentionCandidatesQuery {
+	q?: string;
+	limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Asides: a message that mentions people starts a thread between them about
+// it, which the agent never reads.
+// ---------------------------------------------------------------------------
+
+/** What kind of message a comment thread is about. */
+export type CloudCpAsideAnchorKind = "user_message" | "steer" | "agent_message";
+
+/** A person named on a comment thread: who started, resolved or sent it. Never an email address. */
+export interface CloudCpAsidePerson {
+	userId: string;
+	name: string;
+}
+
+/**
+ * GET /orgs/{orgId}/sessions/{sessionId}/asides: one aside (a comment thread,
+ * as the person sees it) as the caller sees it.
+ */
+export interface CloudCpAside {
+	asideId: string;
+	/** The message it is about. */
+	anchor: { sequence: number; kind?: CloudCpAsideAnchorKind; turnId?: string; itemId?: string; clientMessageId?: string };
+	replyCount: number;
+	lastReplyAt?: string;
+	/** The caller is in it and something by someone else is newer than when they last read it. */
+	unread: boolean;
+	muted: boolean;
+	/** `tag`: a message that mentioned people started it; `comment`: someone commented. Absent means `tag`. */
+	origin?: "tag" | "comment";
+	/** The exact passage it is about; absent for a thread on the whole message. */
+	quote?: string;
+	startedBy?: CloudCpAsidePerson;
+	resolvedAt?: string;
+	resolvedBy?: CloudCpAsidePerson;
+	sentToAgentAt?: string;
+	sentToAgentBy?: CloudCpAsidePerson;
+	/** The message the last send to the agent became, to jump to it. */
+	sentMessage?: CloudCpAsideSentMessage;
+	/** The newest comment the agent has received; later ones are new since the last send. */
+	lastSentReplyId?: string;
+	/** When the thread last changed (a comment, resolve, reopen or send). */
+	lastActivityAt?: string;
+	/** Its state changes, oldest first, shown as system rows among the comments by sequence. Absent from an older control plane. */
+	history?: CloudCpAsideHistoryEntry[];
+}
+
+/** One state change of a comment thread: "{Name} resolved this", "reopened this", "sent this thread to the agent". */
+export interface CloudCpAsideHistoryEntry {
+	kind: "resolved" | "reopened" | "sent_to_agent";
+	actor: CloudCpAsidePerson;
+	at: string;
+	/** Its session event; orders it among the comments (CloudCpAsideReply.sequence). */
+	sequence: number;
+	/** `sent_to_agent`: the comment sent as the request. */
+	replyId?: string;
+	/** `sent_to_agent`: the message the thread became. */
+	sentMessage?: CloudCpAsideSentMessage;
+}
+
+/** GET /me/comment-threads: one row of the threads view. */
+export interface CloudCpCommentThread {
+	orgId: string;
+	sessionId: string;
+	projectId: string;
+	sessionTitle: string;
+	projectName: string;
+	/** The session ended: the thread is read-only. */
+	sessionTerminated: boolean;
+	/** The caller may prompt the session's agent, so the pane offers "Also send to agent". Absent from an older control plane. */
+	canPrompt?: boolean;
+	/** When the message the thread is about was sent; absent when that message is gone. */
+	anchorAt?: string;
+	aside: CloudCpAside;
+	/** The newest comment; absent for a tagged message's thread with no reply yet. */
+	lastComment?: { replyId?: string; authorUserId?: string; authorName: string; preview: string; at: string };
+	/** Up to three people, whoever commented most recently first. */
+	participants: Array<{ userId: string; name: string; avatarUrl?: string }>;
+	participantCount: number;
+	commentCount: number;
+	unread: boolean;
+	muted: boolean;
+	sentToAgentAt?: string;
+	lastActivityAt: string;
+}
+
+/** GET /me/comment-threads: a page of the caller's threads. */
+export interface CloudCpCommentThreadPage {
+	items: CloudCpCommentThread[];
+	hasMore: boolean;
+	nextCursor?: string;
+}
+
+export interface CloudCpCommentThreadQuery {
+	status?: "open" | "resolved";
+	unread?: boolean;
+	cursor?: string;
+	limit?: number;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/asides: a new comment thread with its first comment; idempotent on clientMessageId. */
+export interface CloudCpAsideCreateRequest {
+	anchor: { sequence: number };
+	quote?: string;
+	text: string;
+	mentions?: CloudCpMentionToken[];
+	clientMessageId: string;
+}
+
+/** The message a reply with sendToAgent sent the agent. */
+export interface CloudCpAsideSentMessage {
+	sequence: number;
+	turnId?: string;
+	clientMessageId?: string;
+}
+
+/** A thread as "Also send to agent" sent it, on the user message the agent got. */
+export interface CloudCpFromAside {
+	asideId: string;
+	quote?: string;
+	anchorKind?: CloudCpAsideAnchorKind;
+	anchorExcerpt?: string;
+	/** The reply sent with the box ticked: what the agent was asked to do. Absent when it was empty ("Address this thread."). Not among comments. */
+	requestText?: string;
+	/** The thread was sent before; this carries only the comments written since (previouslySentAt). */
+	sinceSent?: boolean;
+	previouslySentAt?: string;
+	/** The comments the message covers, not counting the request: comments plus omittedComments. */
+	commentCount?: number;
+	/** Comments the limits left out of the middle. */
+	omittedComments?: number;
+	comments: Array<{ authorUserId?: string; authorName: string; text: string; createdAt?: string }>;
+}
+
+export interface CloudCpAsideListResponse {
+	items: CloudCpAside[];
+}
+
+/** The message that started an aside, as the transcript shows it. */
+export interface CloudCpAsideMessage {
+	kind?: CloudCpAsideAnchorKind;
+	sequence: number;
+	turnId?: string;
+	text: string;
+	mentions: CloudCpEventMention[];
+	authorUserId?: string;
+	authorName?: string;
+	createdAt: string;
+}
+
+export interface CloudCpAsideReply {
+	replyId: string;
+	asideId: string;
+	text: string;
+	mentions: CloudCpEventMention[];
+	authorUserId: string;
+	authorName: string;
+	createdAt: string;
+	/** When its author last edited it. */
+	editedAt?: string;
+	/** Its chat.aside_reply event, which orders it among the thread's history entries. */
+	sequence?: number;
+	/** Its newest edit's chat.aside_reply_edited event; absent when it was never edited. */
+	editedSequence?: number;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}: the message and a page of replies, oldest first. */
+export interface CloudCpAsideThread {
+	aside: CloudCpAside;
+	message: CloudCpAsideMessage;
+	replies: CloudCpAsideReply[];
+	hasMore: boolean;
+	nextCursor?: string;
+}
+
+export interface CloudCpAsideThreadQuery {
+	cursor?: string;
+	limit?: number;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies; idempotent on clientMessageId. */
+/** A comment as the sender's client showed it: its id and the version shown (editedSequence, else sequence). */
+export interface CloudCpAsideSeenComment {
+	replyId: string;
+	version: number;
+}
+
+interface CloudCpAsideReplyBase {
+	text: string;
+	mentions?: CloudCpMentionToken[];
+	clientMessageId: string;
+}
+
+/**
+ * A reply, or with sendToAgent a reply that also sends the thread to the
+ * agent and resolves it ("Also send to agent"). That one names what the
+ * sender read: seen, every comment shown at the version shown (at most 500),
+ * and throughSequence, the newest of them, as the upper bound. A comment the
+ * send would carry that is missing from seen, newer than listed or after
+ * throughSequence is refused with 409 thread_changed.
+ */
+export type CloudCpAsideReplyRequest =
+	| (CloudCpAsideReplyBase & { sendToAgent?: false })
+	| (CloudCpAsideReplyBase & { sendToAgent: true; throughSequence: number; seen: CloudCpAsideSeenComment[] });
 
 export interface CloudCpNotificationEvent {
 	sequence: number;
@@ -1652,6 +1956,16 @@ export interface CloudCpSendMessageRequest {
 	displayText?: string;
 	/** The quotes and file captures the message attaches, as the transcript shows them (at most 64 blocks). */
 	content?: Array<{ type: string }>;
+	/** The people and teams the message notifies (at most 20); the agent reads only `text`. */
+	mentions?: CloudCpMentionToken[];
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer. */
+export interface CloudCpSteerTurnRequest {
+	text: string;
+	composerEpoch?: number;
+	/** The people and teams the guidance notifies (at most 20); the agent reads only `text`. */
+	mentions?: CloudCpMentionToken[];
 }
 
 export interface CloudCpChatModelsResponse {

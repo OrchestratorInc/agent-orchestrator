@@ -57,6 +57,7 @@ import type {
   SessionPullRequests,
   SessionReviewState,
   SendMessageInput,
+  SteerTurnInput,
   EditQueuedMessageInput,
   TerminalKind,
   TerminalTicket,
@@ -813,7 +814,7 @@ export class CloudClient {
     orgId: string,
     sessionId: string,
     turnId: string,
-    message: string | SendMessageInput,
+    message: string | SteerTurnInput,
     options: IdempotentRequestOptions,
   ): Promise<{ event: TurnSteeredEvent }> {
     return this.request(

@@ -4,9 +4,11 @@ import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCloudMeUserId } from "../../hooks/useCloudMeUserId";
+import { useCachedQueryData } from "../../hooks/useCloudScriptRuns";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
-import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
+import { MENTIONS_FEATURE, QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useRestoreSession } from "../../hooks/useRestoreSession";
 import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
@@ -27,12 +29,13 @@ import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettin
 import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { withMoveStateText } from "../../lib/cloud-move-state";
 import { reportPlanRefusal } from "../../lib/cloud-telemetry";
 import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
-import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
+import { CHAT_EVENTS_CACHE_MS, cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ActivityKind, ApprovalMode, ChatConfigOption, ConversationActivity, ConversationContentSummary, ConversationItem, ConversationMessage, ConversationPlan, ConversationSnapshot, ConversationTurn, ConversationUsage, DiffFile, FileChangeFile, PlanStep, SystemEventDetail, TurnSettings } from "../../types/conversation";
@@ -55,6 +58,32 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, splitCloudAttachmentReferences, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { MentionTintContext, type MentionTint } from "./MentionChip";
+import type { ComposerMentionSource } from "./ChatComposer";
+import { mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, mentionWorkspaceName, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { cloudInboxQueryKey, mentionMetadata, probeCloudInbox } from "../../lib/cloud-notifications";
+import { clearMentionFocus, mentionFallbackEvents, mentionMessageId, useMentionFocus } from "../../lib/cloud-mention-open";
+import { useCloudInboxSupport } from "../../hooks/useCloudNotifications";
+import { useCloudOrg } from "../../hooks/useCloudOrg";
+import { useWindowAttention } from "../../hooks/useWindowAttention";
+import type { CloudCpAside, CloudCpAsideListResponse, CloudCpMentionCandidates, CloudCpNotificationListResponse } from "../../lib/cloud-cp/types";
+import {
+	ASIDE_REPLY_EVENT,
+	ASIDE_STATE_EVENTS,
+	asideIdOf,
+	asideIsOpen,
+	asideReplyOf,
+	closeAside,
+	cloudAsidesKey,
+	fromAsideOf,
+	openAside,
+	openCommentDraft,
+	openMessageComments,
+	toggleAside,
+	useOpenAside,
+} from "../../lib/cloud-asides";
+import { CommentMarkersContext, type CommentMarkers, type MessageComments } from "./AsideMarker";
+import { CloudAsidePane, CloudCommentDraftPane, CommentThreadListView, type AsideFallback } from "./AsidePane";
 import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 import { sameSentence, usageLimitSentence } from "../../../../../packages/shared/chat/usage-limit";
@@ -73,6 +102,10 @@ type EventPayload = {
 	reason?: unknown;
 	/** chat.user_message: the files the message carries. */
 	attachments?: unknown;
+	/** chat.user_message and chat.turn_steered: the people and teams it named, with their names then. */
+	mentions?: unknown;
+	/** chat.user_message and chat.turn_steered: the aside a message that named people started. */
+	asideId?: unknown;
 	/** workspace.setup */
 	status?: unknown;
 	step?: unknown;
@@ -491,13 +524,8 @@ const STREAM_FLUSH_MS = 32;
 export const CHAT_EVENTS_SAFETY_POLL_MS = 10_000;
 /** How often they are read while the stream is down or still opening. */
 export const CHAT_EVENTS_FALLBACK_POLL_MS = 1_000;
-/**
- * How long a closed chat keeps its events: reopened within it, the
- * conversation shows at once and only what is newer is read. React Query's
- * default (5 min) made a chat reopened after a short break read its whole
- * history again behind a blank screen.
- */
-export const CHAT_EVENTS_CACHE_MS = 60 * 60_000;
+// Kept where the chat reads it; other readers prefetch with the same lifetime.
+export { CHAT_EVENTS_CACHE_MS };
 
 /**
  * Feeds a Cloud session's chat events into its cached list as the control
@@ -896,6 +924,51 @@ export function withoutFailedSetupAttempts(items: ConversationItem[], startFaile
  * The name to show on a prompt in a shared session: another participant's,
  * never the viewer's own, and nothing for a message no person sent.
  */
+/**
+ * The people and teams a message or steer named, as its event recorded them,
+ * for drawing chips, and the aside it started (a dashed box with the aside icon).
+ */
+/** A message "Also send to agent" sent carries its thread: drawn as a card, not its text. */
+function fromAsideItem(payload: EventPayload): Pick<ConversationMessage, "fromAside"> {
+	const thread = fromAsideOf(payload as Record<string, unknown>);
+	if (!thread) return {};
+	return {
+		fromAside: {
+			asideId: thread.asideId,
+			...(thread.quote ? { quote: thread.quote } : {}),
+			...(thread.anchorExcerpt ? { anchorExcerpt: thread.anchorExcerpt } : {}),
+			...(thread.requestText ? { requestText: thread.requestText } : {}),
+			// A framed send says how many comments it covers; an older one doesn't.
+			...(thread.commentCount !== undefined || thread.requestText !== undefined || thread.sinceSent ? { framed: true } : {}),
+			...(thread.sinceSent ? { sinceSent: true, ...(thread.previouslySentAt ? { previouslySentAt: thread.previouslySentAt } : {}) } : {}),
+			...(thread.commentCount !== undefined ? { commentCount: thread.commentCount } : {}),
+			...(thread.omittedComments ? { omittedComments: thread.omittedComments } : {}),
+			comments: thread.comments.map(({ authorName, text }) => ({ authorName, text })),
+		},
+	};
+}
+
+function mentionsOf(payload: EventPayload): { mentions?: ReturnType<typeof parseEventMentions>; asideId?: string } {
+	const mentions = parseEventMentions(payload.mentions);
+	const asideId = typeof payload.asideId === "string" && payload.asideId !== "" ? payload.asideId : undefined;
+	return { ...(mentions.length > 0 ? { mentions } : {}), ...(asideId ? { asideId } : {}) };
+}
+
+/**
+ * A send the control plane refused for a mention, or paused because it carried
+ * mentions (429 rate_limited), said in the reader's words. Nothing was stored:
+ * it takes the validation code, so the composer hands the draft back unsent.
+ */
+function mentionRefusedError(error: unknown, withMentions: boolean): unknown {
+	const seconds = withMentions ? mentionRateLimit(error) : undefined;
+	if (seconds !== undefined) {
+		return Object.assign(new AoError("validation_error", appI18n.t("mention.refused.rateLimited", { seconds }), { cause: error }), { status: 429 });
+	}
+	const reason = mentionRefusal(error);
+	if (!reason) return error;
+	return Object.assign(new AoError("validation_error", appI18n.t(mentionRefusalKey(reason)), { cause: error }), { status: 422 });
+}
+
 function promptAuthorName(payload: EventPayload, viewerUserId: string | undefined): string | undefined {
 	if (!viewerUserId || typeof payload.authorUserId !== "string" || payload.authorUserId === viewerUserId) return undefined;
 	return typeof payload.authorName === "string" && payload.authorName.trim() !== "" ? payload.authorName.trim() : undefined;
@@ -1059,7 +1132,18 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const runSequence = (run: ScriptRun) =>
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
+	// A steer's aside is anchored on the event its request returned
+	// (chat.turn_steer_requested); its chat.turn_steered finds it by clientMessageId.
+	const steerAsides = new Map<string, string>();
 	for (const event of events) {
+		if (event.type !== "chat.turn_steer_requested") continue;
+		const asideId = asideIdOf(event);
+		const key = eventPayload(event).clientMessageId;
+		if (asideId && typeof key === "string" && key !== "") steerAsides.set(key, asideId);
+	}
+	for (const event of events) {
+		// Comments are between people: they show in the comment pane, never in the conversation.
+		if (event.type === ASIDE_REPLY_EVENT || ASIDE_STATE_EVENTS.has(event.type)) continue;
 		if (event.type === "chat.user_message_edited") {
 			// The edit of a message still queued: it reads as edited, in place,
 			// and starts nothing of its own. One whose message is not loaded has
@@ -1070,6 +1154,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				const attachments = eventAttachments(event);
 				edited.text = text;
 				delete edited.content;
+				// An edited thread send (an older app could edit one) is its new text,
+				// not the thread its card showed.
+				delete edited.fromAside;
 				if (attachments.length > 0) edited.cloudAttachments = attachments;
 				else delete edited.cloudAttachments;
 				edited.revision += 1;
@@ -1354,6 +1441,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				...(content ? { content } : {}),
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
 				senderSessionId, senderProjectId, senderDisplayName,
+				...(automation ? {} : mentionsOf(payload)),
+				...(automation ? {} : fromAsideItem(payload)),
 				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			};
@@ -1368,6 +1457,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		if (event.type === "chat.turn_steered") {
 			const payload = eventPayload(event);
 			const clientMessageID = payload.clientMessageId;
+			const steerMentions = mentionsOf(payload);
+			const steerAside = steerMentions.asideId ?? (typeof clientMessageID === "string" ? steerAsides.get(clientMessageID) : undefined);
 			items.push({
 				kind: "activity", id: `cloud-steer-${event.sequence}`, turnId: turnID, sequence: event.sequence,
 				revision: 1, activityKind: "system", status: "completed", summary: `Steered: ${text}`,
@@ -1375,6 +1466,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 					event: "steer", text, ...steerOrigin(payload), clientMessageId: typeof clientMessageID === "string" ? clientMessageID : undefined,
 					// Deleted while the agent was taking it: it got the message anyway.
 					...(payload.deleteRequested === true ? { deliveredBeforeDelete: true } : {}),
+					...steerMentions, ...(steerAside ? { asideId: steerAside } : {}),
 				},
 				createdAt: event.createdAt,
 			});
@@ -1638,9 +1730,11 @@ export function CloudSessionChatSurface({
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
 	const live = useCloudSessionLive(cloud?.orgId, session.id, Boolean(cloud && ready && session.isTerminated !== true));
-	// Who this person is, as the server sees them on the live stream; the
-	// remembered account only until the stream says.
-	const me = live?.you || userId;
+	// Who this person is, as the server sees them: on the live stream, else
+	// GET /me (its user ids name message and comment authors; the sign-in's
+	// own id is the identity provider's), the sign-in's only until either says.
+	const cloudMeId = useCloudMeUserId(Boolean(cloud));
+	const me = live?.you || cloudMeId || userId;
 	// The owner sets a shared session's model and settings; everyone else sees
 	// them read-only and their turns run with them.
 	const settingsLocked = Boolean(live && !live.canConfigure);
@@ -1986,7 +2080,7 @@ export function CloudSessionChatSurface({
 		// `sessionId` and `orgId` name the session the send went to: this surface
 		// outlives it, and a send that first restored an archived session can run
 		// after another session was opened here.
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch, sessionId, orgId }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean; sessionId: string; orgId?: string }) => {
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, mentions, afterSwitch, sessionId, orgId }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; mentions?: ComposerMention[]; afterSwitch?: boolean; sessionId: string; orgId?: string }) => {
 			if (!cloud || !orgId) throw new Error("Cloud session context is unavailable.");
 			// The picks, mode and composer lease below are the shown session's. A
 			// message to a session no longer shown goes without them, and its worker
@@ -2014,6 +2108,9 @@ export function CloudSessionChatSurface({
 				...(mode ? { mode } : {}),
 				...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
+				// The agent reads the text, where each chip is written as @Name; the
+				// people and teams it names travel beside it.
+				...(mentions?.length ? { mentions: mentions.map(mentionToken) } : {}),
 			};
 			const message = cloudMessageBody(text, display);
 			// A session whose work is moving takes no messages; the user is told
@@ -2022,16 +2119,20 @@ export function CloudSessionChatSurface({
 				client.sendSessionMessage(orgId, sessionId, body, { idempotencyKey: clientMessageId }).catch((error: unknown) => {
 					throw withMoveStateText(error);
 				});
-			if (!message.content) return post(request);
 			try {
-				return await post({ ...request, ...message });
+				if (!message.content) return await post(request);
+				try {
+					return await post({ ...request, ...message });
+				} catch (error) {
+					// A control plane from before message displays refuses the fields,
+					// and one that finds the display text missing from the text refuses
+					// it (both 400). The text already carries the quotes and captures,
+					// so it goes as text alone, with the same key.
+					if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
+					return await post(request);
+				}
 			} catch (error) {
-				// A control plane from before message displays refuses the fields,
-				// and one that finds the display text missing from the text refuses
-				// it (both 400). The text already carries the quotes and captures,
-				// so it goes as text alone, with the same key.
-				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
-				return post(request);
+				throw mentionRefusedError(error, Boolean(mentions?.length));
 			}
 		},
 		onSuccess: (data, { sessionId }) => {
@@ -2041,6 +2142,10 @@ export function CloudSessionChatSurface({
 			if (typeof sequence === "number") {
 				setAcceptedThrough((current) => (current[sessionId] ?? 0) >= sequence ? current : { ...current, [sessionId]: sequence });
 			}
+			// A message that tags people started an aside: it opens beside the
+			// conversation of the session the send went to.
+			const asideId = data && typeof data === "object" && "event" in data ? asideIdOf(data.event) : undefined;
+			if (asideId) openAside(sessionId, asideId);
 			void invalidate();
 		},
 	});
@@ -2083,8 +2188,10 @@ export function CloudSessionChatSurface({
 	// agent receives. The control plane takes an edit of a message with quotes
 	// or captures but drops them, and they are inlined in the text the agent
 	// gets, which the composer cannot rebuild, so such a message offers no Edit.
+	// Nor does a thread "Also send to agent" sent: its text is the thread, drawn
+	// as the thread's card; to change it, comment in the thread.
 	const canEditQueuedMessage = useCallback(
-		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
+		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length && !message.fromAside),
 		[ownTurns],
 	);
 	// A queued message is taken back before the agent starts on it. Where the
@@ -2162,6 +2269,14 @@ export function CloudSessionChatSurface({
 	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
 	const startStopped = startFailed && !rerunning;
+	// Opening a mention lands on its message. With nothing cached for the
+	// session yet, the message shows from the notification's own text (at its
+	// own sequence, so the real event takes its row) until the rest loads.
+	const mentionFocus = useMentionFocus(session.id);
+	const fallbackEvents = useMemo(
+		() => eventsQuery.data === undefined ? mentionFallbackEvents(mentionFocus) : undefined,
+		[eventsQuery.data, mentionFocus],
+	);
 	// The clock a queued message's unanswered steer is read against, moved on
 	// when the oldest one would turn stale, so it then shows as failed.
 	const [steerClock, setSteerClock] = useState(() => Date.now());
@@ -2183,7 +2298,7 @@ export function CloudSessionChatSurface({
 	const [switchError, setSwitchError] = useState<unknown>();
 	const runningSwitch = cloudSwitch.running;
 	const snapshot = useMemo(() => {
-		const projected = toSnapshot(session, eventsQuery.data ?? [], me, { partial: history?.hasOlder });
+		const projected = toSnapshot(session, eventsQuery.data ?? fallbackEvents ?? [], me, { partial: history?.hasOlder || Boolean(fallbackEvents) });
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
 		const failedSetupDropped = withoutFailedSetupAttempts(projected.items, startFailed);
@@ -2191,7 +2306,7 @@ export function CloudSessionChatSurface({
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, history?.hasOlder, me, runningSwitch, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	}, [eventsQuery.data, fallbackEvents, history?.hasOlder, me, runningSwitch, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
 	// Refusals present when this chat opened are history; a new refusal while
 	// it is open explains the limit above the composer.
 	const refusalKey = `${cloud?.orgId ?? ""}:${session.id}`;
@@ -2322,13 +2437,27 @@ export function CloudSessionChatSurface({
 		onSettled: () => void invalidate(),
 	});
 	const steer = useMutation({
-		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
+		mutationFn: async ({ text, clientMessageId, mentions }: { text: string; clientMessageId?: string; mentions?: ComposerMention[] }) => {
 			if (!cloud || !activeTurn) return { status: "not-accepted" as const, reason: "There is no active turn." };
 			const key = clientMessageId ?? crypto.randomUUID();
 			const composerEpoch = leaseRef.current.epoch;
-			const accepted = await client.steerTurn(cloud.orgId, session.id, activeTurn.id,
-				{ text, ...(composerEpoch !== undefined ? { composerEpoch } : {}) }, { idempotencyKey: key });
+			let accepted;
+			try {
+				accepted = await client.steerTurn(cloud.orgId, session.id, activeTurn.id, {
+					text,
+					...(composerEpoch !== undefined ? { composerEpoch } : {}),
+					...(mentions?.length ? { mentions: mentions.map(mentionToken) } : {}),
+				}, { idempotencyKey: key });
+			} catch (error) {
+				// A refused mention sent nothing: the steer goes back to the draft.
+				const refused = mentionRefusedError(error, Boolean(mentions?.length));
+				if (refused !== error) return { status: "not-accepted" as const, reason: (refused as Error).message };
+				throw error;
+			}
 			leaseRef.current.sent();
+			// Guidance that tags people started an aside: it opens beside the conversation.
+			const steerAside = asideIdOf(accepted.event);
+			if (steerAside) openAside(session.id, steerAside);
 			let after = accepted.event.sequence;
 			for (let attempt = 0; attempt < 60; attempt++) {
 				const page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
@@ -2502,7 +2631,213 @@ export function CloudSessionChatSurface({
 		() => catalogDefaultUnknown ? choiceModels.map((model) => model.default ? { ...model, default: false } : model) : choiceModels,
 		[catalogDefaultUnknown, choiceModels],
 	);
+	// The row a mention opens at: the message, or the steer its event asked for.
+	const mentionFocusItemId = useMemo(() => {
+		if (!mentionFocus || mentionFocus.sequence === undefined) return undefined;
+		const sequence = mentionFocus.sequence;
+		const requested = eventsQuery.data?.find((event) => event.sequence === sequence && event.type === "chat.turn_steer_requested");
+		const steerKey = requested ? eventPayload(requested).clientMessageId : undefined;
+		const steerRow = snapshot.items.find((item) => item.kind === "activity" && item.detail?.event === "steer" &&
+			(typeof steerKey === "string" ? item.detail.clientMessageId === steerKey : item.sequence === sequence));
+		// An agent's answer (a thread opened from the threads view) is found by its first event.
+		const answer = steerRow ? undefined : snapshot.items.find((item) => item.kind === "message" && item.role === "assistant" && item.sequence === sequence);
+		return steerRow?.id ?? answer?.id ?? mentionMessageId(sequence);
+	}, [eventsQuery.data, mentionFocus, snapshot.items]);
+	const mentionFocusLoaded = eventsQuery.data !== undefined;
+	const chatMentionFocus = useMemo(
+		() => mentionFocus && mentionFocusItemId ? { messageId: mentionFocusItemId, key: `${mentionFocus.nonce}:${mentionFocusLoaded ? "loaded" : "fallback"}` } : undefined,
+		[mentionFocus, mentionFocusItemId, mentionFocusLoaded],
+	);
+	const mentionFocusSession = session.id;
+	const onMentionFocusDone = useCallback((key: string | number) => {
+		// Shown from the notification's text, it lands again once the conversation loads.
+		const [nonce, source] = String(key).split(":");
+		if (source === "loaded") clearMentionFocus(mentionFocusSession, Number(nonce));
+	}, [mentionFocusSession]);
+	useEffect(() => {
+		if (mentionFocus && mentionFocus.sequence === undefined) clearMentionFocus(mentionFocus.sessionId, mentionFocus.nonce);
+	}, [mentionFocus]);
+	// The @ menu: people who can open this session and the workspace's teams, as
+	// the control plane lists them, on a control plane that has mentions.
+	const { org: activeOrg } = useCloudOrg();
+	// Mentions and comment threads show only while the control plane offers
+	// them; without the feature this session draws as it did before them.
+	const mentionsOffered = offering.features.includes(MENTIONS_FEATURE);
+	const inboxSupport = useCloudInboxSupport(baseUrl);
+	const mentionsOn = Boolean(cloud && ready && mentionsOffered && inboxSupport === "supported" && session.isTerminated !== true && !readOnly);
+	const [mentionQuery, setMentionQuery] = useState<string>();
+	const [settledMentionQuery, setSettledMentionQuery] = useState<string>();
+	useEffect(() => {
+		const timer = window.setTimeout(() => setSettledMentionQuery(mentionQuery), mentionQuery ? 150 : 0);
+		return () => window.clearTimeout(timer);
+	}, [mentionQuery]);
+	const mentionCandidates = useQuery<CloudCpMentionCandidates>({
+		queryKey: ["cloud-mention-candidates", baseUrl, cloud?.orgId ?? "", session.id, (settledMentionQuery ?? "").trim()],
+		enabled: mentionsOn && settledMentionQuery !== undefined,
+		staleTime: 30_000,
+		retry: false,
+		placeholderData: (previous) => previous,
+		queryFn: ({ signal }) => probeCloudInbox(baseUrl, () =>
+			client.listMentionCandidates(cloud?.orgId ?? "", session.id, { q: (settledMentionQuery ?? "").trim(), limit: 20 }, { signal })),
+	});
+	const composerMentions = useMemo<ComposerMentionSource | undefined>(() => mentionsOn ? {
+		onQuery: setMentionQuery,
+		candidates: mentionCandidates.data,
+		workspaceName: activeOrg?.id === cloud?.orgId ? mentionWorkspaceName(activeOrg?.displayName) : undefined,
+		selfUserId: me,
+	} : undefined, [activeOrg?.displayName, activeOrg?.id, cloud?.orgId, me, mentionCandidates.data, mentionsOn]);
+	// A chip naming this person, or a team a mention reached them through, is tinted.
+	// Read from the cache: the shell's bell is the inbox's one fetching observer.
+	const inbox = useCachedQueryData<CloudCpNotificationListResponse>(cloudInboxQueryKey(baseUrl, userId), true);
+	const mentionTint = useMemo<MentionTint>(() => {
+		const teamIds = new Set<string>();
+		for (const row of inbox?.items ?? []) {
+			const teamId = mentionMetadata(row)?.teamId;
+			if (teamId) teamIds.add(teamId);
+		}
+		if (mentionFocus?.teamId) teamIds.add(mentionFocus.teamId);
+		return { userId: me || undefined, teamIds };
+	}, [inbox?.items, me, mentionFocus?.teamId]);
+	// Comments: threads between people about a message (a tagged message
+	// starts one too). The list gives every message's comment icon, its unread
+	// state and the passages to highlight; a control plane without comments
+	// answers it with an error, and then every message draws as before.
+	const chatEvents = eventsQuery.data ?? fallbackEvents;
+	const asidesOn = Boolean(cloud && ready && mentionsOffered);
+	const asides = useQuery<CloudCpAsideListResponse>({
+		queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id),
+		enabled: asidesOn,
+		staleTime: 30_000,
+		retry: 1,
+		queryFn: ({ signal }) => client.listSessionAsides(cloud?.orgId ?? "", session.id, { signal }),
+	});
+	// A new tagged message, comment, resolve or reopen: read the list again.
+	const newestAsideEvent = useMemo(() => (chatEvents ?? []).reduce((newest, event) =>
+		(event.type === ASIDE_REPLY_EVENT && asideReplyOf(event)) || ASIDE_STATE_EVENTS.has(event.type) || asideIdOf(event) ? Math.max(newest, event.sequence) : newest, 0), [chatEvents]);
+	// The newest thread event the list has been read against; undefined until the
+	// conversation loads, so a first thread after none (0) still reads it again.
+	// The first history to load may hold a thread event the list (read before
+	// it) does not know, so a conversation with any reads the list once more.
+	const asidesSeen = useRef<number | undefined>(undefined);
+	const chatEventsLoaded = chatEvents !== undefined;
+	useEffect(() => {
+		if (!asidesOn || !chatEventsLoaded) return;
+		const first = asidesSeen.current === undefined;
+		if (asidesSeen.current === newestAsideEvent || (first && newestAsideEvent === 0)) {
+			asidesSeen.current = newestAsideEvent;
+			return;
+		}
+		asidesSeen.current = newestAsideEvent;
+		void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id) });
+	}, [asidesOn, chatEventsLoaded, cloud?.orgId, newestAsideEvent, queryClient, session.id]);
+	const openAsideState = useOpenAside(session.id);
+	const shownAside = cloud && chatInFront && mentionsOffered ? openAsideState : undefined;
+	const commentMarkers = useMemo<CommentMarkers | undefined>(() => {
+		if (!asidesOn || !asides.isSuccess) return undefined;
+		const open = (asides.data?.items ?? []).filter(asideIsOpen);
+		return {
+			canComment: session.isTerminated !== true,
+			forMessage: (sequence, asideId) => {
+				const threads = open
+					.filter((aside) => (asideId !== undefined && aside.asideId === asideId) || (sequence !== undefined && aside.anchor.sequence === sequence))
+					.sort((a, b) => (Date.parse(b.lastReplyAt ?? "") || 0) - (Date.parse(a.lastReplyAt ?? "") || 0));
+				if (threads.length === 0) return undefined;
+				const ids = threads.map((aside) => aside.asideId);
+				const active = (shownAside?.asideId !== undefined && ids.includes(shownAside.asideId)) || (sequence !== undefined && shownAside?.messageSequence === sequence);
+				const comments: MessageComments = {
+					state: active ? "active" : threads.some((aside) => aside.unread) ? "unread" : "idle",
+					asideIds: ids,
+					quotes: threads.flatMap((aside) => aside.quote ? [{ asideId: aside.asideId, quote: aside.quote, active: shownAside?.asideId === aside.asideId }] : []),
+				};
+				return comments;
+			},
+			openMessage: (sequence, comments) => {
+				if (comments.asideIds.length === 1) toggleAside(session.id, comments.asideIds[0]!);
+				else if (shownAside?.messageSequence === sequence) closeAside(session.id);
+				else openMessageComments(session.id, sequence);
+			},
+			openThread: (asideId) => openAside(session.id, asideId),
+			startComment: (draft) => openCommentDraft(session.id, draft),
+		};
+	}, [asides.data?.items, asides.isSuccess, asidesOn, session.id, session.isTerminated, shownAside?.asideId, shownAside?.messageSequence]);
+	const attentive = useWindowAttention();
+	// Opened from a notification with nothing cached: what it said shows until the thread loads.
+	const asideFallback = useMemo<AsideFallback | undefined>(() => mentionFocus && shownAside?.asideId && mentionFocus.asideId === shownAside.asideId && mentionFocus.body.trim() !== ""
+		? { kind: mentionFocus.kind, body: mentionFocus.body, authorName: mentionFocus.authorName, createdAt: mentionFocus.createdAt }
+		: undefined, [mentionFocus, shownAside?.asideId]);
+	const paneWorkspace = cloud && activeOrg?.id === cloud.orgId ? mentionWorkspaceName(activeOrg?.displayName) : undefined;
+	// Whether a thread's message is on screen: shown, gone (its sequence is
+	// within the loaded history but nothing draws it: a withdrawn or rolled back
+	// message), or unknown (older than what is loaded).
+	const anchorShown = useMemo(() => {
+		const sequences = new Set<number>();
+		const tagged = new Set<string>();
+		for (const item of snapshot.items) {
+			if (item.kind === "message") {
+				if (item.sequence !== undefined) sequences.add(item.sequence);
+				if (item.asideId) tagged.add(item.asideId);
+			} else if (item.detail?.event === "steer") {
+				if (item.sequence !== undefined) sequences.add(item.sequence);
+				if (item.detail.asideId) tagged.add(item.detail.asideId);
+			}
+		}
+		const oldest = chatEvents?.[0]?.sequence;
+		const newest = chatEvents?.at(-1)?.sequence;
+		return (aside: Pick<CloudCpAside, "asideId" | "anchor">): boolean | undefined => {
+			if (tagged.has(aside.asideId) || sequences.has(aside.anchor.sequence)) return true;
+			// Outside the loaded history (older, or newer than its tail) nothing is known.
+			return oldest === undefined || newest === undefined || aside.anchor.sequence < oldest || aside.anchor.sequence > newest ? undefined : false;
+		};
+	}, [chatEvents, snapshot.items]);
+	const listedThreads = shownAside?.messageSequence !== undefined
+		? (asides.data?.items ?? []).filter((aside) => asideIsOpen(aside) && aside.anchor.sequence === shownAside.messageSequence)
+		: [];
+	const asidePane = !shownAside || !cloud ? undefined : shownAside.draft ? (
+		<CloudCommentDraftPane
+			draft={shownAside.draft}
+			focusKey={shownAside.focusKey}
+			key={`draft:${shownAside.focusKey ?? 0}`}
+			onClose={() => closeAside(session.id)}
+			orgId={cloud.orgId}
+			sessionId={session.id}
+			sessionTitle={session.title}
+			workspaceName={paneWorkspace}
+		/>
+	) : shownAside.asideId ? (
+		<CloudAsidePane
+			asideId={shownAside.asideId}
+			attentive={attentive}
+			canPrompt={!readOnly}
+			ended={session.isTerminated === true}
+			events={eventsQuery.data}
+			fallback={asideFallback}
+			focusKey={shownAside.focusKey}
+			key={shownAside.asideId}
+			anchorShown={anchorShown}
+			onClose={() => closeAside(session.id)}
+			orgId={cloud.orgId}
+			sessionId={session.id}
+			sessionTitle={session.title}
+			workspaceName={paneWorkspace}
+		/>
+	) : listedThreads.length > 0 ? (
+		<CommentThreadListView
+			onClose={() => closeAside(session.id)}
+			onOpen={(asideId) => openAside(session.id, asideId)}
+			sessionTitle={session.title}
+			threads={listedThreads.map((aside) => ({
+				asideId: aside.asideId,
+				...(aside.quote ? { quote: aside.quote } : {}),
+				...(aside.startedBy ? { startedBy: aside.startedBy.name } : {}),
+				replyCount: aside.replyCount,
+				...(aside.lastReplyAt ? { lastAt: aside.lastReplyAt } : {}),
+				unread: aside.unread,
+			}))}
+		/>
+	) : undefined;
 	return (
+		<CommentMarkersContext.Provider value={commentMarkers}>
+		<MentionTintContext.Provider value={mentionTint}>
 		<CloudAttachmentSourceProvider source={attachmentSource}>
 		{/* Replies pace their reveal to how the stream arrives (a poll at a time while it is down). */}
 		<AdaptiveStreamPacingContext.Provider value>
@@ -2617,9 +2952,9 @@ export function CloudSessionChatSurface({
 			onOpenFile={openFileFromChat}
 			onOpenArtifact={onOpenArtifact}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
-			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
+			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId, _recoverOnly, mentions) => {
 				if (attachments?.length || splitCloudAttachmentReferences(text).attachmentIds.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
-				return steer.mutateAsync({ text, clientMessageId });
+				return steer.mutateAsync({ text, clientMessageId, mentions });
 			} : undefined}
 			steerPending={steer.isPending}
 			onPromoteQueuedTurn={queuedSteerOffered && activeTurn && snapshot.capabilities?.includes("steer") ? (turnId) => steerQueued.mutateAsync(turnId) : undefined}
@@ -2634,6 +2969,8 @@ export function CloudSessionChatSurface({
 			cancelQueuedTurnPendingTurnId={cancelQueued.isPending ? cancelQueued.variables : undefined}
 			showSteerButton
 			excerptsEnabled
+			// Agent actions only for people who can prompt it (the same rule as a thread's Also send to agent).
+			canAskAgent={!readOnly && session.isTerminated !== true}
 			fileReferencesEnabled
 			filePaths={filesQuery.data?.paths}
 			filePathsTruncated={filesQuery.data?.truncated}
@@ -2642,7 +2979,7 @@ export function CloudSessionChatSurface({
 			messageByteLimit={CLOUD_CHAT_MESSAGE_BYTES}
 			onStageAttachments={stageAttachments}
 			cloudAttachments={stageAttachments ? cloudAttachments : undefined}
-			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText) => {
+			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText, mentions) => {
 				// Staged cloud files travel as the message's attachment ids, and the
 				// worker writes the real paths: no reference reaches the agent or the
 				// transcript. New attachments share one numbered reference section;
@@ -2661,6 +2998,7 @@ export function CloudSessionChatSurface({
 					attachmentIds: message.attachmentIds,
 					clientMessageId,
 					...(content.length ? { display: { text: message.displayText, content } } : {}),
+					...(mentions?.length ? { mentions } : {}),
 					...(afterSwitch ? { afterSwitch } : {}),
 				});
 				// A new message replaces an earlier switch's failure.
@@ -2721,6 +3059,10 @@ export function CloudSessionChatSurface({
 			promptSuggestion={promptSuggestion}
 			annotationNavigationRequest={annotationNavigation.request}
 			onAnnotationNavigationHandled={annotationNavigation.handled}
+			composerMentions={composerMentions}
+			sidePane={asidePane}
+			focusMessage={chatMentionFocus}
+			onFocusMessageDone={onMentionFocusDone}
 			reviewerTarget={reviewerTarget}
 			onSelectChat={onSelectChat}
 			shellTerminals={shellTerminals}
@@ -2738,5 +3080,7 @@ export function CloudSessionChatSurface({
 		/>
 		</AdaptiveStreamPacingContext.Provider>
 		</CloudAttachmentSourceProvider>
+		</MentionTintContext.Provider>
+		</CommentMarkersContext.Provider>
 	);
 }

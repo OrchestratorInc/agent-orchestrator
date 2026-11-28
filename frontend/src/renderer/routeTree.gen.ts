@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ShellRouteImport } from './routes/_shell'
 import { Route as ShellIndexRouteImport } from './routes/_shell.index'
 import { Route as ShellUsageRouteImport } from './routes/_shell.usage'
+import { Route as ShellThreadsRouteImport } from './routes/_shell.threads'
 import { Route as ShellSettingsRouteImport } from './routes/_shell.settings'
 import { Route as ShellSessionsRouteImport } from './routes/_shell.sessions'
 import { Route as ShellNewRouteImport } from './routes/_shell.new'
@@ -38,6 +39,11 @@ const ShellIndexRoute = ShellIndexRouteImport.update({
 const ShellUsageRoute = ShellUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellThreadsRoute = ShellThreadsRouteImport.update({
+  id: '/threads',
+  path: '/threads',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellSettingsRoute = ShellSettingsRouteImport.update({
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/new': typeof ShellNewRoute
   '/sessions': typeof ShellSessionsRouteWithChildren
   '/settings': typeof ShellSettingsRoute
+  '/threads': typeof ShellThreadsRoute
   '/usage': typeof ShellUsageRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -133,6 +140,7 @@ export interface FileRoutesByTo {
   '/automations': typeof ShellAutomationsRoute
   '/new': typeof ShellNewRoute
   '/settings': typeof ShellSettingsRoute
+  '/threads': typeof ShellThreadsRoute
   '/usage': typeof ShellUsageRoute
   '/': typeof ShellIndexRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
@@ -152,6 +160,7 @@ export interface FileRoutesById {
   '/_shell/new': typeof ShellNewRoute
   '/_shell/sessions': typeof ShellSessionsRouteWithChildren
   '/_shell/settings': typeof ShellSettingsRoute
+  '/_shell/threads': typeof ShellThreadsRoute
   '/_shell/usage': typeof ShellUsageRoute
   '/_shell/': typeof ShellIndexRoute
   '/_shell/projects/$projectId': typeof ShellProjectsProjectIdRoute
@@ -172,6 +181,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/sessions'
     | '/settings'
+    | '/threads'
     | '/usage'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/new'
     | '/settings'
+    | '/threads'
     | '/usage'
     | '/'
     | '/projects/$projectId'
@@ -205,6 +216,7 @@ export interface FileRouteTypes {
     | '/_shell/new'
     | '/_shell/sessions'
     | '/_shell/settings'
+    | '/_shell/threads'
     | '/_shell/usage'
     | '/_shell/'
     | '/_shell/projects/$projectId'
@@ -242,6 +254,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/usage'
       preLoaderRoute: typeof ShellUsageRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/threads': {
+      id: '/_shell/threads'
+      path: '/threads'
+      fullPath: '/threads'
+      preLoaderRoute: typeof ShellThreadsRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/settings': {
@@ -358,6 +377,7 @@ interface ShellRouteChildren {
   ShellNewRoute: typeof ShellNewRoute
   ShellSessionsRoute: typeof ShellSessionsRouteWithChildren
   ShellSettingsRoute: typeof ShellSettingsRoute
+  ShellThreadsRoute: typeof ShellThreadsRoute
   ShellUsageRoute: typeof ShellUsageRoute
   ShellIndexRoute: typeof ShellIndexRoute
   ShellProjectsProjectIdRoute: typeof ShellProjectsProjectIdRoute
@@ -374,6 +394,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellNewRoute: ShellNewRoute,
   ShellSessionsRoute: ShellSessionsRouteWithChildren,
   ShellSettingsRoute: ShellSettingsRoute,
+  ShellThreadsRoute: ShellThreadsRoute,
   ShellUsageRoute: ShellUsageRoute,
   ShellIndexRoute: ShellIndexRoute,
   ShellProjectsProjectIdRoute: ShellProjectsProjectIdRoute,

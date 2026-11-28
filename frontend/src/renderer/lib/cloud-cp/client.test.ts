@@ -721,6 +721,71 @@ describe("Cloud control-plane share links", () => {
 	});
 });
 
+describe("mentions and the personal inbox", () => {
+	function recording(body: unknown = {}, status = 200) {
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		const calls = () => fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		return { client, calls };
+	}
+
+	it("reads and marks the caller's notifications across organizations", async () => {
+		const { client, calls } = recording({ items: [], page: { hasMore: false }, unreadCount: 0, latestSequence: 0, updated: 1 });
+		await client.listMyNotifications({ status: "unread", limit: 20 });
+		await client.changeMyNotificationState({ ids: ["n-1"], read: true });
+		await client.changeMyNotificationState({ orgId: "org", sessionId: "session", read: true });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications?status=unread&limit=20");
+		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications/state");
+		expect(JSON.parse(calls()[1][1].body as string)).toEqual({ ids: ["n-1"], read: true });
+		expect(JSON.parse(calls()[2][1].body as string)).toEqual({ orgId: "org", sessionId: "session", read: true });
+	});
+
+	it("reads and changes the mention and reply switches", async () => {
+		const before = { mentions: true, teamMentions: true, asideReplies: true };
+		const after = { mentions: true, teamMentions: false, asideReplies: true };
+		const fetchImpl = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify(before), { status: 200, headers: { "Content-Type": "application/json" } }))
+			.mockResolvedValueOnce(new Response(JSON.stringify(after), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		const calls = () => fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		await expect(client.getMyNotificationPreferences()).resolves.toEqual(before);
+		await expect(client.setMyNotificationPreferences({ teamMentions: false })).resolves.toEqual(after);
+		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notification-preferences");
+		expect(calls()[1][1].method).toBe("PUT");
+		expect(JSON.parse(calls()[1][1].body as string)).toEqual({ teamMentions: false });
+	});
+
+	it("does not treat a comment 403 as a stale organization", async () => {
+		const onForbidden = vi.fn();
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ error: "forbidden", code: "prompt_forbidden", message: "No", requestId: "r" }), { status: 403, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl, onForbidden });
+		await expect(client.replyToSessionAside("org", "s", "a", { text: "", clientMessageId: "c", sendToAgent: true, throughSequence: 1, seen: [] })).rejects.toMatchObject({ status: 403, code: "prompt_forbidden" });
+		await expect(client.editSessionAsideReply("org", "s", "a", "r", { text: "x" })).rejects.toMatchObject({ status: 403 });
+		await expect(client.deleteSessionAsideReply("org", "s", "a", "r")).rejects.toMatchObject({ status: 403 });
+		expect(onForbidden).not.toHaveBeenCalled();
+	});
+
+	it("sends an explicit zero limit for the threads view, and none when left out", async () => {
+		const { client, calls } = recording({ items: [] });
+		await client.listMyCommentThreads({ status: "open", limit: 0 });
+		await client.listMyCommentThreads({ status: "open" });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/me/comment-threads?status=open&limit=0");
+		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/comment-threads?status=open");
+	});
+
+	it("asks a session's @ menu by name", async () => {
+		const { client, calls } = recording({ people: [], teams: [] });
+		await client.listMentionCandidates("org", "session", { q: "pri", limit: 20 });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/mention-candidates?q=pri&limit=20");
+	});
+
+	it("keeps a validation error's details, so a refused mention says why", async () => {
+		const { client } = recording({ error: "validation_error", code: "validation_error", message: "mentions", requestId: "r", details: { field: "mentions", reason: "outside_session" } }, 422);
+		await expect(client.sendSessionMessage("org", "session", { text: "@Ana hi", mentions: [{ kind: "person", userId: "u-ana" }] }, { idempotencyKey: "k" }))
+			.rejects.toMatchObject({ status: 422, code: "validation_error", details: { field: "mentions", reason: "outside_session" } });
+	});
+});
+
 describe("Cloud control-plane artifact share comments", () => {
 	const thread = {
 		id: "11111111-1111-4111-8111-111111111111",

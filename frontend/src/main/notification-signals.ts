@@ -27,6 +27,22 @@ export function shouldSignalAttention(type: string | undefined): boolean {
 }
 
 /**
+ * Whether the person is already looking at what a notification is about, so
+ * its visual signals (toast, dock bounce, taskbar flash) are skipped: the
+ * renderer says it is on screen (`watched`), or the window has focus. A
+ * notification that asks to alert while focused (a cloud mention or aside
+ * reply about a session that is not on screen) counts only `watched`, so it
+ * alerts even while AO's window is focused on another session.
+ */
+export function alreadyLooking(
+	windowFocused: boolean,
+	notification: { watched?: boolean; alertWhenFocused?: boolean },
+): boolean {
+	if (notification.watched === true) return true;
+	return windowFocused && notification.alertWhenFocused !== true;
+}
+
+/**
  * Whether a new macOS dock bounce should replace the pending one. A pending
  * "critical" bounce (agent blocked on the user) is never replaced: a later
  * informational notification must not downgrade it to a one-shot bounce, or
@@ -86,4 +102,31 @@ export function toastSilent(
  */
 export function dockBounceType(type: string | undefined): "critical" | "informational" {
 	return type === "needs_input" ? "critical" : "informational";
+}
+
+/**
+ * The OS toasts showing now, one per tag. A toast with a tag replaces the one
+ * already showing under it (a cloud mention tags by session, so a repeated
+ * mention in a session replaces its alert instead of stacking); untagged
+ * toasts stack as they always have. Toasts forget themselves when closed, and
+ * the oldest tag is dropped past `max` so the map cannot grow without bound.
+ */
+export function createTaggedToasts<Toast extends { close(): void }>(max = 64) {
+	const byTag = new Map<string, Toast>();
+	return {
+		show(tag: string | undefined, toast: Toast): void {
+			if (!tag) return;
+			const previous = byTag.get(tag);
+			byTag.delete(tag);
+			if (previous && previous !== toast) previous.close();
+			byTag.set(tag, toast);
+			if (byTag.size > max) byTag.delete(byTag.keys().next().value!);
+		},
+		forget(tag: string | undefined, toast: Toast): void {
+			if (tag && byTag.get(tag) === toast) byTag.delete(tag);
+		},
+		get size(): number {
+			return byTag.size;
+		},
+	};
 }

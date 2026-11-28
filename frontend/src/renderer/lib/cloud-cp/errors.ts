@@ -14,7 +14,7 @@ export interface CloudCpErrorOptions {
 	requestId?: string;
 	/** How long the control plane asked the caller to wait (its Retry-After), in milliseconds. */
 	retryAfterMs?: number;
-	/** The error envelope's details, such as MOVE_EXPORT_TIMED_OUT's branchMayBePushed. */
+	/** The error envelope's details, such as a validation error's field and reason or MOVE_EXPORT_TIMED_OUT's branchMayBePushed. */
 	details?: Record<string, unknown>;
 	cause?: unknown;
 }

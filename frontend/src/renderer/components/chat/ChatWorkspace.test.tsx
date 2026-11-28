@@ -2456,6 +2456,24 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it("never offers someone who can't prompt the agent a way to add selected text to it", () => {
+		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;
+		render(<ChatWorkspace snapshot={chatFixtureSettled} excerptsEnabled canAskAgent={false} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+		const range = document.createRange(); range.selectNodeContents(source);
+		window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40,150,100,20)] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40,150,100,20));
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0,0,600,500));
+		fireEvent.pointerUp(log);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Comment on the selected text" })).not.toBeInTheDocument();
+		expect(fireEvent.keyDown(log, { key: "l", ctrlKey: true })).toBe(true);
+		expect(count()).toBe(0);
+		window.getSelection()!.removeAllRanges();
+	});
+
 	it("adds text selected in a rendered page, only from the frame the reader is using, and the chip leads back to it", () => {
 		const snapshot = structuredClone(chatFixtureSettled);
 		const at = snapshot.items.findIndex((item) => item.id === "a-4");
@@ -4753,6 +4771,22 @@ describe("ChatWorkspace timeline", () => {
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
 		expect(log.scrollTop).toBeGreaterThanOrEqual(3200);
+	});
+
+	it("drops a pending resume when opening a message lands on it", async () => {
+		const view = render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.wheel(log, { deltaY: -150 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		const done = vi.fn();
+		view.rerender(<ChatWorkspace snapshot={chatFixture} focusMessage={{ messageId: "m-1", key: "landed" }} onFocusMessageDone={done} />);
+		await waitFor(() => expect(done).toHaveBeenCalledWith("landed"));
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
 	});
 
 	it("does not pull back a view that moved without the reader's own input", async () => {

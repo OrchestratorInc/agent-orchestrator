@@ -1,6 +1,6 @@
 import { BrowserApprovalsSection } from "./BrowserApprovalsSection";
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
+import { Activity, Bell, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -16,6 +16,7 @@ import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./MobileDevicesSection";
+import { NotificationsSection } from "./NotificationsSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
@@ -67,6 +68,8 @@ type CatalogContext = {
 	 * "none" otherwise (also against a control plane from before teams).
 	 */
 	teams?: TeamsPage;
+	/** The control plane has mentions and answered with the person's alert preferences. */
+	notifications?: boolean;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
@@ -111,6 +114,15 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		visible: ({ cloudEnabled, teams }) => cloudEnabled && (teams === "manage" || teams === "member"),
 		pageOnly: true,
 		render: (_t, titleHidden, { teams }) => <TeamsSection titleHidden={titleHidden} manage={teams === "manage"} />,
+	},
+	{
+		id: "notifications",
+		icon: Bell,
+		label: (t) => t("settings.notifications"),
+		// Mention alerts: signed in, against a control plane that has mentions
+		// (one from before them has no preferences).
+		visible: ({ cloudEnabled, notifications }) => cloudEnabled && notifications === true,
+		render: (_t, titleHidden) => <NotificationsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",
