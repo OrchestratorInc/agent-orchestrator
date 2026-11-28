@@ -4620,21 +4620,17 @@ describe("channel downgrade safety", () => {
     expect(h.module.getUpdateStatus().state).toBe("not-available");
   });
 
-  it("keeps first-run nightly on nightly when automatic downloads are declined", async () => {
-    const h = await importAutoUpdater(stable, { version: running });
-    h.dialog.showMessageBox.mockResolvedValue({ response: 1 });
+  it("silently saves Stable with automatic downloads on for a first-run stable install", async () => {
+    const h = await importAutoUpdater(stable, { version: "0.13.0" });
     await h.module.ensureUpdatePrefs(stateDir);
-    expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, nightly);
+    expect(h.dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, { ...stable, enabled: true });
   });
 
-  it("preselects nightly for the first-run channel choice on a nightly install", async () => {
+  it("silently keeps a first-run nightly install on Nightly with automatic downloads on", async () => {
     const h = await importAutoUpdater(stable, { version: running });
-    h.dialog.showMessageBox
-      .mockResolvedValueOnce({ response: 0 })
-      .mockResolvedValueOnce({ response: 1 })
-      .mockResolvedValueOnce({ response: 0 });
     await h.module.ensureUpdatePrefs(stateDir);
-    expect(h.dialog.showMessageBox.mock.calls[1]?.[0]).toMatchObject({ defaultId: 1, cancelId: 1 });
+    expect(h.dialog.showMessageBox).not.toHaveBeenCalled();
     expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, { ...nightly, enabled: true });
   });
 
