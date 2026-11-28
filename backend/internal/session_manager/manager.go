@@ -5407,6 +5407,13 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 		recreated = recreated || missing
 	}
+	if recreated {
+		if err := m.noteSetupOwed(rec.ID); err != nil {
+			m.logger.Error("restore-all: record owed setup failed", "sessionID", rec.ID, "error", err)
+			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
+			return
+		}
+	}
 
 	// Step 1: ensure the worktree exists. workspace.Restore re-creates it
 	// if it was removed by SaveAndTeardownAll.
@@ -5489,11 +5496,13 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	}
 	if recreated {
 		m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
-		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, ""); err != nil {
-			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
-			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
-			return
-		}
+	}
+	if err := m.runOwedSetup(rec.ID, recreated, func() error {
+		return m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, "")
+	}); err != nil {
+		m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
+		captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
+		return
 	}
 
 	// Step 3: relaunch the agent in the restored workspace.
@@ -5563,6 +5572,11 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
+		if recreated {
+			if err := m.noteSetupOwed(rec.ID); err != nil {
+				return ports.WorkspaceInfo{}, err
+			}
+		}
 		ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 			ProjectID:     rec.ProjectID,
 			SessionID:     rec.ID,
@@ -5582,9 +5596,11 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		}
 		if recreated {
 			m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
-			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
-				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
-			}
+		}
+		if err := m.runOwedSetup(rec.ID, recreated, func() error {
+			return m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path)
+		}); err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 		return ws, nil
 	}
@@ -5600,6 +5616,11 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		}
 		recreated = recreated || missing
 	}
+	if recreated {
+		if err := m.noteSetupOwed(rec.ID); err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+	}
 	root, err := m.restoreWorkspaceProjectRows(ctx, rows)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -5613,10 +5634,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 	if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
-	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
-			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
-		}
+	if err := m.runOwedSetup(rec.ID, recreated, func() error {
+		return m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path)
+	}); err != nil {
+		return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 	}
 	return ws, nil
 }

@@ -112,7 +112,7 @@ func TestForkRestoreFailureRollsBack(t *testing.T) {
 
 func TestChatForkStartsFromPreparedConversation(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, _, _ := newChatManager(launcher)
+	m, _, _ := newChatManager(t, launcher)
 	var target ports.ForkTarget
 	rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
 		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
@@ -139,7 +139,7 @@ func TestChatForkStartsFromPreparedConversation(t *testing.T) {
 
 func TestFailedChatForkStartsNothing(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, _, _ := newChatManager(launcher)
+	m, _, _ := newChatManager(t, launcher)
 	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
 		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		RequestedMode: domain.SessionModeChat,
@@ -157,7 +157,7 @@ func TestFailedChatForkStartsNothing(t *testing.T) {
 
 func TestForkCopiesArtifacts(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, _, _ := newChatManager(launcher)
+	m, _, _ := newChatManager(t, launcher)
 	m.dataDir = t.TempDir()
 	srcDir := m.artifactDir("mer-0")
 	if err := os.MkdirAll(filepath.Join(srcDir, "page"), 0o700); err != nil {
@@ -199,7 +199,7 @@ func (s lineageStore) GetSessionFork(_ context.Context, id domain.SessionID) (do
 
 func TestForkPromptStatesNewIdentity(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, _, _ := newChatManager(launcher)
+	m, _, _ := newChatManager(t, launcher)
 	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
 		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		RequestedMode: domain.SessionModeChat,
@@ -314,7 +314,7 @@ func TestDeletingForkKeepsSourceProviderSession(t *testing.T) {
 
 func TestRetriedForkReforks(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.dataDir = t.TempDir()
 	deferred := deferredBackground(m)
 	ws := m.workspace.(*fakeWorkspace)
@@ -371,7 +371,7 @@ func (s *linkRewriteStore) RewriteConversationText(_ context.Context, conversati
 
 func TestForkCopiesAttachmentsAndPointsLinksAtItself(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.dataDir = t.TempDir()
 	m.attachments = attachmentstore.New(m.dataDir)
 	store := &linkRewriteStore{fakeStore: st}
@@ -643,7 +643,7 @@ func TestForkFallsBackToTheDefaultModelWhenTheOriginalsIsRejected(t *testing.T) 
 
 func TestChatTextHandoffForkStartsWithTheNote(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, _, _ := newChatManager(launcher)
+	m, _, _ := newChatManager(t, launcher)
 	rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
 		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		RequestedMode: domain.SessionModeChat,
@@ -753,7 +753,7 @@ func TestForkCopiesOnlyTheAttachmentsItsTurnHad(t *testing.T) {
 // them missing: the spawn fails and leaves nothing behind.
 func TestForkFailsWhenItsArtifactsCannotBeCopied(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.dataDir = t.TempDir()
 	// An older turn's saved version of report.md whose stored copy is gone,
 	// so copying it fails the same way on every system.
@@ -838,7 +838,7 @@ func TestOlderTurnForkKeepsAnArtifactRenamedLater(t *testing.T) {
 // restored fork is told too.
 func TestForkPromptNamesTheOriginalsWorktree(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
 		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		RequestedMode: domain.SessionModeChat,

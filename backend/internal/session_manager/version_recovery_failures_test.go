@@ -19,7 +19,7 @@ func TestVersionMoveFailedChatStartCanRetryAcrossRecreation(t *testing.T) {
 				startErr = errors.Join(startErr, ports.ErrChatRecoveryInconclusive)
 			}
 			launcher := &recordingLauncher{startErr: startErr}
-			before, base, _ := newChatManager(launcher)
+			before, base, _ := newChatManager(t, launcher)
 			seedChatResumeSession(base, domain.ActivityIdle)
 			rec := base.sessions["mer-1"]
 			rec.Metadata.ControllerGeneration = "source-chat"
@@ -59,7 +59,7 @@ func TestVersionMoveFailedChatStartCanRetryAcrossRecreation(t *testing.T) {
 			}
 			recovered := &recordingLauncher{providerConversationID: rec.Metadata.ProviderConversationID}
 			recovered.afterReady = func() { recovered.live = true }
-			after, _, _ := newChatManager(recovered)
+			after, _, _ := newChatManager(t, recovered)
 			after.store, after.lcm = store, &fakeLCM{store: base}
 			if err := after.RetryVersionMoves(ctx); err != nil {
 				t.Fatal(err)
@@ -258,7 +258,7 @@ func (l versionWakeFailureLauncher) WaitForWake(context.Context, domain.SessionI
 
 func stoppedVersionChat(t *testing.T, launcher ChatLauncher) (*Manager, *versionRecoveryStore, domain.SessionRecord) {
 	t.Helper()
-	mgr, base, _ := newChatManager(launcher)
+	mgr, base, _ := newChatManager(t, launcher)
 	seedChatResumeSession(base, domain.ActivityIdle)
 	rec := base.sessions["mer-1"]
 	rec.Metadata.ControllerGeneration = "source-chat"

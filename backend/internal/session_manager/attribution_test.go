@@ -555,7 +555,7 @@ func TestSpawnCarriesItsDecisionToSetup(t *testing.T) {
 		}
 	})
 	t.Run("asynchronous chat", func(t *testing.T) {
-		m, st, _ := newChatManager(&recordingLauncher{})
+		m, st, _ := newChatManager(t, &recordingLauncher{})
 		m.browserCapabilities = browsersvc.NewAuthority()
 		beta := true
 		m.SetCommitAttributionEnabled(func(context.Context) bool { return beta })

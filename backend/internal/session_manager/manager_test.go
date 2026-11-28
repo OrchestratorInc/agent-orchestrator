@@ -5442,6 +5442,143 @@ func TestRestoreRecreatedWorkspaceRunsSetupOnce(t *testing.T) {
 	}
 }
 
+// A Setup that fails (or is killed when the client hangs up) after the
+// worktree was recreated must run again on the next restore, even though the
+// worktree now exists; otherwise the agent starts in an unprovisioned tree.
+func TestRestoreRerunsSetupThatNeverFinished(t *testing.T) {
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	allow := filepath.Join(t.TempDir(), "setup-may-finish")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{
+		PostCreate: []string{"test -f '" + allow + "' && echo setup >> setup-runs"},
+	}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("first restore succeeded, want its Setup to fail")
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("recreated worktree is gone after the failed Setup: %v", err)
+	}
+	if err := os.WriteFile(allow, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+			t.Fatalf("retry %d: %v", i+1, err)
+		}
+	}
+	output, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+	if err != nil || strings.Count(string(output), "setup") != 1 {
+		t.Fatalf("setup runs = %q, err = %v; want the retry to finish Setup exactly once", output, err)
+	}
+}
+
+// recreateThenFailWorkspace recreates the worktree and then reports a failure
+// once, standing in for a restore cut off after the worktree exists but before
+// Setup starts (a canceled request, an attachment that cannot be copied back).
+type recreateThenFailWorkspace struct {
+	ports.Workspace
+	failed bool
+}
+
+func (w *recreateThenFailWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
+	info, err := w.Workspace.Restore(ctx, cfg)
+	if err == nil && !w.failed {
+		w.failed = true
+		return ports.WorkspaceInfo{}, errors.New("restore canceled after recreating the worktree")
+	}
+	return info, err
+}
+
+func TestRestoreOwesSetupWhenItFailsBeforeSetupStarts(t *testing.T) {
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = &recreateThenFailWorkspace{Workspace: adapter}
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{PostCreate: []string{"echo setup >> setup-runs"}}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("first restore succeeded, want it to fail after recreating the worktree")
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("worktree was not recreated before the failure: %v", err)
+	}
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	output, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+	if err != nil || strings.Count(string(output), "setup") != 1 {
+		t.Fatalf("setup runs = %q, err = %v; want the retry to run Setup on the existing worktree", output, err)
+	}
+}
+
+func newOwedSetupRestore(t *testing.T) (*Manager, domain.ProjectRecord, domain.SessionRecord, string) {
+	t.Helper()
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{PostCreate: []string{"echo setup >> setup-runs"}}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+	return m, project, rec, workspace
+}
+
+// A debt that cannot be recorded must stop the restore before the worktree is
+// recreated: otherwise a failed Setup would leave nothing saying it is owed.
+func TestRestoreDoesNotRecreateWhenOwedSetupCannotBeRecorded(t *testing.T) {
+	m, project, rec, workspace := newOwedSetupRestore(t)
+	if err := os.WriteFile(filepath.Join(m.dataDir, "setup-owed"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("restore succeeded, want the unrecordable debt to fail it")
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree stat err = %v, want it never recreated", err)
+	}
+}
+
+// A marker that cannot be inspected is not "nothing owed".
+func TestRestoreFailsWhenOwedSetupCannotBeInspected(t *testing.T) {
+	m, project, rec, _ := newOwedSetupRestore(t)
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.noteSetupOwed(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.dataDir, "setup-owed")
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+	if _, err := os.Stat(filepath.Join(dir, string(rec.ID))); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Skipf("cannot make the marker uninspectable here (running as root?): %v", err)
+	}
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("restore succeeded, want the uninspectable debt to fail it")
+	}
+}
+
 func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
@@ -11854,7 +11991,7 @@ func TestReconcileLive_ScratchChatReattachesPersistentController(t *testing.T) {
 		Messenger: &fakeMessenger{},
 		Lifecycle: lcm,
 		Chat:      launcher,
-		DataDir:   "/ao-test-data",
+		DataDir:   t.TempDir(),
 		LookPath:  func(string) (string, error) { return "/bin/true", nil },
 	})
 	rec := domain.SessionRecord{

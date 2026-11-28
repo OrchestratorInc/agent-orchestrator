@@ -28,7 +28,7 @@ func (styledUnavailableRuntime) GetStyledOutput(context.Context, ports.RuntimeHa
 // drain and message delivery must hand it the rendered screen the activity
 // observer already uses.
 func TestTerminalActivityOutputFollowsDetectorRenderingNeed(t *testing.T) {
-	mgr, _, rt := newChatManager(&recordingLauncher{})
+	mgr, _, rt := newChatManager(t, &recordingLauncher{})
 	handle := ports.RuntimeHandle{ID: "mer-1"}
 	ctx := context.Background()
 	for _, tt := range []struct {
