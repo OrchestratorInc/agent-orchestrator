@@ -105,4 +105,68 @@ describe("HarnessModelsPanel", () => {
 		expect(await screen.findByRole("switch", { name: /GPT-5.4/ })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /the default model$/ })).not.toBeInTheDocument();
 	});
+	const unlistedEndpoint = (model?: string) => ({ configured: true, hasApiKey: true, baseUrl: "https://gateway.example.com", authStyles: ["bearer" as const], defaultAuthStyle: "bearer" as const, supportsModel: true, model });
+
+	it("takes a typed default model when the endpoint lists none", async () => {
+		h.catalog = { models: [] };
+		endpoint.set.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="claude-code" hostId="host-a" installed needsLogin={false} onOpenAccount={() => {}} customEndpoint={unlistedEndpoint()} />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("This endpoint doesn't list its models. Enter a model ID from your provider's docs.")).toBeInTheDocument();
+		expect(screen.queryByText("This harness reported no models.")).not.toBeInTheDocument();
+		const field = screen.getByLabelText("Model ID");
+		const save = screen.getByRole("button", { name: "Make default" });
+		expect(save).toBeDisabled();
+		// Model IDs are one word: spaces never reach the field.
+		await userEvent.type(field, " provider model ");
+		expect(field).toHaveValue("providermodel");
+		await userEvent.clear(field);
+		await userEvent.type(field, "provider-model");
+		await userEvent.click(save);
+		await waitFor(() => expect(endpoint.refresh).toHaveBeenCalledWith("claude-code"));
+		expect(endpoint.set).toHaveBeenCalledWith("claude-code", { baseUrl: "https://gateway.example.com", model: "provider-model" }, "host-a");
+	});
+
+	it("shows the saved model and saves a change with Enter", async () => {
+		h.catalog = { models: [] };
+		endpoint.set.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="claude-code" installed needsLogin={false} onOpenAccount={() => {}} customEndpoint={unlistedEndpoint("provider-model")} />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("Default model: provider-model")).toBeInTheDocument();
+		const field = screen.getByLabelText("Model ID");
+		expect(field).toHaveValue("provider-model");
+		// The saved model unchanged offers nothing to save.
+		expect(screen.getByRole("button", { name: "Make default" })).toBeDisabled();
+		await userEvent.clear(field);
+		await userEvent.type(field, "provider-model-2{Enter}");
+		await waitFor(() => expect(endpoint.set).toHaveBeenCalledWith("claude-code", { baseUrl: "https://gateway.example.com", model: "provider-model-2" }, undefined));
+	});
+
+	it("asks for no model ID without a usable endpoint", async () => {
+		h.catalog = { models: [] };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="claude-code" installed needsLogin={false} onOpenAccount={() => {}} />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("This harness reported no models.")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Model ID")).not.toBeInTheDocument();
+	});
+
+	it("asks for no model ID when the endpoint lists its models", async () => {
+		h.catalog = { models: [{ id: "gateway-large", label: "gateway-large", isDefault: true }, { id: "gateway-small", label: "gateway-small" }] };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="claude-code" installed needsLogin={false} onOpenAccount={() => {}} customEndpoint={unlistedEndpoint("gateway-large")} />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByRole("button", { name: "Make gateway-small the default model" })).toBeInTheDocument();
+		expect(screen.queryByLabelText("Model ID")).not.toBeInTheDocument();
+	});
 });

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, LoaderCircle, Search } from "@/components/app-icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { setAgentEndpoint, useRefreshAfterEndpointChange, type AgentEndpointStatus } from "../../../hooks/useAgentEndpoint";
 import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
@@ -12,7 +12,9 @@ import { groupModelProviders } from "../../../lib/model-providers";
 import { collapseModelVariants, listsModelVariants } from "../../../lib/model-variants";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
 import { Switch } from "../../ui/switch";
+import { KEY_FIELD_CLASS } from "../providerKeyUi";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { HARNESS_CARD_CLASS, HARNESS_CARD_ROW_CLASS, HarnessStatusDot } from "./harness-ui";
 
@@ -96,16 +98,35 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const [defaultChange, setDefaultChange] = useState<{ scope: string; id?: string; error?: string }>();
 	const pendingDefault = defaultChange?.scope === scope ? defaultChange.id : undefined;
 	const defaultError = defaultChange?.scope === scope ? defaultChange.error : undefined;
-	const makeDefault = async (id: string) => {
-		if (!customEndpoint?.baseUrl || pendingDefault) return;
+	const makeDefault = async (id: string): Promise<boolean> => {
+		if (!customEndpoint?.baseUrl || pendingDefault) return false;
 		setDefaultChange({ scope, id });
 		try {
 			await setAgentEndpoint(agentId, { baseUrl: customEndpoint.baseUrl, model: id }, hostId);
 			await refreshEndpoint(agentId);
 			setDefaultChange(undefined);
+			return true;
 		} catch (cause) {
 			setDefaultChange({ scope, error: cause instanceof Error ? cause.message : t("settings.harness.models.makeDefaultFailed") });
+			return false;
 		}
+	};
+	// An endpoint that lists no models still takes a default typed from the
+	// provider's docs; the field starts from the saved one. Model IDs are one
+	// line without spaces, so whitespace never reaches the field.
+	const modelFieldId = useId();
+	const savedModel = customEndpoint?.model?.trim() ?? "";
+	const [modelDraft, setModelDraft] = useState<{ scope: string; value: string }>();
+	const typedModel = modelDraft?.scope === scope ? modelDraft.value : savedModel;
+	const canSaveTypedModel = !pendingDefault && typedModel !== "" && typedModel !== savedModel;
+	const saveTypedModel = async () => {
+		if (!canSaveTypedModel) return;
+		if (await makeDefault(typedModel)) setModelDraft(undefined);
+	};
+	const onModelFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+		if (event.key !== "Enter") return;
+		event.preventDefault();
+		void saveTypedModel();
 	};
 	const initialModel = allModels?.find((model) => model.isDefault);
 	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
@@ -210,6 +231,22 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</label> : null}
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? null
+			: endpointDefaults && !normalizedModelSearch && !providerModels.length ? <div className={HARNESS_CARD_CLASS} data-endpoint-model-entry="">
+				<div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 px-3 py-3">
+					<p className="col-start-2 text-xs leading-4 text-settings-muted">{t("settings.harness.models.endpointUnlisted")}</p>
+					<label htmlFor={modelFieldId} className="block text-xs leading-4 text-settings-muted">{t("settings.harness.models.modelId")}</label>
+					<div className="flex min-w-0 items-center gap-2">
+						<Input id={modelFieldId} className={`${KEY_FIELD_CLASS} min-w-0 flex-1`} value={typedModel} disabled={Boolean(pendingDefault)}
+							autoComplete="off" spellCheck={false} maxLength={256}
+							onChange={(event) => setModelDraft({ scope, value: event.target.value.replace(/\s/g, "") })} onKeyDown={onModelFieldKeyDown} />
+						<Button type="button" disabled={!canSaveTypedModel} onClick={() => void saveTypedModel()}>
+							{pendingDefault ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+							{t("settings.harness.models.makeDefault")}
+						</Button>
+					</div>
+					{savedModel ? <p className="col-start-2 text-xs leading-4 text-settings-muted">{t("settings.harness.models.currentDefault", { model: savedModel })}</p> : null}
+				</div>
+			</div>
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : acceptsDirectModel ? "settings.harness.models.directEntry" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
