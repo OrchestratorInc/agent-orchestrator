@@ -1,5 +1,6 @@
 import type { EffortChoice } from "../modelEffort";
 import type { EffortSliderSwitch } from "../useEffortSlider";
+import type { PermissionChoice } from "../permission-picker";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import type { AgentSwitchMenu } from "./useAgentSwitchMenu";
 import type { PendingAgentSwitch } from "../agentSwitch";
@@ -17,6 +18,12 @@ export type ChatTurnSettingsControlProps = {
 	 * model that takes no effort.
 	 */
 	effort?: { choices: readonly EffortChoice[]; slider: EffortSliderSwitch };
+	/**
+	 * The permission mode's button: the modes, the one in force lit, and the
+	 * switch of the picker it opens over the composer. None, or no choices,
+	 * for a chat with no permission setting.
+	 */
+	permissions?: { choices: readonly PermissionChoice[]; slider: EffortSliderSwitch };
 	/**
 	 * The capsule's "Other agents", as the new task's menu lists them: each
 	 * agent opens onto its models. Choosing one only records it (`pending`);

@@ -16,10 +16,10 @@ const VEIL_BLEED = 24;
  * reads over a busy chat without a box around it. It takes no touches, so a
  * tap on the chat through it still closes the slider.
  */
-export function EffortSliderVeil() {
+export function EffortSliderVeil({ rise = VEIL_RISE }: { rise?: number }) {
 	const t = useTheme();
 	return (
-		<View pointerEvents="none" style={styles.veil}>
+		<View pointerEvents="none" style={[styles.veil, { top: -rise }]}>
 			<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 100 100">
 				<Defs>
 					{/* An arch rather than a flat edge: an ellipse centred on the bottom

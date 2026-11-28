@@ -1,19 +1,20 @@
-import { DropdownMenu, DropdownMenuItem, HorizontalDivider, Icon, IconButton, Text } from "@expo/ui/jetpack-compose";
-import { testID, width } from "@expo/ui/jetpack-compose/modifiers";
+import { Box, DropdownMenu, DropdownMenuItem, HorizontalDivider, Icon, RNHostView, Text } from "@expo/ui/jetpack-compose";
+import { height, testID, width } from "@expo/ui/jetpack-compose/modifiers";
 import { useState } from "react";
 import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "../composeMenu.android";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
 import { EffortSliderGauge } from "../effort-slider-host";
+import { PermissionPickerButton } from "../permission-picker";
 import { haptics } from "../haptics";
 import { useTheme } from "../ThemeProvider";
 import { materialDrawable } from "../toolbarIcon.android";
-import { font, iconSize } from "../tokens";
+import { font, iconSize, touchTarget } from "../tokens";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { splitModelChoices, turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
 /** A setting's submenu is open by its row's id. */
-type OpenMenu = "model" | "older" | "approval" | `setting:${string}` | `agent:${string}` | `agent-older:${string}`;
+type OpenMenu = "model" | "older" | `setting:${string}` | `agent:${string}` | `agent-older:${string}`;
 
 // The menus' width: wider than their longest label, so a row is an easy target
 // and the menu reads as a panel rather than a strip, and under Material's 280.
@@ -29,7 +30,7 @@ const MENU_WIDTH = 240;
  * then the provider's other settings, such as Fast mode or its agent, as iOS's
  * does: an on/off setting ticked while on, any other opening onto its choices.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, otherAgents }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, permissions, otherAgents }: ChatTurnSettingsControlProps) {
 	const t = useTheme();
 	const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
 	const close = () => setOpenMenu(null);
@@ -190,21 +191,25 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 			}
 			// The effort as a speedometer lit to the chosen level; a tap opens the
 			// slider over the composer.
-			effort={effort?.choices.length ? <EffortSliderGauge slider={effort.slider} choices={effort.choices} onPress={close} disabled={off} testID="chat-effort" /> : null}
-			// The approval mode as its symbol alone; the menu and TalkBack name it.
-			end={approvalRow ? (
-				<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
-					<DropdownMenu.Trigger>
-						<IconButton onClick={() => setOpenMenu("approval")} enabled={!off} colors={{ contentColor: t.textSecondary }} modifiers={[testID("chat-approval")]}>
-							<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`Approval, ${approvalRow.value}`} />
-						</IconButton>
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Items>
-						{approvalRow.choices.map((choice) => (
-							<MenuRow key={choice.value} label={choice.label} selected={choice.selected} width={MENU_WIDTH} onClick={() => choose(approvalRow, choice.value)} />
-						))}
-					</DropdownMenu.Items>
-				</DropdownMenu>
+			effort={effort?.choices.length ? <EffortSliderGauge slider={effort.slider} choices={effort.choices} onPress={() => { close(); permissions?.slider.setOpen(false); }} disabled={off} testID="chat-effort" /> : null}
+			// The permission mode as its own icon, as desktop's picker leads with
+			// it; a tap opens the picker over the composer, as the effort's does.
+			// In a slot of the button's own size, so the row knows its width from
+			// the first frame: a host sized only by its content had none until React
+			// Native measured the button, the capsule was measured with no room
+			// then, and its model name never showed.
+			end={permissions?.choices.length ? (
+				<Box contentAlignment="center" modifiers={[width(touchTarget), height(touchTarget)]}>
+					<RNHostView matchContents>
+						<PermissionPickerButton
+							slider={permissions.slider}
+							choices={permissions.choices}
+							disabled={off}
+							onPress={() => { close(); effort?.slider.setOpen(false); }}
+							testID="chat-approval"
+						/>
+					</RNHostView>
+				</Box>
 			) : null}
 		/>
 	);

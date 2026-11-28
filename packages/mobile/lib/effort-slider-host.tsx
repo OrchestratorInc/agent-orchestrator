@@ -60,7 +60,7 @@ export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices
  * then keeps it off both the tap that opens it and the screen's own first
  * frames. Where there is no idle callback it waits for the first open.
  */
-function useWarmAfterIdle(): boolean {
+export function useWarmAfterIdle(): boolean {
 	const [warm, setWarm] = useState(false);
 	useEffect(() => {
 		if (typeof requestIdleCallback !== "function") return;

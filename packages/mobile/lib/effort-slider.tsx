@@ -1,17 +1,14 @@
-import { useNavigation } from "expo-router";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Platform, StyleSheet, Text, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { StyleSheet, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
-import { AppSymbol } from "./AppSymbol";
-import { EffortSliderVeil } from "./effort-slider-veil";
+import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { duration, iconSize, space, type } from "./tokens";
+import { duration, space } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
-import { markTouchInside } from "./touchOutside";
 import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
 
 /*
@@ -33,61 +30,16 @@ const DOT = 3;
 // long as the levels need, and never shorter than MIN_TRACK to drag along.
 const LEVEL_GAP = 68;
 const MIN_TRACK = 240;
-// How far below its place the slider starts as it is revealed.
-const REVEAL_LIFT = 6;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
 
-/**
- * The slider floating over the screen as a card, a small gap above `bottom`
- * in its container: nothing under it moves when it opens. Android hands it a
- * touch outside its container only while no ancestor clips.
- *
- * While it is up the screen's back swipe is off: on iOS a left-to-right swipe
- * anywhere on the page is the back gesture, and it took a drag toward the
- * higher levels from the slider and pulled the page back instead. The header's
- * back button still leaves, and a tap outside closes the slider. The option
- * is iOS's alone, and setting it re-renders the screen, so Android, which has
- * no such swipe, skips it rather than hold up the slider's first frame.
- */
+/** The slider floating over the chat above the composer (see ComposerOverlay). */
 export function EffortSliderOverlay({ bottom, visible = true, ...props }: EffortSliderProps & { bottom: DimensionValue; visible?: boolean }) {
-	const styles = useThemedStyles(makeStyles);
-	const navigation = useNavigation();
-	const reduceMotion = useReducedMotion();
-	// A layout effect, so its hand-back runs before any the screen makes in
-	// the same commit (the chat's request card turns the swipe off as well).
-	useLayoutEffect(() => {
-		if (!visible || Platform.OS !== "ios") return;
-		navigation.setOptions({ gestureEnabled: false });
-		return () => navigation.setOptions({ gestureEnabled: true });
-	}, [navigation, visible]);
-	// Kept mounted while hidden (see EffortSliderHost), so opening is a reveal
-	// on the UI thread rather than building the card, track and veil: a quick
-	// fade with a small lift, in place at once with Reduce Motion.
-	const shown = useSharedValue(visible ? 1 : 0);
-	useEffect(() => {
-		const target = visible ? 1 : 0;
-		shown.value = reduceMotion ? target : withTiming(target, { duration: duration.fast, easing: Easing.out(Easing.cubic) });
-	}, [visible, reduceMotion, shown]);
-	const reveal = useAnimatedStyle(() => ({
-		opacity: shown.value,
-		transform: [{ translateY: -space.sm + (1 - shown.value) * REVEAL_LIFT }],
-	}));
-	// box-none: the overlay spans the composer's width to centre the slider,
-	// and a touch beside the card must still count as one outside it. Hidden,
-	// it takes no touches and screen readers skip it.
 	return (
-		<Animated.View
-			pointerEvents={visible ? "box-none" : "none"}
-			onTouchStart={visible ? markTouchInside : undefined}
-			accessibilityElementsHidden={!visible}
-			importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
-			style={[styles.overlay, { bottom }, reveal]}
-		>
-			<EffortSliderVeil />
+		<ComposerOverlay bottom={bottom} visible={visible}>
 			<EffortSlider {...props} visible={visible} />
-		</Animated.View>
+		</ComposerOverlay>
 	);
 }
 
@@ -153,15 +105,9 @@ export function EffortSlider({ choices, onChoose, onRelease, visible = true }: E
 
 	return (
 		<View style={styles.stack}>
-			{/* What the track sets, then the level it is on, centred above the
-			    card rather than inside it; the overlay's veil keeps it readable
-			    over the chat. Hidden from screen readers: the track itself is
-			    "Effort", adjustable, valued the level. */}
-			<View style={styles.heading} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-				<Text style={styles.title} numberOfLines={1}>Effort</Text>
-				<AppSymbol name="chevronForward" size={iconSize.xs} color={t.textTertiary} weight="semibold" />
-				<Text style={styles.value} numberOfLines={1} testID="effort-slider-value">{label}</Text>
-			</View>
+			{/* What the track sets, then the level it is on. The track itself is
+			    "Effort", adjustable, valued the level, for screen readers. */}
+			<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />
 			<View style={styles.card}>
 				<GestureDetector gesture={drag}>
 					<View
@@ -197,38 +143,16 @@ export function EffortSlider({ choices, onChoose, onRelease, visible = true }: E
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		overlay: {
-			position: "absolute",
-			left: 0,
-			right: 0,
-			zIndex: 1,
-			// The gap above the composer comes from the reveal's translateY: a
-			// margin does not move an absolutely placed view off its `bottom`,
-			// and the card sat on the composer's edge.
-			alignItems: "center",
-		},
 		// Each level's preferred room is capped at what the composer leaves:
 		// the track's stops are spaced from its measured width, so a narrow
 		// screen packs them closer rather than spilling the card off it.
 		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
-		heading: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs },
 		card: {
 			maxWidth: "100%",
 			padding: space.xs,
 			// Concentric with the track's ends, an even pad in from the card's.
-			borderRadius: TRACK / 2 + space.xs,
-			borderCurve: "continuous",
-			backgroundColor: t.bgElevated,
-			borderWidth: StyleSheet.hairlineWidth,
-			borderColor: t.borderDefault,
-			shadowColor: BLOB_SHADOW,
-			shadowOpacity: 0.25,
-			shadowRadius: 12,
-			shadowOffset: { width: 0, height: 4 },
-			elevation: 8,
+			...overlayCardStyle(t, TRACK / 2 + space.xs),
 		},
-		title: { ...type.footnote, color: t.textSecondary },
-		value: { ...type.footnote, fontFamily: type.headline.fontFamily, color: t.textPrimary, flexShrink: 1 },
 		track: { maxWidth: "100%", height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
 		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder },
 		dot: { position: "absolute", width: DOT * 2, height: DOT * 2, borderRadius: DOT },
