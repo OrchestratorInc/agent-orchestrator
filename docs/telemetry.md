@@ -1475,7 +1475,11 @@ It shows only when all of these are true at the moment of quitting:
   on Windows and Linux, closing the main window or quitting. Restarting to
   install an update, shutting down, restarting or logging out the computer, a
   crash, and a forced quit go straight through. With the window hidden or
-  minimized, nothing shows.
+  minimized, nothing shows. On macOS the menu bar icon is always on, so a
+  ⌘Q, menu or Dock quit closes the window and leaves Orchestrator running in
+  the menu bar; the prompt still asks on that quit, and its events mean the
+  window closed, not that the app exited. The prompt replaces the "Quit
+  Orchestrator?" confirm for that one quit.
 - Share usage analytics is on, and none of the three events below is silenced
   by `AO_TELEMETRY_DISABLED_EVENTS`.
 - It has not shown on this install before. The record is the marker file
