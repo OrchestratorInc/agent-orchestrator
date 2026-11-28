@@ -602,6 +602,31 @@ describe("SessionChatSurface startup check", () => {
 		const { whenReady } = await sendDuringCheck({ ...session, isTerminated: true, statusReadiness: "checking" });
 		expect(whenReady).toBeUndefined();
 	});
+
+	it("holds Continue during the check", async () => {
+		await sendDuringCheck(checking);
+		conversationCommandState.send.mockClear();
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ continuation: true }), expect.any(Promise));
+	});
+
+	it("refreshes a remote host's sessions until its check is over", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+		conversationCommandState.send = vi.fn().mockResolvedValue({});
+		const client = new QueryClient();
+		let readiness: WorkspaceSession["statusReadiness"] = "checking";
+		await client.prefetchQuery({
+			queryKey: ["remote-workspaces", "h_air"],
+			queryFn: () => [{ id: session.workspaceId, sessions: [{ ...session, statusReadiness: readiness }] }],
+		});
+		render(<Wrapper client={client}><SessionChatSurface session={checking} hostId="h_air" /></Wrapper>);
+		await act(async () => {
+			await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+		});
+		const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void>;
+		readiness = "ready";
+		await act(async () => { await whenReady; });
+	});
 });
 
 describe("SessionChatSurface search reveal", () => {

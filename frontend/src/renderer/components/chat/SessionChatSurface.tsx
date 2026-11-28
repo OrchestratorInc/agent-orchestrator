@@ -903,7 +903,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					if (continueIntent.current?.turnId !== turnId) {
 						continueIntent.current = { turnId, clientMessageId: crypto.randomUUID(), sequence: renderSnapshot.latestSequence };
 					}
-					return commands.send({
+					return sendWhenReady({
 						text: CONTINUE_STOPPED_TURN_PROMPT,
 						continuation: true,
 						clientMessageId: continueIntent.current.clientMessageId,
@@ -1002,8 +1002,12 @@ function whenSessionRecovered(queryClient: QueryClient, sessionId: string, hostI
 	};
 	return new Promise((resolve) => {
 		if (recovered()) return resolve();
+		const poll = hostId
+			? setInterval(() => void queryClient.refetchQueries({ queryKey: workspacesKey, exact: true }, { cancelRefetch: false }), 1_000)
+			: undefined;
 		const settle = () => {
 			if (!recovered()) return;
+			clearInterval(poll);
 			stopQueries();
 			stopMutations();
 			resolve();
