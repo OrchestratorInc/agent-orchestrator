@@ -7113,6 +7113,10 @@ components:
           $ref: "#/components/schemas/ProjectCoAuthorCommits"
         orchestratorSandboxProvider:
           $ref: "#/components/schemas/ProjectOrchestratorSandboxProvider"
+        sandboxDocker:
+          $ref: "#/components/schemas/ProjectSandboxDocker"
+        agentsCanUseSudo:
+          $ref: "#/components/schemas/ProjectAgentsCanUseSudo"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
@@ -7558,6 +7562,10 @@ components:
           $ref: "#/components/schemas/ProjectCoAuthorCommits"
         orchestratorSandboxProvider:
           $ref: "#/components/schemas/ProjectOrchestratorSandboxProvider"
+        sandboxDocker:
+          $ref: "#/components/schemas/ProjectSandboxDocker"
+        agentsCanUseSudo:
+          $ref: "#/components/schemas/ProjectAgentsCanUseSudo"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
     ProjectOrchestratorSandboxProvider:
@@ -7589,6 +7597,18 @@ components:
         Commits a session's agent makes carry a Co-authored-by trailer naming
         the AO GitHub App's bot account, so GitHub shows the App as a
         co-author beside the person the commit is authored as. Defaults to on.
+    ProjectSandboxDocker:
+      type: boolean
+      description: >-
+        Docker (Coder sandboxes): the session's agents may use Docker in a
+        Coder sandbox. Docker access amounts to root there, so while it is on,
+        saved logins are not filled into that sandbox's browser. Sandboxes whose
+        provider runs no Docker (Freestyle) ignore it. Defaults to on.
+    ProjectAgentsCanUseSudo:
+      type: boolean
+      description: >-
+        The session's agents may use sudo in the cloud sandbox. While it is on,
+        saved logins are not filled into that sandbox's browser. Defaults to off.
     ProjectTrackerIntake:
       type: object
       additionalProperties: false
