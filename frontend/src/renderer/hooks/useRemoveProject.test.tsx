@@ -290,6 +290,38 @@ describe("useRemoveProject", () => {
 		expect(queryClient.getQueryData(rawKey)).toEqual([]);
 	});
 
+	it("reads the cloud automations again once the control plane accepts a cloud project's deletion, and not before", async () => {
+		const cloudy = project("cloud-1", "cloudy", { kind: "cloud" });
+		serverLocal = [first, cloudy];
+		let accept: (value: unknown) => void = () => undefined;
+		const deleteProject = vi.fn(() => new Promise((resolve) => { accept = resolve; }));
+		const { queryClient, remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
+		// The automations list as the Automations page holds it.
+		const automationsKey = ["cloud-automations", "https://cp.example", "org-1"];
+		queryClient.setQueryData(automationsKey, [{ id: "auto-1", projectId: "cloud-1", enabled: true }]);
+
+		act(() => remove("cloud-1"));
+		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "cloud-1"));
+		// The control plane turns the project's automations off as it accepts, so an earlier read would show them on.
+		expect(queryClient.getQueryState(automationsKey)?.isInvalidated).toBe(false);
+		await act(async () => accept({}));
+		await waitFor(() => expect(queryClient.getQueryState(automationsKey)?.isInvalidated).toBe(true));
+	});
+
+	it("leaves the cloud automations alone when a local project is removed", async () => {
+		deleteMock.mockResolvedValue({ data: { projectId: "proj-2", removedStorageDir: false } });
+		const { queryClient, remove } = setup();
+		const automationsKey = ["cloud-automations", "https://cp.example", "org-1"];
+		queryClient.setQueryData(automationsKey, []);
+		serverLocal = [first, last];
+		act(() => remove("proj-2"));
+		expect(isOptimisticallyRemovedProject("proj-2")).toBe(true);
+		// The removal has finished: its read after the daemon answered ended the tombstone.
+		await waitFor(() => expect(isOptimisticallyRemovedProject("proj-2")).toBe(false));
+		expect(deleteMock).toHaveBeenCalled();
+		expect(queryClient.getQueryState(automationsKey)?.isInvalidated).toBe(false);
+	});
+
 	it("puts a cloud project back in the raw cloud list when its removal fails and the list cannot be read", async () => {
 		const cloudy = project("cloud-1", "cloudy", { kind: "cloud" });
 		serverLocal = [first, cloudy];

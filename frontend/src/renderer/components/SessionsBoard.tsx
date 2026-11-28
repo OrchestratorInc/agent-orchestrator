@@ -481,6 +481,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					projectName={shareTargetWorkspace?.name}
 					people={teams}
 					standaloneAgent={shareTargetWorkspace?.standaloneAgent}
+					viewOnly={Boolean(shareTarget.cloud.automationRunId)}
 				/>
 			) : null}
 		</div>

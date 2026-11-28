@@ -38,6 +38,17 @@ export type CueDefinitionInput = Schemas["CueDefinitionInput"];
 export type InvokeCueInput = Schemas["InvokeCueInput"];
 export type InvokeCueResult = Schemas["InvokeCueResult"];
 
+export type Automation = Schemas["Automation"];
+export type AutomationRun = Schemas["AutomationRun"];
+export type AutomationRunStatus = Schemas["AutomationRunStatus"];
+export type AutomationHarness = Schemas["AutomationHarness"];
+export type AutomationMode = Schemas["AutomationMode"];
+export type AutomationList = Schemas["AutomationList"];
+export type AutomationRunList = Schemas["AutomationRunList"];
+export type AutomationSubscription = Schemas["AutomationSubscription"];
+export type CreateAutomationInput = Schemas["CreateAutomationInput"];
+export type UpdateAutomationInput = Schemas["UpdateAutomationInput"];
+
 export type ArtifactShareCommentAnchor = Schemas["ArtifactShareCommentAnchor"];
 export type ArtifactShareCommentLineRange = Schemas["ArtifactShareCommentLineRange"];
 export type ArtifactShareCommentRegion = Schemas["ArtifactShareCommentRegion"];

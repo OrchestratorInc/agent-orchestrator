@@ -67,10 +67,10 @@ vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => offeringMo
 vi.mock("../hooks/useSessionParticipants", () => ({ useSessionParticipants: () => participantsMock() }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => true }));
 vi.mock("./ShareSessionDialog", () => ({
-	ShareSessionDialog: (props: { open: boolean; sessionId?: string; sessionName?: string; projectName?: string; orgId: string; projectId: string }) => {
+	ShareSessionDialog: (props: { open: boolean; sessionId?: string; sessionName?: string; projectName?: string; orgId: string; projectId: string; viewOnly?: boolean }) => {
 		shareDialogMock(props);
 		return props.open ? (
-			<div role="dialog" aria-label="Share dialog" data-session={props.sessionId ?? ""} data-session-name={props.sessionName ?? ""} data-project-name={props.projectName ?? ""} data-org={props.orgId} data-project={props.projectId} />
+			<div role="dialog" aria-label="Share dialog" data-session={props.sessionId ?? ""} data-session-name={props.sessionName ?? ""} data-project-name={props.projectName ?? ""} data-org={props.orgId} data-project={props.projectId} data-view-only={String(Boolean(props.viewOnly))} />
 		) : null;
 	},
 }));
@@ -349,8 +349,18 @@ describe("SessionsBoard", () => {
 			expect(screen.queryByRole("dialog", { name: "Share dialog" })).toBeNull();
 			await userEvent.click(await screen.findByRole("button", { name: shareName("Fix login") }));
 			const dialog = await screen.findByRole("dialog", { name: "Share dialog" });
-			expect(dialog.dataset).toMatchObject({ session: "s1", sessionName: "Fix login", projectName: "acme/web", org: "org-mine", project: "p1" });
+			expect(dialog.dataset).toMatchObject({ session: "s1", sessionName: "Fix login", projectName: "acme/web", org: "org-mine", project: "p1", viewOnly: "false" });
 			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it("shares an AO Cloud automation run's session from its card only to watch", async () => {
+			cloudBoard([
+				boardSession({ id: "s1", title: "Nightly debt", status: "working", cloud: { orgId: "org-mine", automationRunId: "run-1" } }),
+				boardSession({ id: "s2", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } }),
+			]);
+			renderBoard("p1");
+			await userEvent.click(await screen.findByRole("button", { name: shareName("Nightly debt") }));
+			expect((await screen.findByRole("dialog", { name: "Share dialog" })).dataset.viewOnly).toBe("true");
 		});
 
 		it("opens the same dialog from the people circles on an already shared session", async () => {
