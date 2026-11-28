@@ -14,6 +14,7 @@ export function cloudPRSummary(pr: CloudPullRequestSummary): SessionPRSummary {
 		number: pr.number,
 		title: pr.title,
 		state: pr.state,
+		provider: pr.provider === "github" || pr.provider === "gitlab" ? pr.provider : undefined,
 		repo: pr.repository,
 		author: pr.author,
 		headSha: pr.headSha || undefined,
@@ -50,14 +51,20 @@ export function cloudReviewRun(run: CloudReviewRun): ReviewRun {
 		triggerSource: run.triggerSource,
 		prUrl: run.pullRequestUrl,
 		targetSha: run.targetSha,
-		status: run.status,
+		status: cloudReviewRunStatus(run.status),
 		verdict: run.verdict,
 		body: run.body,
 		githubReviewId: run.providerReviewId,
 		createdAt: run.createdAt,
-		deliveredAt: run.deliveredAt ?? null,
+		// "delivered" is folded into "completed" above; the time keeps saying it reached the worker.
+		deliveredAt: run.deliveredAt ?? (run.status === "delivered" ? run.createdAt : null),
 		autoInjectReview: run.autoInjectReview,
 	};
+}
+
+/** Cloud keeps its original run vocabulary; read it as the daemon's states, as the desktop does. */
+export function cloudReviewRunStatus(status: CloudReviewRun["status"]): ReviewRun["status"] {
+	return status === "complete" || status === "delivered" ? "completed" : status;
 }
 
 function cloudPRReviewState(review: CloudPRReviewState): PRReviewState {

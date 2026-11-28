@@ -13,5 +13,6 @@ describe("createLaunchTiming", () => {
 		timing.mark("appReady");
 
 		expect(timing.line()).toBe("launch timing: appReady=312ms windowShown=900ms");
+		expect(timing.marks()).toEqual({ appReady: 312, windowShown: 900 });
 	});
 });

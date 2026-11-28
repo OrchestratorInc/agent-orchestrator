@@ -5,11 +5,14 @@ import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
+import { apiOperation } from "./apiOperation";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { reportRequestTimed, requestStartedIn, transportOf } from "./telemetry/uiUsageRegistry";
 import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 import type { ApprovalMode } from "./spawnApproval";
+import type { ChatSkill } from "./chat/types";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
 
@@ -163,9 +166,9 @@ export type ProjectInfo = {
 export type ProjectDetail = ProjectInfo & {
 	agent?: string;
 	config?: {
-		agentConfig?: { model?: string; permissions?: string };
-		worker?: { agent?: string; agentConfig?: { model?: string; permissions?: string } };
-		reviewers?: { harness?: string }[];
+		agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
+		reviewers?: { harness?: string; agentConfig?: { model?: string; mode?: string; effort?: string } }[];
 	};
 };
 
@@ -420,6 +423,7 @@ export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 // server is unreachable" need very different advice. The message keeps the
 // `${status} ${statusText}` prefix that call sites already match on.
 export class ApiError extends Error {
+	readonly telemetryCode: string = "API_ERROR";
 	constructor(
 		readonly status: number,
 		message: string,
@@ -456,6 +460,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	const timer = setTimeout(cancel, timeoutMs);
 	let received: Response | undefined;
 	let bodyText = "";
+	// Time to the answer's headers, reported once the request's outcome is known.
+	let headersMs = 0;
+	// A background while this is in flight leaves it out of the timings.
+	const startedIn = requestStartedIn();
 	try {
 		const installId = cachedInstallId();
 		const startedAt = Date.now();
@@ -471,6 +479,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 				},
 			});
 			noteRequestAnswered(startedAt);
+			headersMs = Date.now() - startedAt;
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -485,10 +494,12 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			// error envelope stalls. Never turn a 401 into a retryable timeout.
 		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
-			captureMobileApiError(path, "timeout");
+			captureMobileApiError(apiOperation(init?.method, path), "timeout", undefined, undefined, undefined, cfg.hostId);
+			reportRequestTimed(null, transportOf(cfg.endpointKind), false, startedIn);
 			throw new UnreachableError("timeout", { cause: e });
 		} else {
-			captureMobileApiError(path, "offline");
+			captureMobileApiError(apiOperation(init?.method, path), "offline", undefined, undefined, undefined, cfg.hostId);
+			reportRequestTimed(null, transportOf(cfg.endpointKind), false, startedIn);
 			throw new UnreachableError("offline", { cause: e });
 		}
 	} finally {
@@ -497,6 +508,9 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}
 	const res = received!;
+	// Once per answered request, by the kind of connection it went over. Timeouts
+	// and network failures were reported above; a cancelled request never is.
+	reportRequestTimed(headersMs, transportOf(cfg.endpointKind), res.ok, startedIn);
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
@@ -510,9 +524,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		} catch {
 			/* ignore */
 		}
-		// Server answered with an error: classify by status + daemon code, and tag
-		// the requestId so a mobile event pivots to the daemon's own capture.
-		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId);
+		// Server answered with an error: classify by status + daemon code, named
+		// by its route. The requestId stays on ApiError; the daemon's Sentry does
+		// not tag it, so sending it would correlate with nothing.
+		captureMobileApiError(apiOperation(init?.method, path), httpCategory(res.status), res.status, code, detail, cfg.hostId);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
@@ -650,6 +665,45 @@ export async function getArchivedSessions(
 	};
 }
 
+/** The PR states an ended session's pull requests are read back in. */
+export type ArchivedPRState = "merged" | "closed";
+
+/** Archived workers owning a pull request in one state, a page at a time. */
+export type PRStatePage = ArchivePage & {
+	/** How many archived workers match, across every page. */
+	total: number;
+	/** Names the whole filtered list; equal versions mean the same list. Null from a daemon that sends none. */
+	version: string | null;
+};
+
+/** Pages of archived workers by PR state are larger than the archive's: they are read to the end. */
+export const PR_STATE_PAGE_SIZE = 100;
+
+/**
+ * One page of a machine's archived workers that own a PR in `prState`, newest
+ * state change first. Null from a daemon that predates the filter: it ignores
+ * the parameter and so does not echo it, and its page is the plain archive.
+ */
+export async function getArchivedPRSessions(
+	cfg: ServerConfig,
+	options: { prState: ArchivedPRState; cursor?: string | null; projectId?: string },
+	init?: Pick<RequestInit, "signal">,
+): Promise<PRStatePage | null> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", prState: options.prState, limit: String(PR_STATE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	if (data?.prState !== options.prState) return null;
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+		total: typeof data?.total === "number" ? data.total : raw.length,
+		version: typeof data?.version === "string" && data.version ? data.version : null,
+	};
+}
+
 // ---- Preview (in-app browser) ----------------------------------------------
 
 // Load the session's selected app preview, never a discovered repository file.
@@ -661,6 +715,73 @@ export async function getArchivedSessions(
  */
 export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export type SessionDeviceLease = {
+	sessionId: string;
+	provider: string;
+	reason: string;
+	device: { id: string; name: string; platform: "ios" | "android"; version?: string; booted: boolean };
+};
+
+export type DeviceSummary = SessionDeviceLease["device"];
+
+/** The machine's device support: whether it is on, its devices, and which sessions hold which. */
+export type DeviceStatus = {
+	/** False while the desktop app's Developer mode is off: devices are a Developer mode preview. */
+	available: boolean;
+	enabled: boolean;
+	state: "off" | "installing" | "ready" | "error";
+	error?: string;
+	platforms: { platform: "ios" | "android"; available: boolean; reason?: string }[];
+	devices: DeviceSummary[];
+	leases: { sessionId: string; device: { id: string } }[];
+};
+
+export async function getDeviceStatus(cfg: ServerConfig, init?: Pick<RequestInit, "signal">): Promise<DeviceStatus> {
+	const res = await req(cfg, `${API}/devices`, init);
+	return (await res.json()) as DeviceStatus;
+}
+
+/** The simulator or emulator this session holds, or null. */
+export async function getSessionDevice(cfg: ServerConfig, id: string, init?: Pick<RequestInit, "signal">): Promise<SessionDeviceLease | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device`, init);
+	const data = await res.json();
+	return (data?.lease ?? null) as SessionDeviceLease | null;
+}
+
+/** Leases (and boots, when it is off) a device for the session. */
+export async function openSessionDevice(cfg: ServerConfig, id: string, device: { deviceId: string; platform: "ios" | "android" }): Promise<SessionDeviceLease | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/open`, { method: "POST", body: JSON.stringify(device) });
+	const data = await res.json();
+	return (data?.lease ?? null) as SessionDeviceLease | null;
+}
+
+/** Releases the session's device; it keeps running unless `shutdown` powers it off too. */
+export async function closeSessionDevice(cfg: ServerConfig, id: string, options: { shutdown?: boolean } = {}): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/close`, { method: "POST", body: JSON.stringify({ shutdown: Boolean(options.shutdown) }) });
+}
+
+/**
+ * Presses a device button through the daemon's own driver. False when the
+ * provider leaves that button to the input socket (the daemon answers 409
+ * DEVICE_BUTTON_UNSUPPORTED), so the caller sends it there instead.
+ */
+export async function pressSessionDeviceButton(cfg: ServerConfig, id: string, button: "home" | "back" | "recents"): Promise<boolean> {
+	try {
+		await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/button`, { method: "POST", body: JSON.stringify({ button }) });
+		return true;
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.code === "DEVICE_BUTTON_UNSUPPORTED") return false;
+		throw cause;
+	}
+}
+
+export type DeviceStreamQuality = "high" | "balanced" | "low";
+
+/** Sets how much the session's device stream costs the link; the daemon resets it when the lease ends. */
+export async function setSessionDeviceQuality(cfg: ServerConfig, id: string, quality: DeviceStreamQuality): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/quality`, { method: "POST", body: JSON.stringify({ quality }) });
 }
 
 /** The daemon's route for a file in a session's artifact folder, each segment escaped. */
@@ -773,6 +894,7 @@ export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string
  */
 /** A text read stopped at its limit: the file is larger than the viewer loads. */
 export class ArtifactTextTooLargeError extends Error {
+	readonly code: string = "ARTIFACT_TEXT_TOO_LARGE_ERROR";
 	constructor() {
 		super("This file is too large to load as text.");
 		this.name = "ArtifactTextTooLargeError";
@@ -940,6 +1062,9 @@ export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTe
 		cloudUserId: str(data?.cloudUserId),
 		githubLogin: str(data?.githubLogin),
 		optedOut: data?.optedOut === true,
+		...(typeof data?.isSignedIn === "boolean" ? { isSignedIn: data.isSignedIn } : {}),
+		...(typeof data?.lifetimeSessions === "number" ? { lifetimeSessions: data.lifetimeSessions } : {}),
+		daemonVersion: str(data?.daemonVersion),
 	};
 }
 
@@ -999,6 +1124,24 @@ export async function getAgentModels(cfg: ServerConfig, agent: string, projectId
 		if (!discovering || signal?.aborted) return catalog;
 		await pollDelay(signal);
 		if (signal?.aborted) return catalog;
+	}
+}
+
+/**
+ * The skills an agent offers in a project before any session of it runs, read
+ * by the machine from the agent's own skill folders: the new task page's "/"
+ * list. Without a project only the user's own skills come back. A machine on a
+ * version without this route answers 404, which lists none.
+ */
+export async function getAgentSkills(cfg: ServerConfig, agent: string, projectId?: string): Promise<ChatSkill[]> {
+	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+	try {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/skills${query}`);
+		const body = await res.json() as { skills?: ChatSkill[] };
+		return body.skills ?? [];
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.status === 404) return [];
+		throw cause;
 	}
 }
 
@@ -1178,12 +1321,20 @@ export type PRReviewEntry = {
 	autoInjectReview: boolean;
 };
 
+/** A comment in a review thread, or a top-level PR comment. */
+export type PRComment = { id: string; author: string; body: string; createdAt?: string | null; isBot: boolean; url?: string };
+/** An inline review thread with its comments, oldest first. */
+export type PRThread = { id: string; path?: string; line?: number; resolved: boolean; comments: PRComment[] };
+export type PRRequestedReviewer = { login: string; isTeam?: boolean; avatarUrl?: string };
+
 export type SessionPRSummary = {
 	url: string;
 	htmlUrl?: string;
 	number: number;
 	title: string;
 	state: "draft" | "open" | "merged" | "closed";
+	/** Which forge hosts it; the daemon always says, an older Cloud may not. */
+	provider?: "github" | "gitlab";
 	repo: string;
 	author: string;
 	/** The head commit the merge is fenced to, so a newer push is never merged unseen. */
@@ -1201,6 +1352,14 @@ export type SessionPRSummary = {
 		resolvedBy?: PRUnresolvedReviewer[];
 		reviews?: PRReviewEntry[];
 	};
+	// The PR's details: read by the SCM observer for the open PRs it follows,
+	// or on request (POST /prs/{n}/details). Empty until detailsObservedAt is set.
+	detailsObservedAt?: string | null;
+	/** Inline review threads with their replies. */
+	threads?: PRThread[];
+	/** The newest top-level comments, oldest first. */
+	conversation?: PRComment[];
+	requestedReviewers?: PRRequestedReviewer[];
 	mergeability: {
 		state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 		reasons: string[];
@@ -1233,14 +1392,19 @@ export type ReviewRun = {
 	sessionId: string;
 	batchId: string;
 	harness: string;
-	triggerSource: "manual" | "auto";
+	triggerSource: "manual" | "auto" | "agent";
 	prUrl: string;
 	targetSha: string;
-	status: "running" | "complete" | "delivered" | "failed" | "cancelled";
+	// The daemon's run states (backend/internal/domain/review.go). Cloud's
+	// "complete" and "delivered" are read as "completed" (cloud/pullRequests.ts).
+	status: "queued" | "launching" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "superseded";
 	verdict: "" | "approved" | "changes_requested";
 	body: string;
 	githubReviewId: string;
 	createdAt: string;
+	/** When the daemon began launching the reviewer, then when the task reached it. */
+	launchingAt?: string | null;
+	startedAt?: string | null;
 	deliveredAt?: string | null;
 	autoInjectReview: boolean;
 };
@@ -1359,6 +1523,34 @@ export async function resolveSessionReviewComment(
 	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/comments/resolve`, {
 		method: "POST",
 		body: JSON.stringify({ pullRequestUrl, commentUrl }),
+	});
+}
+
+/**
+ * Posts a reply on the provider as the machine's signed-in GitHub account:
+ * into a review thread when `threadId` is set, else a top-level PR comment.
+ */
+export async function postPRComment(
+	cfg: ServerConfig,
+	pr: { number: number; url: string },
+	body: string,
+	threadId?: string,
+): Promise<void> {
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/comments`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url, body, ...(threadId ? { threadId } : {}) }),
+	});
+}
+
+/**
+ * Asks the daemon to read a PR's details (threads, top-level comments,
+ * requested reviewers) when none are stored. The SCM observer reads them only
+ * for the open PRs it follows; the next GET /sessions/{id}/pr carries them.
+ */
+export async function loadPRDetails(cfg: ServerConfig, pr: { number: number; url: string }): Promise<void> {
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/details`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url }),
 	});
 }
 

@@ -284,6 +284,9 @@ type Manager struct {
 	// This coordination is intentionally memory-only: a daemon crash leaves the
 	// durable session exited, so the user can safely retry the resume.
 	pendingLaunches map[domain.SessionID]pendingLaunch
+	// kimiChildren counts each Kimi session's open child agents (see
+	// kimiChildSignalLocked). Guarded by mu.
+	kimiChildren map[domain.SessionID]kimiChildState
 	// steerActive reports whether a harness can safely receive a write during an
 	// active turn (input steers the run) rather than only while idle. Supplied by
 	// the agent adapter via WithActiveSteering; the default answers false, so an
@@ -296,6 +299,9 @@ type Manager struct {
 	// adapter via WithUrgentNudgeGate; the default answers false, so an unknown
 	// harness never takes an urgent write while waiting_input.
 	urgentNudgeWaitingInputSafe func(domain.AgentHarness) bool
+	// reviewNoticeMu serializes "review done" deliveries so the submit path,
+	// a PR observation, and the sweep can never send the same notice twice.
+	reviewNoticeMu sync.Mutex
 }
 
 // New builds a Lifecycle Manager over the session store it writes and the messenger it uses for agent nudges.
@@ -313,6 +319,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		flights:                     map[domain.SessionID]*toolFlight{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
+		kimiChildren:                map[domain.SessionID]kimiChildState{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
 		urgentNudgeWaitingInputSafe: func(domain.AgentHarness) bool { return false },
@@ -522,6 +529,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// m.mu — mutate holds it across this callback.
 		delete(m.flights, id)
 		delete(m.steps, id)
+		delete(m.kimiChildren, id)
 		terminated = true
 		beforeEnd = cur
 		return next, true
@@ -565,7 +573,9 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	// Subagent answers, including prompt suggestions, are not root-conversation
 	// facts. Their usage is collected independently from lifecycle metadata.
 	s.SubagentID = strings.TrimSpace(s.SubagentID)
-	if s.Event == "subagent-stop" && s.SubagentID == "" {
+	// Kimi's subagent-stop names no child; kimiChildSignalLocked consumes it
+	// after the launch fence.
+	if s.Event == "subagent-stop" && s.SubagentID == "" && s.ExpectedHarness != domain.HarnessKimi {
 		return nil
 	}
 	s.AgentSessionID = strings.TrimSpace(s.AgentSessionID)
@@ -656,6 +666,7 @@ retryProjection:
 	if rec.IsTerminated {
 		delete(m.flights, id)
 		delete(m.steps, id)
+		delete(m.kimiChildren, id)
 		m.mu.Unlock()
 		return nil
 	}
@@ -720,9 +731,19 @@ retryProjection:
 	if previousNativeID == "" {
 		previousNativeID = rec.Metadata.ProviderConversationID
 	}
+	// Claude Code stopped before its --resume loads reports SessionEnd under a
+	// fresh id it never wrote a transcript for; the resumed conversation stays.
+	if rec.Harness == domain.HarnessClaudeCode && s.Event == "session-end" && previousNativeID != "" && s.AgentSessionID != previousNativeID {
+		s.AgentSessionID, s.TranscriptPath = "", ""
+	}
 	nativeIdentityChanged := s.AgentSessionID != "" && previousNativeID != "" && s.AgentSessionID != previousNativeID
 	if nativeIdentityChanged && !s.Timestamp.IsZero() &&
 		!rec.Metadata.NativeIdentityObservedAt.IsZero() && !s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt) {
+		m.mu.Unlock()
+		return nil
+	}
+	kimiChild := m.kimiChildSignalLocked(rec, s, now)
+	if kimiChild.consumed {
 		m.mu.Unlock()
 		return nil
 	}
@@ -732,6 +753,9 @@ retryProjection:
 	if !terminalTurnRecorded && mode == domain.SessionModeTUI {
 		terminalTurnRecorded = true
 		m.recordTerminalTurn(ctx, rec, s, now)
+		if kimiChild.endsFailedTurn {
+			m.closeFailedTerminalTurn(ctx, rec, s, now)
+		}
 	}
 	resetConversationCheckpoint :=
 		nativeIdentityChanged ||
@@ -959,10 +983,25 @@ retryProjection:
 	if nativeSessionChanged {
 		usageReactivator = m.usageReactivator
 	}
-	if s.Valid {
-		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
+	// Hooks post from their own processes and are stamped when they fire, so one
+	// can reach AO after a later one: a delivered prompt's user-prompt-submit
+	// landing after the Stop that ended its turn left the session active for
+	// good (#6686). Once a signal has made the session idle, one that fired
+	// before that idle keeps its metadata but cannot change the state. The
+	// spawn's seeded idle is not a signal, so an early first hook still lands,
+	// and an exited session stays resumable.
+	lateSignal := false
+	if s.Valid && s.State != domain.ActivityExited && !s.Timestamp.IsZero() &&
+		rec.Activity.State == domain.ActivityIdle && !rec.FirstSignalAt.IsZero() &&
+		s.Timestamp.Before(rec.Activity.LastActivityAt) {
+		s.Valid, lateSignal = false, true
 	}
-	if !s.Valid && !metadataChanged {
+	if s.Valid {
+		s = m.applyToolPrecedenceLocked(id, rec.Harness, rec.Activity.State, s)
+	}
+	// A late prompt was still submitted: its metadata-only projection is what
+	// records its delivery as accepted, so it is not skipped.
+	if !s.Valid && !metadataChanged && (!lateSignal || semanticDeliveryStore == nil) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -1037,7 +1076,11 @@ retryProjection:
 	// A scoped, newer completion is fresh idle proof even when the durable
 	// state stayed idle; otherwise terminal input permanently outlives it.
 	// Keep ordinary same-state notifications and unowned callbacks deduplicated.
-	completedIdleTurn := s.State == domain.ActivityIdle && s.Event == "post-agent" &&
+	// A Claude Stop is the same proof: recording a later turn end on an already
+	// idle row is what lets the ordering fence above reject that turn's
+	// late-arriving prompt.
+	turnEnd := s.Event == "post-agent" || s.Event == "stop" || s.Event == "stop-failure"
+	completedIdleTurn := s.State == domain.ActivityIdle && turnEnd &&
 		s.LaunchID != "" && s.LaunchID == rec.Metadata.RuntimeLaunchID &&
 		s.AgentSessionID != "" && s.AgentSessionID == rec.Metadata.AgentSessionID &&
 		act.LastActivityAt.After(rec.Activity.LastActivityAt)
@@ -1135,9 +1178,8 @@ retryProjection:
 // post-tool-use is the earliest observable "the decision was resolved"
 // signal; but tool hooks also fire for parallel subagents on the same
 // session, whose traffic must never clear a dialog that is still on screen.
-// In-memory only: a daemon restart loses it and the session degrades to
-// clearing at the next turn boundary — fail-safe staleness, never a spurious
-// clear.
+// In-memory only: a daemon restart loses correlation evidence. Provider-specific
+// compatibility paths and the limits of Kimi's bounded cache are documented below.
 type toolFlight struct {
 	// inflight maps toolUseID -> toolName for pre-tool-use signals whose post
 	// has not arrived yet.
@@ -1155,6 +1197,14 @@ type toolFlight struct {
 	// after-execution event can clear only its own key, and the session remains
 	// blocked until every observed dialog has completed.
 	cursorPending map[string]int
+	// kimiApprovals retains pending (false) and completed (true) native approval
+	// identities. Completion must survive an empty pending set and turn boundaries
+	// because Kimi's independent hook processes may deliver a result first.
+	// kimiApprovalOrder is FIFO by first observation; duplicates never refresh it.
+	// See kimi_approvals.go for the bound, overflow and cleanup contract.
+	kimiApprovals        map[string]bool
+	kimiApprovalOrder    []string
+	kimiApprovalOverflow bool
 }
 
 func cloneToolFlight(flight *toolFlight) *toolFlight {
@@ -1162,15 +1212,21 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 		return nil
 	}
 	clone := &toolFlight{
-		inflight:         make(map[string]string, len(flight.inflight)),
-		blockedCandidate: flight.blockedCandidate,
-		cursorPending:    make(map[string]int, len(flight.cursorPending)),
+		inflight:             make(map[string]string, len(flight.inflight)),
+		blockedCandidate:     flight.blockedCandidate,
+		cursorPending:        make(map[string]int, len(flight.cursorPending)),
+		kimiApprovals:        make(map[string]bool, len(flight.kimiApprovals)),
+		kimiApprovalOrder:    append([]string(nil), flight.kimiApprovalOrder...),
+		kimiApprovalOverflow: flight.kimiApprovalOverflow,
 	}
 	for id, name := range flight.inflight {
 		clone.inflight[id] = name
 	}
 	for key, count := range flight.cursorPending {
 		clone.cursorPending[key] = count
+	}
+	for id, completed := range flight.kimiApprovals {
+		clone.kimiApprovals[id] = completed
 	}
 	return clone
 }
@@ -1248,7 +1304,7 @@ func isTurnBoundaryEvent(event string) bool {
 // Event pass through untouched — the compatibility contract for old CLIs and
 // for adapters that don't tag their signals (their last-writer-wins semantics
 // are pinned by tests). Caller must hold m.mu.
-func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.ActivityState, s ports.ActivitySignal) ports.ActivitySignal {
+func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, harness domain.AgentHarness, cur domain.ActivityState, s ports.ActivitySignal) ports.ActivitySignal {
 	if s.Event == "" {
 		return s
 	}
@@ -1262,6 +1318,20 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 			m.flights[id] = fl
 		}
 		return fl
+	}
+	if harness == domain.HarnessKimi {
+		if s.Event == "permission-request" || s.Event == "permission-resolved" {
+			return ensure().applyKimiApproval(s)
+		}
+		if isTurnBoundaryEvent(s.Event) && fl != nil {
+			// Settle observed requests, but keep completion evidence so delayed
+			// callbacks cannot re-arm a wait or revive a finished turn.
+			fl.settleKimiApprovals()
+			fl.inflight = map[string]string{}
+			fl.blockedCandidate = ""
+			fl.cursorPending = nil
+			return s
+		}
 	}
 
 	// Tracking side effects happen regardless of what the state decision is.
@@ -1596,6 +1666,11 @@ func (m *Manager) markSpawned(
 				return nil, err
 			}
 		}
+		if rec.Harness == domain.HarnessKimi {
+			// A successful spawn commits a new provider process generation. Its
+			// approval callbacks must not inherit the prior launch's cache.
+			delete(m.flights, id)
+		}
 		return m.usageReactivator, nil
 	}()
 	if err != nil {
@@ -1800,6 +1875,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 				cur.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: now}
 				delete(m.flights, id) // runs under m.mu (mutate holds it)
 				delete(m.steps, id)
+				delete(m.kimiChildren, id)
 				outcome = terminationApplied
 				return cur, true
 			}

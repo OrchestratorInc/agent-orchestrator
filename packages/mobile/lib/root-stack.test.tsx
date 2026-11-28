@@ -5,6 +5,7 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
 }));
+vi.mock("./headerPill", () => ({ pillHeaderOptions: () => ({}), pillScreenLayout: undefined, PillHeaderFrame: ({ children }: { children: unknown }) => children }));
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -29,9 +30,13 @@ vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "
 vi.mock("./store", () => ({ AppProvider: "AppProvider" }));
 vi.mock("./cloud/CloudProvider", () => ({ CloudProvider: "CloudProvider" }));
 vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
+vi.mock("./RouteRestorer", () => ({ RouteRestorer: () => null }));
+vi.mock("./files/reviewPersistence", () => ({ startReviewPersistence: async () => {} }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
+vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
+vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
 
 import RootLayout, { unstable_settings } from "../app/_layout";
@@ -98,7 +103,11 @@ describe("root stack", () => {
 	it.each(["ios", "android"])("gives every pushed page the system back button and transition on %s", async (platform) => {
 		const renderer = await renderRoot(platform);
 		try {
-			expect(renderer.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("animation");
+			// iOS keeps UIKit's own push; Android slides in the same way rather
+			// than running react-native-screens' near-instant default fade.
+			const screenOptions = renderer.root.findByType("Stack" as never).props.screenOptions;
+			if (platform === "android") expect(screenOptions.animation).toBe("ios_from_right");
+			else expect(screenOptions).not.toHaveProperty("animation");
 			for (const name of pushedPages) {
 				const options = renderer.root.findByProps({ name }).props.options;
 				expect(options).not.toHaveProperty("headerLeft");

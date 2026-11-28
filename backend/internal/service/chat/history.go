@@ -444,9 +444,12 @@ func (s *Service) EditMessage(
 		branch.ReplayTruncated = replayTruncated
 	}
 	conversation := source.conversation
+	// The snapshot holds the settings the source started with; the picker
+	// reads the replacement's, so give it the ones chosen since (#6759).
+	conversation.Settings = source.Settings()
 	conversation.ActiveBranchID = branchID
 	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
-	replacement.artifactDir = source.artifactDir
+	replacement.artifactDir, replacement.dataDir = source.artifactDir, source.dataDir
 	if err := s.store.CreateAndActivateConversationBranch(
 		operationCtx, id, branch, generation, s.now(),
 	); err != nil {
@@ -970,9 +973,10 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	}
 	generation := s.newID()
 	conversation := source.conversation
+	conversation.Settings = source.Settings() // as for an edit: the live settings
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
-	replacement.artifactDir = source.artifactDir
+	replacement.artifactDir, replacement.dataDir = source.artifactDir, source.dataDir
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
@@ -1012,7 +1016,13 @@ func (s *Service) branchLaunchConfig(
 	if err != nil {
 		return StartConfig{}, nil, fmt.Errorf("chat driver for %s: %w", cfg.Harness, err)
 	}
-	return cloneStartConfig(cfg), driver, nil
+	// The registered config is what the session was spawned with. A provider a
+	// branch launches, or a restored source, continues this conversation, so it
+	// runs with the model, effort and approval mode chosen since, as a
+	// controller rebuilt after a restart does (#6759).
+	launch := cloneStartConfig(cfg)
+	applyConversationSettings(&launch, source.Settings())
+	return launch, driver, nil
 }
 
 func (s *Service) prepareBranchControllerEnv(ctx context.Context, cfg StartConfig) (map[string]string, error) {
@@ -1089,7 +1099,7 @@ func (s *Service) restoreClosedSourceController(
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
 		id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
-	replacement.artifactDir = source.artifactDir
+	replacement.artifactDir, replacement.dataDir = source.artifactDir, source.dataDir
 	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {
 		_ = provider.Close()

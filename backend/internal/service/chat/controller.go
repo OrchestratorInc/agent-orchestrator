@@ -16,11 +16,13 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -101,9 +103,10 @@ type Store interface {
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
 	ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error)
 	ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error)
+	MarkQueuedBatchStarted(ctx context.Context, conversationID string, turnIDs []string, now time.Time) error
 	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error
 	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
-	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
+	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time, accepted bool) error
 	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
 	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
 	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
@@ -120,7 +123,7 @@ type Store interface {
 	CompleteEditDelivery(ctx context.Context, conversationID, clientMessageID, sourceBranchID, activeBranchID string, turn domain.ConversationTurn, now time.Time) error
 	RejectEditDelivery(ctx context.Context, conversationID, clientMessageID string, kind domain.ConversationEditRejectionKind, message string, now time.Time) error
 	CancelQueuedTurns(ctx context.Context, conversationID string, cutoff, now time.Time) error
-	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) error
+	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) (int, error)
 	CancelQueuedTurnByID(ctx context.Context, conversationID, turnID string, now time.Time) error
 	QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	QueuedEditDelivery(ctx context.Context, conversationID, clientMessageID string) (string, bool, error)
@@ -220,8 +223,25 @@ type Controller struct {
 	// workspacePath is the worktree whose files are snapshotted before each turn
 	// and restored by a rollback.
 	workspacePath string
+	// dataDir holds the session's shared skills; a review's controller has none.
+	dataDir string
+	// skillSharing reports the skill sharing setting; nil is off.
+	skillSharing func(context.Context) bool
+	started      time.Time
 
 	conv                   ports.ChatConversation
+	backgroundMu           sync.Mutex
+	backgroundInFlight     chan struct{}
+	backgroundVersion      uint64
+	backgroundTasks        []ports.ChatBackgroundTask
+	backgroundSampledAt    time.Time
+	backgroundPartial      bool
+	backgroundErr          error
+	backgroundCommands     map[string]backgroundCommand
+	backgroundCommandOrder []string
+	// backgroundRuns hands out run tokens: never reused, so a log read for an
+	// evicted entry can't land in a later entry for the same task ID.
+	backgroundRuns         uint64
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder
@@ -367,10 +387,12 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // session_updated event announces the target mode.
 var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
 
+// ErrForcedHandoffStoppedSource means a failed forced handoff stopped the source and kept its handoff latch; the caller restores the source, then calls AbortHandoff.
+var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the source")
+
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
-// this conversation, not failed, was rolled back, or carries no durable prompt
-// the user authored. A retry is only ever offered for an eligible failed human
-// turn.
+// this conversation, not failed, was rolled back, or carries no durable human or
+// event prompt to send again.
 var ErrTurnNotRetryable = errors.New("turn is not retryable")
 
 // ErrRetryStaleBranch reports a durable failed turn that is no longer visible
@@ -1087,6 +1109,14 @@ func nativeHistoryActivityFingerprint(
 	summary string,
 	detail []byte,
 ) string {
+	if kind == domain.ActivityKindReasoning && status == domain.ActivityStatusRecovered {
+		// History replay settles every open thought as recovered, while the live
+		// row completed. Nothing else about a thought differs, so an agent that
+		// replays thoughts under new item ids would otherwise re-import each one.
+		// Prose is deliberately not compared: Codex settles a summary-less thought
+		// with empty text while its row keeps the streamed deltas.
+		status = domain.ActivityStatusCompleted
+	}
 	return string(kind) + "\x00" + string(status) + "\x00" + summary + "\x00" + string(detail)
 }
 
@@ -1580,6 +1610,14 @@ func (c *Controller) readRateLimits() {
 // ProviderConversationID is the handle to persist for resume.
 func (c *Controller) ProviderConversationID() string { return c.conv.ProviderConversationID() }
 
+// providerConversationID is the live provider thread, or empty before one exists.
+func (c *Controller) providerConversationID() string {
+	if c.conv == nil {
+		return ""
+	}
+	return c.conv.ProviderConversationID()
+}
+
 // ConversationID is the durable conversation this controller writes to.
 func (c *Controller) ConversationID() string { return c.conversation.ID }
 
@@ -1788,7 +1826,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
 	}
-	if prompt.Origin != domain.MessageOriginHuman {
+	// An event's prompt (a review comment, a CI failure, an orchestrator message)
+	// is sent again as it was, like a human one: a turn it started that failed on
+	// a timeout or a dropped connection is otherwise stuck with no way to finish.
+	// A limited one resumes through its continuation below instead.
+	limitedEvent := prompt.Origin == domain.MessageOriginAutomation && source.UsageLimit != nil
+	if prompt.Origin != domain.MessageOriginHuman && prompt.Origin != domain.MessageOriginAutomation {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
 	}
 
@@ -1816,6 +1859,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, ErrTurnRunning
 	}
 
+	relayed := prompt.AuthoredByUser && cmp.Or(prompt.ProviderInputText, prompt.Text) == prompt.Text
+	if limitedEvent && !relayed {
+		if prompt, err = c.usageLimitEventContinuation(ctx, source); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	content, err := retryPromptContent(prompt.DeliveryContentJSON, c.Capabilities())
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1834,6 +1883,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
 		Continuation:        prompt.Continuation,
+		AuthoredByUser:      prompt.AuthoredByUser,
 	}
 	var created bool
 	if autoResume {
@@ -1866,6 +1916,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
+		AuthoredByUser:  prompt.AuthoredByUser,
 		ClientMessageID: key,
 	}, now, false, nil)
 }
@@ -2039,13 +2090,13 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
-	msg = excerptDeliveryMessage(msg)
+	msg = excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, msg))
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
 		if len(followers) > 0 {
 			ids := append([]string{turnID}, followers...)
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,
-				"batch provider input could not be recorded: "+err.Error(), c.now()); failErr != nil {
+				"batch provider input could not be recorded: "+err.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle unrecorded queued batch", "error", failErr)
 			}
 		} else if settleErr := c.store.SettleTurnByID(context.WithoutCancel(ctx), turnID,
@@ -2054,11 +2105,12 @@ func (c *Controller) dispatch(
 		}
 		return domain.ConversationTurn{}, fmt.Errorf("record provider input: %w", err)
 	}
+	providerAccepted := false
 	failFollowers := func(reason string) {
 		if len(followers) == 0 {
 			return
 		}
-		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now()); err != nil {
+		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now(), providerAccepted); err != nil {
 			c.log.Error("failed to settle queued batch", "error", err)
 		}
 	}
@@ -2110,6 +2162,12 @@ func (c *Controller) dispatch(
 		}, fmt.Errorf("send turn: %w", err)
 	}
 
+	if !hasDeferredStart {
+		providerAccepted = true
+		if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, followers, c.now()); err != nil {
+			c.log.Error("failed to record queued batch acceptance", "error", err)
+		}
+	}
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {
 		failFollowers("batch provider binding is uncertain: " + err.Error())
 		c.mu.Lock()
@@ -2136,7 +2194,7 @@ func (c *Controller) dispatch(
 	// ACP's session/prompt request stays open until the turn finishes, so an ACP
 	// driver prepares the request in SendTurn and starts it here. The durable
 	// provider-id binding above must exist before the first streamed update can be
-	// projected. Eager drivers do not implement this optional interface.
+	// projected. A successful local start does not confirm provider acceptance.
 	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			failFollowers("batch provider start is uncertain: " + err.Error())
@@ -2386,7 +2444,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	msg, err := c.queuedBatchInput(ctx, batch, nil)
 	if err != nil {
 		if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-			queuedBatchIDs(batch), err.Error(), c.now()); failErr != nil {
+			queuedBatchIDs(batch), err.Error(), c.now(), false); failErr != nil {
 			return errors.Join(err, failErr)
 		}
 		return err
@@ -2457,7 +2515,7 @@ func (c *Controller) BeginHandoff(
 		c.mu.Lock()
 		active := c.pendingTurnID != ""
 		c.mu.Unlock()
-		err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+		_, err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
 		c.sendMu.Unlock()
 		if err != nil {
 			c.AbortHandoff()
@@ -2553,6 +2611,85 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 	c.handoff = controllerHandoffIdleBranch
 	c.branchHandoffDone = make(chan struct{})
 	return nil
+}
+
+// BeginForcedBranchHandoff fences intake even mid-turn, cancelling the queue and interrupting the turn.
+func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) (domain.ProviderSwitchResult, error) {
+	restoreSteers := func() {}
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		if restore := withdrawer.WithdrawPendingSteers(); restore != nil {
+			restoreSteers = restore
+		}
+	}
+	c.mu.Lock()
+	if c.handoff != controllerHandoffNone {
+		c.mu.Unlock()
+		restoreSteers()
+		return domain.ProviderSwitchResult{}, ErrControllerHandoff
+	}
+	c.handoff = controllerHandoffIdleBranch
+	c.branchHandoffDone = make(chan struct{})
+	c.mu.Unlock()
+	terminated := false
+	fail := func(err error) (domain.ProviderSwitchResult, error) {
+		restoreSteers()
+		if terminated {
+			return domain.ProviderSwitchResult{}, errors.Join(ErrForcedHandoffStoppedSource, err)
+		}
+		c.AbortHandoff()
+		return domain.ProviderSwitchResult{}, err
+	}
+	if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+		c.prepareBranchHandoffStop()
+		stopCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		stopErr := c.Terminate(stopCtx)
+		cancel()
+		terminated = true
+		if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+			return fail(errors.Join(errors.New("the provider did not release its pending send after it was stopped"), stopErr))
+		}
+	}
+	c.mu.Lock()
+	active := c.pendingTurnID != ""
+	c.mu.Unlock()
+	var result domain.ProviderSwitchResult
+	running, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
+	if err == nil {
+		result.CancelledQueued, err = c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+	}
+	for _, providerTurnID := range running {
+		if err != nil {
+			break
+		}
+		err = c.store.SettleTurn(ctx, c.conversation.ID, providerTurnID, domain.TurnStateInterrupted, "", c.now())
+		result.StoppedTurn = true
+	}
+	c.sendMu.Unlock()
+	if err != nil {
+		return fail(fmt.Errorf("stop turns before forced handoff: %w", err))
+	}
+	if active {
+		result.StoppedTurn = true
+		interruptCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		defer cancel()
+		if err := c.interruptForHandoff(interruptCtx); err != nil {
+			c.log.Warn("interrupt before forced handoff failed", "session", c.sessionID, "error", err)
+		}
+	}
+	return result, nil
+}
+
+var forcedHandoffInterruptLimit = 5 * time.Second
+
+func lockWithin(ctx context.Context, mu *sync.Mutex, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for !mu.TryLock() {
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }
 
 // AbortHandoff reopens source intake when a drain is cancelled before the source
@@ -2759,6 +2896,29 @@ func (c *Controller) HandoffInterruptedTurn() string {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
+	return c.InterruptTurn(ctx, "")
+}
+
+// InterruptTurn is Interrupt aimed at the turn the user pressed Stop on.
+//
+// A Stop is aimed at the turn the user saw running, but it can land after that
+// turn ended and a later one started: a slow request, a retry, a second click.
+// Following "whatever runs now" would cancel work nobody asked to stop, so a
+// Stop for a turn that is no longer the running one is refused with
+// ErrNoActiveTurn, and one for a turn that already stopped answers nil without
+// reaching the provider. An empty expectedTurnID keeps the untargeted behaviour
+// for internal callers (handoffs, provider switches) that mean "the current turn".
+func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) error {
+	var aimed domain.ConversationTurn
+	if expectedTurnID != "" {
+		// Answer the common stale case before cancelling forks or withdrawing steers
+		// that belong to a later turn. The check is repeated under sendMu below.
+		var stopped bool
+		var err error
+		if aimed, stopped, err = c.stopTarget(ctx, expectedTurnID); err != nil || stopped {
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.interrupts++
 	if c.forkCancel != nil {
@@ -2769,8 +2929,12 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
 	// it so Stop does not wait for that steer to time out. Withdrawing also
 	// refuses later steers for the turn; a Stop that fails gives them back.
+	// A targeted Stop withdraws only from its own turn: if that turn ends and the
+	// next starts before this runs, the next turn's steers are not settled.
 	var restore func()
-	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+	if targeted, ok := c.conv.(ports.ChatTurnSteerWithdrawer); ok && expectedTurnID != "" {
+		restore = targeted.WithdrawPendingSteersFor(aimed.ProviderTurnID)
+	} else if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
 		restore = withdrawer.WithdrawPendingSteers()
 	}
 	restoreSteering := func() {
@@ -2785,9 +2949,32 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
 	c.sendMu.Lock()
+	var target domain.ConversationTurn
+	if expectedTurnID != "" {
+		// Read again now that dispatch is complete: no turn can start while sendMu
+		// is held, so a target still running here is the turn in flight, not one a
+		// later turn replaced.
+		var stopped bool
+		var err error
+		target, stopped, err = c.stopTarget(ctx, expectedTurnID)
+		if err != nil || stopped {
+			c.sendMu.Unlock()
+			restoreSteering()
+			return err
+		}
+	}
 	cutoff := c.now()
 	c.mu.Lock()
 	turn := c.pendingTurnID
+	if expectedTurnID != "" && target.State == domain.TurnStateQueued && target.ProviderTurnID != turn {
+		// A message still waiting in the queue is not the turn in flight. Stopping
+		// it must not interrupt the running turn or cancel the rest of the queue;
+		// the queued message has its own cancel.
+		c.mu.Unlock()
+		c.sendMu.Unlock()
+		restoreSteering()
+		return ErrNoActiveTurn
+	}
 	if turn != "" {
 		// Publish the queue cutoff before releasing sendMu. A completion can then
 		// win the provider race, but it cannot drain pre-Stop work as if Stop had
@@ -2810,6 +2997,17 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		// The list uses the snapshot's visibility and ordering rules, so its first
 		// row is the same running turn whose Working bar the user pressed Stop on.
 		providerTurnID := providerTurnIDs[0]
+		if expectedTurnID != "" {
+			// A targeted Stop settles only work that includes its own turn. If its
+			// turn is not among the visible running ones, the Working bar belongs to
+			// some other turn, and Stop must not reach it.
+			if target.ProviderTurnID == "" || !slices.Contains(providerTurnIDs, target.ProviderTurnID) {
+				c.sendMu.Unlock()
+				restoreSteering()
+				return ErrNoActiveTurn
+			}
+			providerTurnID = target.ProviderTurnID
+		}
 		if err := c.conv.Interrupt(ctx, providerTurnID); err != nil &&
 			!errors.Is(err, ports.ErrChatNoActiveTurn) {
 			c.log.Warn("provider interrupt during reconciliation failed",
@@ -2859,6 +3057,28 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		return fmt.Errorf("interrupt turn %s: %w", turn, err)
 	}
 	return nil
+}
+
+// stopTarget reads the turn a Stop was aimed at. stopped reports a turn that
+// already ended by being stopped, which answers a repeated Stop without reaching
+// the provider. A turn that ended any other way is ErrNoActiveTurn: there is
+// nothing left to stop, and the client should show the turn's real outcome.
+func (c *Controller) stopTarget(ctx context.Context, turnID string) (domain.ConversationTurn, bool, error) {
+	target, err := c.store.TurnByID(ctx, turnID)
+	if err != nil {
+		return domain.ConversationTurn{}, false, err
+	}
+	if target.ConversationID != c.conversation.ID {
+		return domain.ConversationTurn{}, false, domain.ErrNoConversationTurn
+	}
+	switch target.State {
+	case domain.TurnStateRunning, domain.TurnStateQueued:
+		return target, false, nil
+	case domain.TurnStateInterrupted, domain.TurnStateCancelled:
+		return target, true, nil
+	default:
+		return target, false, ErrNoActiveTurn
+	}
 }
 
 // reconcileDurableTurnsLocked settles work the controller can no longer cancel
@@ -3443,7 +3663,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if event.ProviderTurnID == "" || event.Text == "" {
 			return nil
 		}
-		return c.store.AppendImportedUserMessage(ctx, c.conversation.ID, event.ProviderTurnID,
+		err := c.store.AppendImportedUserMessage(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationMessage{
 				ID:              c.newID(),
 				Role:            domain.MessageRoleUser,
@@ -3452,6 +3672,18 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				ProviderItemID:  event.ProviderItemID,
 				ClientMessageID: event.ClientMessageID,
 			}, now)
+		if errors.Is(err, domain.ErrNoConversationTurn) {
+			// The turn's start was already archived under this replay identity by
+			// an earlier import that matched it to another AO turn. ACP agents
+			// without message ids (agy) number replay turns by position, and a
+			// later replay can match the same position differently. The earlier
+			// import already showed this prompt, so skip it: failing here would
+			// fail every resume of the session.
+			c.log.Warn("skipped imported user message: its provider turn was never recorded",
+				"session", c.sessionID, "providerTurn", event.ProviderTurnID, "event", event.ProviderEventID)
+			return nil
+		}
+		return err
 
 	case ports.ChatEventTurnCompleted:
 		message := ""
@@ -3702,20 +3934,26 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// row: after a restart the reclaim figures are gone from memory, and a
 		// conversation that silently lost half its history with nothing to mark where
 		// reads as if the agent simply forgot.
+		status := compactionStatus(event)
 		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
 				ID:     c.newID(),
 				Kind:   domain.ActivityKindSystem,
-				Status: domain.ActivityStatusCompleted,
+				Status: status,
 				// Falls back to a plain label rather than an empty row: a driver that
 				// reports a compaction without a summary still happened.
-				Summary: firstNonEmpty(event.Summary, "Compacted the conversation history"),
+				Summary: compactionSummary(event, status),
 				Detail:  compactionDetail(event),
 				// The provider's own item id, so a compaction replayed across a
-				// reconnect updates the existing row instead of adding a second.
+				// reconnect, or settling after it was reported running, updates the
+				// existing row instead of adding a second.
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
+		}
+		if status != domain.ActivityStatusCompleted {
+			// Running or failed: the history is still what it was.
+			return nil
 		}
 		return c.store.MarkCompacted(ctx, c.conversation.ID, now)
 
@@ -3889,6 +4127,10 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
 	case ports.ChatEventCompacted:
 		if event.ProviderConversationID != "" && event.ProviderConversationID != c.conv.ProviderConversationID() {
+			return
+		}
+		if compactionStatus(event) == domain.ActivityStatusRunning {
+			// Under way, not settled: sends stay queued behind it.
 			return
 		}
 		c.mu.Lock()
@@ -4122,7 +4364,15 @@ func (c *Controller) applyThreadState(
 	update ports.ChatThreadState,
 	now time.Time,
 ) error {
+	// A conversation outlives its provider thread. What another agent or an
+	// earlier thread reported is not merged into this thread's state. Read before
+	// taking c.mu: a driver may guard its handle with its own lock.
+	thread := c.providerConversationID()
 	c.mu.Lock()
+	if !c.threadState.AppliesTo(c.harness, thread) {
+		c.threadState = domain.ConversationThreadState{}
+	}
+	c.threadState.Harness, c.threadState.ProviderConversationID = c.harness, thread
 	if update.Status != "" {
 		c.threadState.Status = update.Status
 		// The flags belong to the status report that carried them: an active thread
@@ -4426,12 +4676,44 @@ func normalizeOrigin(origin domain.MessageOrigin) domain.MessageOrigin {
 // because the choice of kind is this projection's, not the provider's — and a
 // compaction rendered as a generic notice would lose the one thing that matters
 // about it: that the history above it is no longer what the agent sees.
+// compactionStatus is where a reported compaction stands. Drivers that only see
+// the finished compaction leave the status empty, which has always meant done.
+func compactionStatus(event ports.ChatEvent) domain.ActivityStatus {
+	switch event.ActivityStatus {
+	case domain.ActivityStatusRunning, domain.ActivityStatusFailed:
+		return event.ActivityStatus
+	default:
+		return domain.ActivityStatusCompleted
+	}
+}
+
+// compactionSummary is the row's one-line label. A failed compaction's Summary
+// is the provider's reason, which reads only after the label it explains.
+func compactionSummary(event ports.ChatEvent, status domain.ActivityStatus) string {
+	switch status {
+	case domain.ActivityStatusRunning:
+		return firstNonEmpty(event.Summary, "Compacting the conversation history")
+	case domain.ActivityStatusFailed:
+		if reason := strings.TrimSpace(event.Summary); reason != "" {
+			return "Could not compact the conversation history: " + reason
+		}
+		return "Could not compact the conversation history"
+	default:
+		return firstNonEmpty(event.Summary, "Compacted the conversation history")
+	}
+}
+
 func compactionDetail(event ports.ChatEvent) []byte {
 	merged := map[string]any{}
 	if len(event.Detail) > 0 {
 		_ = json.Unmarshal(event.Detail, &merged)
 	}
 	merged["event"] = "compaction"
+	if reason := strings.TrimSpace(event.Summary); compactionStatus(event) == domain.ActivityStatusFailed && reason != "" {
+		// The provider's reason, apart from the summary, so a client can show it
+		// under its own label.
+		merged["error"] = reason
+	}
 	encoded, err := json.Marshal(merged)
 	if err != nil {
 		return event.Detail

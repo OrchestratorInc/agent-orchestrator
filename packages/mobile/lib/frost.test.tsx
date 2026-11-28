@@ -12,8 +12,8 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("react-native-svg", () => ({ default: "Svg", Defs: "Defs", LinearGradient: "LinearGradient", Rect: "Rect", Stop: "Stop" }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ bgBase: "#bgBase" }) }));
 
-import { BOARD_BAR_HEIGHT, BOARD_BAR_MARGIN } from "./board-bar-layout";
-import { Frost, FROST_TAIL, frostStops, useTabBarFrost } from "./frost";
+import { BOARD_BAR_BOTTOM, BOARD_BAR_HEIGHT } from "./board-bar-layout";
+import { Frost, FROST_BAR, FROST_EDGE, FROST_TAIL, frostStops, TAB_BAR_TAIL, tabBarFrostStops, useTabBarFrost } from "./frost";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -24,11 +24,14 @@ afterEach(() => {
 });
 
 describe("frostStops", () => {
-	it("is solid through the bar and dissolves over the tail", () => {
+	it("stays translucent through the bar and dissolves over the tail", () => {
 		const stops = frostStops(104);
 		const bar = 104 / (104 + FROST_TAIL);
-		expect(stops[0]).toEqual([0, 1]);
-		expect(stops.find(([offset]) => offset === bar)?.[1]).toBe(1);
+		expect(stops[0]).toEqual([0, FROST_EDGE]);
+		expect(stops.find(([offset]) => offset === bar)?.[1]).toBe(FROST_BAR);
+		// The page stays faintly visible at the edge, and the bar's items stay legible over it.
+		expect(FROST_EDGE).toBeLessThan(1);
+		expect(FROST_BAR).toBeGreaterThanOrEqual(0.85);
 		expect(stops.at(-1)).toEqual([1, 0]);
 		// Never thickens on the way out, and never jumps back.
 		for (let index = 1; index < stops.length; index++) {
@@ -45,6 +48,23 @@ describe("Frost", () => {
 	});
 });
 
+describe("tabBarFrostStops", () => {
+	it("is a light wash, thinning across the bar, then easing out over a long tail", () => {
+		const stops = tabBarFrostStops(92);
+		const bar = 92 / (92 + TAB_BAR_TAIL);
+		expect(stops[0]).toEqual([0, 0.95]);
+		expect(stops[2]).toEqual([bar, 0.85]);
+		expect(stops.at(-1)).toEqual([1, 0]);
+		expect(stops.length).toBeGreaterThanOrEqual(12);
+		// Ever thinner, and gentle at both ends of the fade (smoothstep).
+		const fade = stops.slice(2);
+		for (let i = 1; i < fade.length; i++) expect(fade[i][1]).toBeLessThan(fade[i - 1][1]);
+		const steps = fade.slice(1).map(([, o], i) => fade[i][1] - o);
+		expect(steps[0]).toBeLessThan(steps[Math.floor(steps.length / 2)]);
+		expect(steps.at(-1)!).toBeLessThan(steps[Math.floor(steps.length / 2)]);
+	});
+});
+
 describe("useTabBarFrost", () => {
 	function renderHook() {
 		const ref = { current: undefined as unknown as ReturnType<typeof useTabBarFrost> };
@@ -56,10 +76,10 @@ describe("useTabBarFrost", () => {
 		return ref.current;
 	}
 
-	// The board bar floats its margin above the system navigation.
+	// The board bar floats just clear of the system navigation.
 	it("clears Android's board bar and the system navigation under it, and frosts both", () => {
 		const { inset, frost } = renderHook();
-		expect(inset).toBe(BOARD_BAR_HEIGHT + BOARD_BAR_MARGIN + 24);
+		expect(inset).toBe(BOARD_BAR_HEIGHT + BOARD_BAR_BOTTOM + 24);
 		expect(frost).not.toBeNull();
 	});
 

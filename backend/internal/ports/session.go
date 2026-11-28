@@ -65,6 +65,9 @@ type SpawnConfig struct {
 	// AgentAccountID is the provider account the agent runs under. Empty uses
 	// the provider's default account.
 	AgentAccountID string
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any
@@ -107,6 +110,16 @@ type SpawnConfig struct {
 	TaskPreparation domain.TaskPreparationToken
 	// Fork makes this spawn a copy of another session. Nil for ordinary spawns.
 	Fork *SpawnFork
+	// Transfer, when set, continues a session moved from another machine
+	// instead of starting a new conversation.
+	Transfer *SpawnTransfer
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction ("200k", "500k", "1m" or "off"), saved with its new
+	// conversation. They are chat settings, not launch options: a spawn that
+	// asks for a terminal (RequestedMode TUI) ignores them, and any other spawn
+	// is refused when the agent it launches cannot take them.
+	FastMode          bool
+	AutoCompactWindow string
 }
 
 // SpawnFork describes a fork of an existing session. The source's worktree and
@@ -122,6 +135,10 @@ type SpawnFork struct {
 	// KeepSeedRef marks a SeedRef the fork borrowed, such as a turn's saved
 	// rollback snapshot. It is applied but never deleted.
 	KeepSeedRef bool
+	// SeedDir, for a source in a plain folder with no git repository, is a
+	// copy of its files to move into the new workspace. StartPoint and
+	// SeedRef are then empty.
+	SeedDir string
 	// SourceTitle names the original in the fork's standing instructions.
 	SourceTitle string
 	// ArtifactsAsOf, when set, copies the original's artifacts as they were
@@ -167,12 +184,29 @@ type ForkTerminalLaunch struct {
 	AgentSessionID string
 }
 
+// SpawnTransfer is the moved state a spawn continues. Prompt is delivered as
+// the first new turn of the resumed conversation.
+type SpawnTransfer struct {
+	// NativeArchive is a nativetransfer archive of the agent's conversation.
+	NativeArchive string
+	// FallbackPrompt starts the agent on a new conversation when the moved
+	// one cannot be resumed here.
+	FallbackPrompt string
+	// SystemNote is added to the launch's system prompt: what the agent must
+	// know about the move, such as the WIP commit it made, without a turn
+	// being sent to the resumed conversation.
+	SystemNote string
+}
+
 // SpawnAttachment is a single file attached to a spawn request. Data holds the
-// already-decoded bytes; the manager derives the on-disk filename from the
-// MIME type.
+// already-decoded bytes of a small file sent inline; Upload instead names a
+// file streamed to disk first (attachmentstore.Store.Upload), which is how a
+// large file arrives. Exactly one is set. The manager derives the on-disk
+// filename from the MIME type.
 type SpawnAttachment struct {
 	// Ext is the file extension (including the leading dot, e.g. ".png")
 	// inferred from the attachment's declared MIME type, or ".bin" for unknown types.
-	Ext  string
-	Data []byte
+	Ext    string
+	Data   []byte
+	Upload string
 }

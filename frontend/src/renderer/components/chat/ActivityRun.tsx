@@ -14,7 +14,7 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
@@ -27,12 +27,12 @@ import {
 	isFailedCall,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { aoActionName, summarizeAOActions } from "./activity-action";
+import { aoActionName, isFailedSpawn, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
 import { activityCommandStep, activityToolStep, isExploratoryTool, type CommandStep } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
-	activities,
+	activities: recorded,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -42,6 +42,8 @@ export function ActivityRun({
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
+	// A failed spawn is one step: its call, with the daemon's record folded in.
+	const activities = useMemo(() => mergeFailedSpawns(recorded), [recorded]);
 	const [localOpen, setLocalOpen] = useState(false);
 	const open = disclosureKey && disclosureOverrides
 		? disclosureOverrides[disclosureKey] ?? false
@@ -112,7 +114,7 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{failed > 0 ? (
-					<span className="text-xs text-destructive">
+					<span className="text-xs text-muted-foreground">
 						{failed} failed
 					</span>
 				) : null}
@@ -155,7 +157,7 @@ export function ActivityRun({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pt-1">
+						<div className="chat-tree flex flex-col gap-1 pt-1">
 							{subgroups.length === 1
 								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
@@ -177,10 +179,14 @@ export function ActivityRun({
 	);
 }
 
-/** The calls that failed, kept on screen while the disclosure holding them is folded. */
+/**
+ * The calls that failed, kept on screen while the disclosure holding them is folded.
+ * A failed spawn that says why stays inside: its run sits in Worked for, the run's
+ * count says one failed, and the reply above says so.
+ */
 function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
 	const reducedMotion = useReducedMotion();
-	const failed = activities.filter(isFailedCall);
+	const failed = activities.filter((activity) => isFailedCall(activity) && !isFailedSpawn(activity));
 	return (
 		<AnimatePresence initial={false}>
 			{folded && failed.length > 0 ? (
@@ -340,7 +346,7 @@ function ActivitySubgroup({
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1">
+						<div className="chat-tree flex flex-col gap-1">
 							{renderActivityRows(activities, nodesByActivityID)}
 						</div>
 					</motion.div>
@@ -476,7 +482,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 						animate={{ height: "auto", opacity: 1 }}
 						exit={{ height: 0, opacity: 0 }}
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
-						className="border-t border-border/70"
+						className="chat-tree border-t border-border/70"
 					>
 					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} />)}
 					</motion.div>

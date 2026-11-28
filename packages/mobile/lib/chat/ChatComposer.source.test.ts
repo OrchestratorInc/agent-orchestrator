@@ -77,7 +77,7 @@ describe("chat composer pill", () => {
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
-		expect(composer).toContain("onChangeText={(value) => { latestText.current = value; setText(value); }}");
+		expect(composer).toContain("onChangeText={(value) => { watchFieldBriefly(); latestText.current = value; setText(value); }}");
 		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
@@ -128,7 +128,14 @@ describe("chat composer pill", () => {
 	// inset too low and then jumped into place at the end.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
 		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
+		expect(composer).toContain("const inset = restingInset - KEYBOARD_DOCK_GAP;");
+		expect(composer).toContain("if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };");
+		expect(composer).toContain("return { transform: [{ translateY: inset * keyboard.progress.value }] };");
+	});
+	// On Android the keyboard's last stretch passes behind the navigation bar;
+	// riding it there left the dock drifting down after the keys had gone.
+	it("rests on Android as soon as the keyboard passes behind the navigation bar", () => {
+		expect(composer).toContain('if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };');
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});
@@ -181,12 +188,13 @@ describe("collapsed and expanded composer", () => {
 });
 
 describe("composer chips", () => {
-	// The session's PR, what it changed, the context meter and the account's
+	// The session's PR, what it changed, its device, the context meter and the account's
 	// quota sit over the composer, open or not.
 	it("shows the session's state as chips that say where they lead", () => {
-		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter || quotaChip ?");
-		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
+		expect(composer).toContain("const chips = prChip || changes || device || contextMeter || quotaChip ?");
+		expect(composer).toContain(`accessibilityHint={prChip.rows.length > 1 ? "Lists this worker's pull requests" : "Opens the pull request review"} onPress={openPullRequests}`);
 		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		expect(composer).toContain('accessibilityHint="Opens the device screen" onPress={device.onOpen}');
 		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
 	});
 
@@ -199,7 +207,7 @@ describe("composer chips", () => {
 			return index;
 		};
 		const quota = at("{quotaChip ? <ComposerChip");
-		expect(quota).toBeLessThan(at("{activeReviewPR ? <ComposerChip"));
+		expect(quota).toBeLessThan(at("{prChip ? <ComposerChip"));
 		expect(quota).toBeLessThan(at("{changes ? <ComposerChip"));
 		expect(quota).toBeLessThan(at("{contextMeter ? <View"));
 	});

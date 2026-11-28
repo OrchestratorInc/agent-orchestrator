@@ -127,12 +127,6 @@ function sheet(overrides: Partial<ReviewActionsSheetProps> = {}): ReviewActionsS
 		onPolicyChange: vi.fn(),
 		externalReviewers: [{ id: "octocat", detail: "2 comments", busy: false }, { id: "hubot", detail: "1 comment", busy: true }],
 		onRerequest: vi.fn(),
-		feedback: [{
-			id: "unresolved",
-			title: "Unresolved comments",
-			footer: "Use ⋯ to open the exact GitHub file and line.",
-			items: [{ key: "c1", author: "octocat", meta: "GitHub · open", location: "src/a.ts:4", body: "Rename this.", bodyMissing: false, notInjected: true, sent: true, menuLabel: "Actions for octocat's comment", actions: [], working: false }],
-		}],
 		...overrides,
 	};
 }
@@ -167,7 +161,7 @@ describe("review actions sheet on Android", () => {
 	it("marks section titles as headers", async () => {
 		const root = await render(<ReviewActionsSheet {...sheet()} />);
 		const headers = root.findAll((node) => node.type === ("Text" as never) && node.props.accessibilityRole === "header");
-		expect(headers.map((node) => node.props.children)).toEqual(["Automation", "Orchestrator reviewer", "External reviewers", "Unresolved comments"]);
+		expect(headers.map((node) => node.props.children)).toEqual(["Automation", "Orchestrator reviewer", "External reviewers"]);
 	});
 
 	it("announces failures", async () => {
@@ -203,12 +197,10 @@ describe("review actions sheet on iOS", () => {
 		expect(onRerequest).toHaveBeenCalledWith("octocat");
 	});
 
-	it("lists feedback with its menu and whether it was sent", async () => {
+	// The PR's comments are on its page now; the sheet is the reviewer's settings.
+	it("lists no review comments", async () => {
 		const root = await render(<IOSReviewActionsSheet {...sheet()} />);
-		expect(root.findByType("ItemActionsPullDown" as never).props).toMatchObject({ accessibilityLabel: "Actions for octocat's comment", disabled: false });
-		const texts = root.findAllByType("SwiftText" as never).map((text) => text.props.children);
-		expect(texts).toEqual(expect.arrayContaining(["Rename this.", "Not automatically sent to the worker"]));
-		expect(root.findAll((node) => node.type === ("Label" as never) && node.props.title === "Sent to worker")).toHaveLength(1);
+		expect(root.findAll((node) => node.type === ("ItemActionsPullDown" as never))).toHaveLength(0);
 	});
 
 	it("reads each new failure aloud once", async () => {
@@ -216,5 +208,28 @@ describe("review actions sheet on iOS", () => {
 		expect(announce).toHaveBeenCalledWith("Could not load review actions.");
 		await act(async () => renderer!.update(<IOSReviewActionsSheet {...sheet({ alerts: ["Could not load review actions.", "Pull request not found."] })} />));
 		expect(announce.mock.calls.map((call) => call[0])).toEqual(["Could not load review actions.", "Pull request not found."]);
+	});
+});
+
+// Before the session's settings are read (or while the machine reconnects), the
+// reviewer row waits; "no reviewer agents" is only for a machine that has none.
+describe("the reviewer row before the settings are read", () => {
+	const none = "No reviewer agents are available. Install or sign in to an agent on desktop.";
+	const says = (root: Awaited<ReturnType<typeof render>>, text: string) => root.findAll((node) => node.props.children === text).length > 0;
+
+	it("shows a spinner on Android", async () => {
+		const root = await render(<ReviewActionsSheet {...sheet({ externalReviewers: [], policies: [], reviewersLoading: true })} />);
+		expect(says(root, none)).toBe(false);
+		expect(root.findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
+		await act(async () => renderer!.update(<ReviewActionsSheet {...sheet({ externalReviewers: [], policies: [] })} />));
+		expect(says(renderer!.root, none)).toBe(true);
+	});
+
+	it("shows a spinner on iOS", async () => {
+		const root = await render(<IOSReviewActionsSheet {...sheet({ externalReviewers: [], policies: [], reviewersLoading: true })} />);
+		expect(says(root, none)).toBe(false);
+		expect(root.findAllByType("ProgressView" as never)).toHaveLength(1);
+		await act(async () => renderer!.update(<IOSReviewActionsSheet {...sheet({ externalReviewers: [], policies: [] })} />));
+		expect(says(renderer!.root, none)).toBe(true);
 	});
 });

@@ -11,6 +11,8 @@ const terminal = readFileSync(new URL("./session/TerminalSessionScreen.tsx", imp
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 // Where the page and the sheet reach a daemon or Orchestrator Cloud.
 const backend = source("./reviewBackend.ts");
+// The PR page's comment list, with each comment's actions.
+const comments = source("./ReviewCommentsSection.tsx");
 
 describe("reviewer control integration", () => {
 	it("keeps the project-default override separate from the effective reviewer", () => {
@@ -31,8 +33,9 @@ describe("reviewer control integration", () => {
 		expect(actions).toContain("request === modelRequest.current");
 	});
 
-	it("confirms model and mode changes while a review is running", () => {
-		expect(actions).toContain("confirmReviewerChange(reviewerOverride, { ...reviewerConfig, [key]: value })");
+	it("confirms model, mode and effort changes while a review is running", () => {
+		expect(actions).toContain("confirmReviewerChange(reviewerOverride, reviewerModelPick(modelState, value))");
+		expect(actions).toContain("confirmReviewerChange(reviewerOverride, reviewerEffortPick(modelState, level))");
 	});
 
 	it("does not warn or save when the selected reviewer settings are unchanged", () => {
@@ -40,9 +43,9 @@ describe("reviewer control integration", () => {
 	});
 
 	it("renders every reviewer through the shared harness logo registry", () => {
-		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
-		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
-		expect(picker).toContain("const source = logoFor(harness);");
+		expect(pickerIOS).toContain('import { HarnessImage } from "./spawn-composer-controls.ios"');
+		expect(pickerIOS).toContain("<HarnessImage harness={agent.id} />");
+		expect(picker).toContain("const source = logoFor(harness, scheme);");
 	});
 
 	it("keeps Android review actions scrolling inside the sheet", () => {
@@ -50,9 +53,11 @@ describe("reviewer control integration", () => {
 		expect(sheetAndroid).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
 	});
 
-	it("picks the reviewer and model from native iOS menu pickers", () => {
+	it("picks the reviewer, model and effort from native iOS menu pickers", () => {
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');
-		expect(pickerIOS).toContain('accessibilityIdentifier("review-model")');
+		expect(pickerIOS).toContain('tag="review-model"');
+		expect(pickerIOS).toContain('tag="review-effort"');
+		expect(pickerIOS).toContain("accessibilityIdentifier(identifier)");
 	});
 
 	it("only offers reviewers that can run, like the spawn sheet", () => {
@@ -69,11 +74,11 @@ describe("reviewer control integration", () => {
 
 	it("does not let auto review lose its persistent reviewer", () => {
 		expect(detail).toContain("!data.reviewerHandleId || autoReviewEnabled");
-		expect(detail).toContain("const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled");
+		expect(detail).toContain('...(controls.stop && !autoReviewEnabled ? [{ id: "stop", label: "Stop reviewer session"');
 	});
 
 	it("checks fresh review state before changing reviewer, model, or mode", () => {
-		expect(actions).toContain("const latest = await backend.reviews(sessionId)");
+		expect(actions).toContain("const latest = await live.reviews(sessionId)");
 		expect(actions).toContain("latest.reviews.some((item) => item.status === \"running\")");
 		expect(actions).toContain("confirmReviewerChange(reviewerOverride");
 		expect(actions).not.toContain('reviewerSwitchWarning(running === "true")');
@@ -84,28 +89,28 @@ describe("reviewer control integration", () => {
 		expect(actions).not.toContain("?? prs[0]");
 	});
 
-	it("only offers finished review findings to the worker", () => {
-		expect(detail).toContain("...(reviewRunSendable(run) && !sent ? [{ id: \"send\", label: \"Send to worker\"");
+	it("only offers open review comments with words to the worker", () => {
+		expect(comments).toContain("onSend={commentCanSend(comment) ? () => void sendOne(comment) : undefined}");
+		expect(comments).toContain('...(onSend && !sent ? [{ id: "send", label: "Send to agent"');
 	});
 
 	it("never presents the in-app browser on top of the actions sheet", () => {
-		const calls = actions.match(/openGitHub\([^)]*\)/g) ?? [];
-		expect(calls.length).toBeGreaterThan(0);
-		for (const call of calls) expect(call).toContain("{ fromSheet: true }");
+		// The sheet holds the reviewer's settings now; whatever link it opens must say it comes from a sheet.
+		for (const call of actions.match(/openGitHub\([^)]*\)/g) ?? []) expect(call).toContain("{ fromSheet: true }");
 	});
 
 	it("keeps per-item actions in a desktop-style menu", () => {
-		expect(actions).toContain("menuLabel: `Actions for ${reviewerId}'s comment`,");
-		expect(actions).toContain('{ id: "resolve", label: "Resolve"');
-		expect(detail).toContain("<ItemActionsMenu accessibilityLabel={`Actions for the ${reviewVerdictLabel(run).toLowerCase()} review`}");
+		expect(comments).toContain("<ItemActionsMenu accessibilityLabel={`Actions for ${name}'s comment`}");
+		expect(comments).toContain('{ id: "resolve", label: "Resolve"');
+		expect(detail).toContain('<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={reviewerActions}');
 	});
 
 	it("chooses Open, Restore, or Stop from what is actually available", () => {
 		expect(detail).toContain("const daemonControls = reviewerControls(data, review, sessionId);");
 		// Cloud reviewers run as conversations, with no session to restore or stop.
-		expect(detail).toContain('const controls = backend?.cloud ? { open: daemonControls.open === "chat" ? "chat" as const : undefined, restore: false, stop: false } : daemonControls;');
-		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <ReviewActionButton label=\"Open\"");
-		expect(detail).toContain(": controls.restore ? <ReviewActionButton label=\"Restore\"");
+		expect(detail).toContain('const controls = isCloudHost(currentHostId) ? { open: daemonControls.open === "chat" ? "chat" as const : undefined, restore: false, stop: false } : daemonControls;');
+		expect(detail).toContain('...(controls.open ? [{ id: "open", label: controls.open === "chat" ? "Open reviewer chat" : "Open reviewer terminal"');
+		expect(detail).toContain('...(controls.restore ? [{ id: "restore", label: "Restore reviewer"');
 		expect(detail).toContain("Push a new commit to run another review.");
 	});
 
@@ -121,7 +126,7 @@ describe("reviewer control integration", () => {
 	// opened the reviewer instead of the menu.
 	it("lays the reviewer's button and menu over its row instead of nesting them", () => {
 		const start = detail.indexOf("onPress={openReviewer} android_ripple=");
-		const end = detail.indexOf('<ListSectionHeader label="Orchestrator review" />');
+		const end = detail.indexOf("{closedNote ?");
 		expect(start).toBeGreaterThanOrEqual(0);
 		expect(end).toBeGreaterThan(start);
 		const row = detail.slice(start, end);
@@ -134,7 +139,7 @@ describe("reviewer control integration", () => {
 	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
 		expect(source("./PRCard.tsx")).toContain("openPage(reviewRouteForPR(session.id, pr, hostId))");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
-		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
+		expect(source("./chat/ChatSessionScreen.tsx")).toContain("onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}");
 		expect(source("../app/notifications/index.tsx")).toContain('action.kind === "review") openPage(');
 		expect(source("./PushManager.tsx")).toContain('if (target === "review") openPage(destination as Href);');
 		expect(detail).toContain("openPage(destination);");
@@ -151,7 +156,7 @@ describe("reviewer control integration", () => {
 
 	it("merges like desktop: only when ready, fenced to the head commit, after confirmation", () => {
 		expect(detail).toContain("const merge = pr ? mergeReadiness(pr) : undefined;");
-		expect(detail).toContain("await backend.merge(sessionId, pr)");
+		expect(detail).toContain("await live.merge(sessionId, pr)");
 		expect(backend).toContain("merge: (_sessionId, pr) => mergeSessionPR(config, pr),");
 		expect(backend).toContain("await client.mergePullRequest(orgId, sessionId, pr.number, pr.url, pr.headSha);");
 		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");
@@ -161,11 +166,26 @@ describe("reviewer control integration", () => {
 	// mapping turns those into copy that says what to do, as other screens do.
 	it("shows failures through userFacingError, never a raw error message", () => {
 		for (const screen of [detail, actions]) {
-			expect(screen).toContain('import { userFacingError } from "../../lib/connectionError";');
+			expect(screen).toMatch(/import \{[^}]*\buserFacingError\b[^}]*\} from "\.\.\/\.\.\/lib\/connectionError";/);
 			expect(screen).not.toMatch(/\.message\s*:/);
 		}
 		expect(detail).toContain('setError(userFacingError(value, "Could not load this review."))');
 		expect(actions).toContain('setError(userFacingError(cause, "Could not load review actions."))');
+	});
+
+	// A reviewer asked again from a row is not offered again until the provider's next read.
+	it("asks a reviewer again once from the comment list", () => {
+		expect(comments).toContain("setAsked((current) => new Set(current).add(rerequestKey(reviewerId)));");
+		expect(comments).toContain("!asked.has(rerequestKey(reviewerId))");
+	});
+
+	// GitHubComment's links read the chat's session directory; without its provider
+	// the PR page threw on its first comment (the render tests stand GitHubComment in).
+	it("renders comment bodies inside the provider their links read", () => {
+		const open = comments.indexOf("<WorkerSessionsProvider>");
+		expect(open).toBeGreaterThan(-1);
+		expect(open).toBeLessThan(comments.indexOf("<ReviewCommentRow"));
+		expect(comments.indexOf("</WorkerSessionsProvider>")).toBeGreaterThan(comments.lastIndexOf("<ReviewCommentRow"));
 	});
 
 	it("keys automatic-review dismissal to the stable run id", () => {

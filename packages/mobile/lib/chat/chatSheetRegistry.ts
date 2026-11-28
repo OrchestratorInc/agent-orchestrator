@@ -1,4 +1,3 @@
-import type { ComposerPickerCatalog } from "./composerSuggestions";
 import type { ConversationMenuAction, ConversationMenuGroup } from "./conversationMenuModel";
 import type { PickerOption } from "../NativePickerList";
 import type { ConversationSnapshot } from "./types";
@@ -28,13 +27,16 @@ export type AccountPickerEntry = {
 	subtitle: string;
 	options: PickerOption[];
 	selected: string;
+	/** Calls back at once with the latest rows and pick, then on every change (usage read again, an account signed out). */
+	subscribe?(listener: (state: AccountPickerState) => void): () => void;
 	onSelect(accountId: string): void;
 };
+
+export type AccountPickerState = { options: PickerOption[]; selected: string };
 
 export type ChatSheetEntry =
 	| ConversationActionsEntry
 	| AccountPickerEntry
-	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
 	| ConversationUsageEntry;
 
 const entries = new Map<string, ChatSheetEntry>();
@@ -54,7 +56,6 @@ export function chatSheetRoute(entry: ChatSheetEntry) {
 	const sheetKey = parkChatSheet(entry);
 	const pathname = {
 		"conversation-usage": "/sheets/conversation-usage",
-		"composer-picker": "/sheets/composer-picker",
 		"account-picker": "/sheets/account",
 		// Outside sheets/ for its own options: iOS bars it, the other sheets do not.
 		"conversation-actions": "/conversation-actions",

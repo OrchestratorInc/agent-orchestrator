@@ -1,11 +1,10 @@
 /**
- * How full the conversation is, and whether the account is near a quota wall.
+ * How full the conversation is.
  *
  * This replaces a bare token total in the chat composer. A total on its own is a
- * number with no scale: it cannot answer either question a user actually has,
- * which is "when will this conversation stop working" and "why did that turn fail
- * for a reason unrelated to what I asked". Both failures are otherwise
- * undiagnosable from the UI, which is what makes them worth a permanent readout
+ * number with no scale: it cannot answer the question a user actually has, which
+ * is "when will this conversation stop working". That failure is otherwise
+ * undiagnosable from the UI, which is what makes it worth a permanent readout
  * rather than an error message after the fact.
  *
  * State is encoded in form as well as in number: a fill that grows, and a colour
@@ -13,12 +12,14 @@
  * required, which matters for something glanced at rather than studied.
  */
 
+import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
+import { Button } from "../ui/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger, useHoverCardDismiss } from "../ui/hover-card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
+import type { ConversationUsage } from "../../types/conversation";
 
 /**
  * Where the fill changes colour.
@@ -32,17 +33,6 @@ import type { ConversationRateLimits, ConversationUsage } from "../../types/conv
 const CONTEXT_WARN = 0.7;
 const CONTEXT_CRITICAL = 0.9;
 
-/**
- * Quota thresholds, deliberately tighter than the context ones.
- *
- * A full context degrades gracefully: history gets compacted and the conversation
- * continues. Exhausted quota does not degrade at all, it just stops, and it stops
- * for a window measured in days on the accounts AO sees. So the warning arrives
- * earlier, while the user still has the option of pacing themselves.
- */
-const QUOTA_WARN = 75;
-const QUOTA_CRITICAL = 90;
-
 type Severity = "normal" | "warn" | "critical";
 
 function contextSeverity(fraction: number): Severity {
@@ -51,77 +41,42 @@ function contextSeverity(fraction: number): Severity {
 	return "normal";
 }
 
-function quotaSeverity(percent: number): Severity {
-	if (percent >= QUOTA_CRITICAL) return "critical";
-	if (percent >= QUOTA_WARN) return "warn";
-	return "normal";
-}
-
 /**
  * Normal usage is informational rather than session activity, so it uses AO's
- * logo blue. Warning and critical retain the established status colours: amber
- * means "a human should look", and red means the next turn is at risk.
+ * logo blue. Warning is the caution amber, distinct from the red that means the
+ * next turn is at risk.
  */
 const RING: Record<Severity, string> = {
 	normal: "text-logo-accent",
-	warn: "text-status-needs-you",
+	warn: "text-status-in-review",
 	critical: "text-status-exited",
 };
 
-/**
- * A remaining duration as the largest useful unit. The provider's windows are
- * measured in days, so minute precision on a four-day reset would be noise.
- */
-function formatResetIn(seconds: number): string {
-	if (seconds <= 0) return "now";
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${Math.max(1, minutes)}m`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.floor(hours / 24)}d`;
-}
-
-type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
-
-/**
- * The tighter of the provider's two windows, or undefined when it reported
- * neither. Negative is the daemon's "not reported" signal and must not be drawn:
- * a meter running backwards is worse than no meter.
- */
-function worstWindow(
-	limits: ConversationRateLimits,
-): QuotaWindow | undefined {
-	// Primary is the short (session) window, secondary the weekly one. Both are
-	// already consumed percentages, so they are drawn as-is (never inverted).
-	const windows: QuotaWindow[] = [
-		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds, kind: "session" as const },
-		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds, kind: "weekly" as const },
-	].filter((w) => typeof w.percent === "number" && Number.isFinite(w.percent) && w.percent >= 0);
-	if (windows.length === 0) return undefined;
-	return windows.reduce((worst, w) => (w.percent > worst.percent ? w : worst));
-}
-
 /* -------------------------------------------------------------------------- */
+
+/** Compacting from the meter: the action, and why it cannot run right now, if it cannot. */
+type CompactControl = {
+	onCompact: () => void | Promise<unknown>;
+	blockedReason?: string;
+};
 
 export function ContextMeter({
 	usage,
-	rateLimits,
 	compactsAt,
+	onCompact,
+	compactBlockedReason,
 	className,
 }: {
 	usage?: ConversationUsage;
-	rateLimits?: ConversationRateLimits;
 	/** The size at which the agent compacts on its own, such as Claude Code's "200k". */
 	compactsAt?: string;
+	/** Compacts the conversation now. Set, the readout opens a card with a button for it. */
+	onCompact?: () => void | Promise<unknown>;
+	/** Why compacting cannot run right now (a turn is running, one is already compacting). */
+	compactBlockedReason?: string;
 	className?: string;
 }) {
-	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
-	const hasContext = usage !== undefined && (usage.contextUsed > 0 || usage.contextWindow > 0);
-	// Only surfaced once it is actionable. A quota readout that is always on screen
-	// becomes furniture, and this one has to be noticed on the day it matters.
-	const showQuota = quota !== undefined && quota.percent >= QUOTA_WARN;
-
-	if (!hasContext && !showQuota) return null;
+	if (usage === undefined || (usage.contextUsed <= 0 && usage.contextWindow <= 0)) return null;
 
 	return (
 		// Scoped provider, as IntakeFields does: this component is rendered in surfaces
@@ -129,18 +84,19 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
-				{usage && hasContext ? <ContextReadout usage={usage} compactsAt={compactsAt} /> : null}
-				{showQuota && quota ? <QuotaWarning quota={quota} limits={rateLimits} /> : null}
+				<ContextReadout
+					usage={usage}
+					compactsAt={compactsAt}
+					compact={onCompact ? { onCompact, blockedReason: compactBlockedReason } : undefined}
+				/>
 			</div>
 		</TooltipProvider>
 	);
 }
 
-function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compactsAt?: string }) {
+function ContextReadout({ usage, compactsAt, compact }: { usage: ConversationUsage; compactsAt?: string; compact?: CompactControl }) {
 	const compactsLine = compactsAt ? <p>Compacts on its own at {compactsAt.toUpperCase()}</p> : null;
 	const { contextUsed, contextWindow } = usage;
-	// A border separates the tooltip without the layered shadow's hover halos.
-	const tooltipSurface = "border border-(--color-border-overlay) shadow-none";
 
 	// Failed turns can report 0 used with a valid model limit. That draws as an
 	// empty 0% ring until the next turn reports a real reading. Without a window
@@ -148,8 +104,9 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 	if (contextWindow <= 0) {
 		const compactUsed = formatTokenCount(contextUsed).replace(/ tok$/, "");
 		return (
-			<Tooltip>
-				<TooltipTrigger asChild>
+			<ReadoutCard
+				compact={compact}
+				trigger={
 					<span
 						role="img"
 						aria-label={`Context ${contextUsed.toLocaleString()} / unknown`}
@@ -162,13 +119,12 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 						</svg>
 						<span aria-hidden="true" className="absolute text-micro">?</span>
 					</span>
-				</TooltipTrigger>
-				<TooltipContent className={tooltipSurface}>
-					<p className="font-medium">Context {compactUsed} / unknown</p>
-					<p>The provider has not reported a context window. Conversation fullness is unknown.</p>
-					{compactsLine}
-				</TooltipContent>
-			</Tooltip>
+				}
+			>
+				<p className="font-medium">Context {compactUsed} / unknown</p>
+				<p>The provider has not reported a context window. Conversation fullness is unknown.</p>
+				{compactsLine}
+			</ReadoutCard>
 		);
 	}
 
@@ -181,8 +137,9 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 	const compactUsage = `${formatTokenCount(contextUsed).replace(/ tok$/, "")} / ${formatTokenCount(contextWindow).replace(/ tok$/, "")}`;
 
 	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
+		<ReadoutCard
+			compact={compact}
+			trigger={
 				<div
 					className={cn("inline-flex size-7 shrink-0 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", RING[severity])}
 					data-context-meter=""
@@ -198,7 +155,8 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 					aria-valuetext={`${exactUsage} tokens (${percent}%)`}
 				>
 					<svg aria-hidden="true" className="size-5 -rotate-90" viewBox="0 0 24 24">
-						<circle cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3" className="text-border" />
+						{/* The whole track in a faint tint of the fill, so a partial ring reads as a gauge, not a spinner. */}
+						<circle cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.22" />
 						<circle
 							cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3"
 							strokeLinecap="round" pathLength="100"
@@ -209,63 +167,158 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 						/>
 					</svg>
 				</div>
-			</TooltipTrigger>
-			<TooltipContent className={tooltipSurface}>
-				<p className="font-medium">Context window</p>
-				<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
-				{compactsLine}
-				{severity !== "normal" ? (
-					<p className="mt-1">
-						{severity === "critical"
-							? "The next turn may not fit. Compacting or starting a new conversation will reclaim room."
-							: "Room is running low. A long task may not fit."}
-					</p>
-				) : null}
-			</TooltipContent>
-		</Tooltip>
+			}
+		>
+			<p className="font-medium">Context window</p>
+			<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
+			{compactsLine}
+			{severity !== "normal" ? (
+				<p className="mt-1">
+					{severity === "critical"
+						? "The next turn may not fit. Compacting or starting a new conversation will reclaim room."
+						: "Room is running low. A long task may not fit."}
+				</p>
+			) : null}
+		</ReadoutCard>
 	);
 }
 
-function QuotaWarning({
-	quota,
-	limits,
-}: {
-	quota: QuotaWindow;
-	limits?: ConversationRateLimits;
-}) {
-	const { t } = useTranslation();
-	const severity = quotaSeverity(quota.percent);
-	const percent = Math.min(100, Math.round(quota.percent));
-	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatResetIn(quota.resetsIn) : undefined;
-	const session = quota.kind === "session";
-
+/**
+ * The details on hover. A tooltip when there is nothing to do; a card when the conversation can be
+ * compacted from here, since a tooltip cannot hold a button. The card opens on hover or focus, as
+ * the tooltip does, and stays open while the pointer is on it.
+ */
+function ReadoutCard({ trigger, compact, children }: { trigger: ReactElement; compact?: CompactControl; children: ReactNode }) {
+	// Controlled, so a key on the meter can open it without waiting out the hover delay.
+	const [open, setOpen] = useState(false);
+	if (!compact) {
+		return (
+			<Tooltip>
+				<TooltipTrigger asChild>{trigger}</TooltipTrigger>
+				<TooltipContent className={READOUT_SURFACE}>{children}</TooltipContent>
+			</Tooltip>
+		);
+	}
 	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span
-					className={cn(
-						"flex items-center gap-1 rounded border px-1.5 py-0.5 text-caption tabular-nums",
-						severity === "critical"
-							? "border-status-exited/40 text-status-exited"
-							: "border-status-needs-you/40 text-status-needs-you",
-					)}
-				>
-					<AlertTriangle aria-hidden="true" className="size-3" />
-					{t(session ? "chat.quota.badgeSession" : "chat.quota.badgeWeekly", { percent })}
-				</span>
-			</TooltipTrigger>
-			<TooltipContent>
-				<p>
-					{t(session ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent })}
-					{limits?.planLabel ? ` ${t("chat.quota.plan", { plan: limits.planLabel })}` : ""}
-					{resets ? ` ${t("chat.quota.resetsIn", { time: resets })}` : ""}
-				</p>
-				{/* Named explicitly because this is the failure a user cannot otherwise
-				    explain: the turn was fine, the account was not. */}
-				<p className="mt-1">
-					{t(severity === "critical" ? "chat.quota.critical" : "chat.quota.warn")}
-				</p>
-			</TooltipContent>
-		</Tooltip>
+		<HoverCard openDelay={150} open={open} onOpenChange={setOpen}>
+			<CompactCard trigger={trigger} compact={compact} onShow={() => setOpen(true)}>
+				{children}
+			</CompactCard>
+		</HoverCard>
+	);
+}
+
+// A border separates it without the layered shadow's hover halos.
+const READOUT_SURFACE = "border border-(--color-border-overlay) shadow-none";
+const ENTER_CARD_KEYS = new Set(["Enter", " ", "ArrowDown"]);
+
+/**
+ * Radix keeps a hover card's content out of the tab order, so the keyboard reaches the compact
+ * button from the meter: Enter, Space or Down moves focus onto it, and Escape or Tab closes the
+ * card back to the meter.
+ */
+function CompactCard({ trigger, compact, onShow, children }: { trigger: ReactElement; compact: CompactControl; onShow: () => void; children: ReactNode }) {
+	const close = useHoverCardDismiss();
+	const triggerRef = useRef<HTMLElement | null>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const buttonRef = useRef<HTMLButtonElement | null>(null);
+	// Set when a key asks for the button before the card shows: the button takes focus as it mounts.
+	const focusOnMount = useRef(false);
+	// Whether the keyboard brought focus into the card, so it goes back to the meter when the card closes.
+	const enteredByKey = useRef(false);
+	const setTrigger = useCallback((node: HTMLElement | null) => {
+		triggerRef.current = node;
+	}, []);
+	const setButton = useCallback((node: HTMLButtonElement | null) => {
+		buttonRef.current = node;
+		if (!node || !focusOnMount.current) return;
+		focusOnMount.current = false;
+		node.focus();
+	}, []);
+	const leave = () => {
+		close();
+		if (enteredByKey.current) triggerRef.current?.focus();
+		enteredByKey.current = false;
+	};
+	return (
+		<>
+			<HoverCardTrigger
+				asChild
+				ref={setTrigger}
+				onKeyDown={(event) => {
+					if (!ENTER_CARD_KEYS.has(event.key)) return;
+					event.preventDefault();
+					enteredByKey.current = true;
+					if (buttonRef.current) return buttonRef.current.focus();
+					focusOnMount.current = true;
+					onShow();
+				}}
+				// Focus moving onto the card's button leaves the card open.
+				onBlur={(event) => {
+					if (event.relatedTarget instanceof Node && contentRef.current?.contains(event.relatedTarget)) event.preventDefault();
+				}}
+			>
+				{trigger}
+			</HoverCardTrigger>
+			<HoverCardContent
+				ref={contentRef}
+				side="top"
+				align="center"
+				animation="enter"
+				className={cn("w-fit max-w-72 rounded-md px-3 py-1.5 text-xs", READOUT_SURFACE)}
+				onEscapeKeyDown={(event) => {
+					event.preventDefault();
+					leave();
+				}}
+				onKeyDown={(event) => {
+					if (event.key !== "Tab") return;
+					event.preventDefault();
+					leave();
+				}}
+			>
+				{children}
+				<CompactButton {...compact} buttonRef={setButton} onCompacted={leave} />
+			</HoverCardContent>
+		</>
+	);
+}
+
+function CompactButton({
+	onCompact,
+	blockedReason,
+	buttonRef,
+	onCompacted,
+}: CompactControl & { buttonRef: (node: HTMLButtonElement | null) => void; onCompacted: () => void }) {
+	const { t } = useTranslation();
+	const [pending, setPending] = useState(false);
+	const [failed, setFailed] = useState(false);
+	return (
+		<div className="mt-2 flex flex-col items-start gap-1">
+			<Button
+				ref={buttonRef}
+				size="xs"
+				variant="secondary"
+				disabled={Boolean(blockedReason) || pending}
+				onClick={async () => {
+					setPending(true);
+					setFailed(false);
+					try {
+						await onCompact();
+						onCompacted();
+					} catch {
+						setFailed(true);
+					} finally {
+						setPending(false);
+					}
+				}}
+			>
+				{pending ? t("contextMeter.compacting") : t("contextMeter.compactNow")}
+			</Button>
+			{blockedReason ? (
+				<p className="text-muted-foreground">{blockedReason}</p>
+			) : failed ? (
+				<p role="alert" className="text-destructive">{t("contextMeter.compactFailed")}</p>
+			) : null}
+		</div>
 	);
 }

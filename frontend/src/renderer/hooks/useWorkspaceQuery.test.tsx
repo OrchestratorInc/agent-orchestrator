@@ -301,6 +301,7 @@ describe("useWorkspaceQuery", () => {
 							displayName: "fix-bug",
 							issueId: "github:acme/project-one#42",
 							harness: "claude-code",
+							roleAgent: "codex",
 							reviewerHarness: "agy",
 							branch: "qa/modal-worker",
 							status: "mergeable",
@@ -351,6 +352,7 @@ describe("useWorkspaceQuery", () => {
 			title: "fix-bug",
 			issueId: "github:acme/project-one#42",
 			provider: "claude-code",
+			roleAgent: "codex",
 			reviewerHarness: "agy",
 			branch: "qa/modal-worker",
 			status: "mergeable",
@@ -366,6 +368,7 @@ describe("useWorkspaceQuery", () => {
 			id: "sess-2",
 			title: "sess-2",
 			provider: "codex",
+			roleAgent: undefined,
 			reviewerHarness: undefined,
 			status: "unknown",
 			branch: undefined,
@@ -879,6 +882,56 @@ describe("useWorkspaceQuery", () => {
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
 		expect(listProjectsMock).not.toHaveBeenCalled();
+	});
+
+	it("redraws a component only for the fields it reads, not for every refetch", async () => {
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", updatedAt: "2026-01-01T00:00:00Z" }] } },
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		const shared = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		let dataRenders = 0;
+		const dataReader = renderHook(() => {
+			dataRenders += 1;
+			return useWorkspaceQuery().data;
+		}, { wrapper: shared });
+		const fetchingSeen: boolean[] = [];
+		renderHook(() => {
+			const fetching = useWorkspaceQuery().isFetching;
+			fetchingSeen.push(fetching);
+			return fetching;
+		}, { wrapper: shared });
+		await waitFor(() => expect(dataReader.result.current).toHaveLength(1));
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
+		const settledRenders = dataRenders;
+
+		// Hold the refetch open: observers are notified on a later timer, so a
+		// response that settles in microtasks could end before isFetching is drawn.
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const respond = getMock.getMockImplementation()!;
+		getMock.mockImplementation(async (url: string, ...rest: unknown[]) => {
+			if (url === "/api/v1/sessions") await held;
+			return respond(url, ...rest);
+		});
+		let refetch!: Promise<void>;
+		act(() => {
+			refetch = queryClient.refetchQueries({ queryKey: workspaceQueryKey });
+		});
+		// A reader of isFetching still sees the refetch start and end.
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(true));
+		await act(async () => {
+			release();
+			await refetch;
+		});
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
+
+		expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions")).toHaveLength(2);
+		// Same lists back: the data reader is not drawn again.
+		expect(dataRenders).toBe(settledRenders);
 	});
 
 	it("selects only attention-worthy worker sessions for the always-mounted tray", async () => {

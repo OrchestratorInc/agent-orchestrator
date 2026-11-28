@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
@@ -15,6 +16,7 @@ import { Button } from "../ui/button";
 import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
+import { DataRetentionSection } from "./DataRetentionSection";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
@@ -22,7 +24,11 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { IS_DEV } from "../../lib/is-dev";
+import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
+import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
+import { githubAuthRequirementQueryOptions, systemRequirementsQueryKey } from "../../hooks/useSystemRequirementsGate";
+import { useSettings, useUpdateCommitAttribution, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateSkillSharing, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -137,6 +143,36 @@ function VersionRefreshRow() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Every agent can use the user's skills, whichever agent they were written for.
+ * Daemon-owned, because the daemon prepares them at launch. Hidden on a daemon
+ * that predates the setting, where the switch would do nothing.
+ */
+function SkillSharingRow() {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateSkillSharing();
+	if (settings?.skillSharing === undefined) return null;
+	return (
+		<SettingsRow
+			className="rounded-none"
+			label={t("settings.skillSharing.label")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.skillSharing.saveFailed") : t("settings.skillSharing.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.skillSharing.label")}
+				checked={settings.skillSharing}
+				disabled={saving}
+				onCheckedChange={update}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -387,6 +423,7 @@ export function GeneralSettingsSection({
 		{ value: "de", label: t("settings.language.de") },
 		{ value: "pt-BR", label: t("settings.language.ptBR") },
 		{ value: "ru", label: t("settings.language.ru") },
+		{ value: "tr", label: t("settings.language.tr") },
 	] satisfies SettingsOption<AppLocale>[];
 
 	return (
@@ -459,6 +496,7 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				<VersionRefreshRow />
+				<SkillSharingRow />
 				<SessionRetentionRow />
 				<TerminalShellRows />
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
@@ -496,6 +534,8 @@ export function GeneralSettingsSection({
 
 			<DefaultCloudSandboxSection />
 
+			<DataRetentionSection />
+
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 				<AnalyticsRow />
@@ -513,10 +553,14 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
-				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
+				{developerMode && <NewDesktopUiRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
+				{developerMode && <CommitAttributionRow />}
+				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
+				{IS_DEV && developerMode && <SimulateNewMachineRow />}
+				{IS_DEV && developerMode && <ReplayOnboardingRow />}
 			</SettingsSection>
 		</>
 	);
@@ -606,16 +650,40 @@ function DiagnosticsRow() {
 }
 
 /**
- * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw, and "Add to side chat".
+ * Developer Mode-only beta: credit Orchestrator on new sessions' commits and
+ * PRs. Daemon-owned, because the daemon installs the commit hook at spawn.
  */
-function SideChatsRow() {
+function CommitAttributionRow() {
 	const { t } = useTranslation();
-	const sideChats = useUiStore((state) => state.sideChats);
-	const setSideChats = useUiStore((state) => state.setSideChats);
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateCommitAttribution();
 	return (
-		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
-			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		<SettingsRow
+			label={t("settings.commitAttribution")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.commitAttributionSaveFailed") : t("settings.commitAttributionHint")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.commitAttribution")}
+				checked={settings?.commitAttribution ?? false}
+				disabled={saving || !settings}
+				onCheckedChange={update}
+			/>
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode preview, off by default: Interface v2. Off is the current UI. */
+function NewDesktopUiRow() {
+	const { t } = useTranslation();
+	const newDesktopUi = useUiStore((state) => state.newDesktopUi);
+	const setNewDesktopUi = useUiStore((state) => state.setNewDesktopUi);
+	return (
+		<SettingsRow label={t("settings.newDesktopUi")} description={t("settings.newDesktopUiHint")}>
+			<Switch aria-label={t("settings.newDesktopUi")} checked={newDesktopUi} onCheckedChange={setNewDesktopUi} />
 		</SettingsRow>
 	);
 }
@@ -655,6 +723,49 @@ function ChromeAgentsRow() {
 		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
 			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
 				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
+		</SettingsRow>
+	);
+}
+
+/** Dev builds with Developer Mode only: answer as a newly installed machine
+ * (fresh-machine-sim), to walk first-run onboarding on a set-up machine. */
+function SimulateNewMachineRow() {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [on, setOn] = useState(freshMachineSimActive);
+	const change = (next: boolean) => {
+		setFreshMachineSim(next);
+		setOn(next);
+		// Drop what was read before, so every check is asked again under the new answers.
+		for (const queryKey of [systemRequirementsQueryKey, agentReadinessQueryKey, githubAuthRequirementQueryOptions.queryKey]) {
+			void queryClient.resetQueries({ queryKey });
+		}
+	};
+	return (
+		<SettingsRow label={t("settings.simulateNewMachine.label")} description={t("settings.simulateNewMachine.hint")}>
+			<Switch aria-label={t("settings.simulateNewMachine.label")} checked={on} onCheckedChange={change} />
+		</SettingsRow>
+	);
+}
+
+function ReplayOnboardingRow() {
+	const { t } = useTranslation();
+	const closeSettings = useUiStore((state) => state.closeSettings);
+	const requestOnboardingReplay = useUiStore((state) => state.requestOnboardingReplay);
+	return (
+		<SettingsRow label={t("settings.replayOnboarding.label")} description={t("settings.replayOnboarding.hint")}>
+			<Button
+				onClick={() => {
+					closeSettings();
+					requestOnboardingReplay();
+				}}
+				size="sm"
+				type="button"
+				variant="ghost"
+			>
+				{t("settings.replayOnboarding.open")}
 				<ArrowRight aria-hidden="true" className="size-icon-sm" />
 			</Button>
 		</SettingsRow>

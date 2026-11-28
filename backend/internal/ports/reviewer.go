@@ -44,6 +44,26 @@ const (
 	ReviewCancelInput ReviewCancelMode = "input"
 )
 
+// ReviewerAuthRequiredError reports that a reviewer harness is installed but
+// not signed in, with Guidance telling the user how to sign in. It matches
+// ErrChatAuthRequired, and Guidance is written for users so API responses may
+// show it as-is; other ErrChatAuthRequired errors may wrap provider internals
+// and keep a fixed message.
+type ReviewerAuthRequiredError struct {
+	Guidance string
+}
+
+// Error returns the sign-in guidance, or the generic auth message without it.
+func (e *ReviewerAuthRequiredError) Error() string {
+	if e.Guidance == "" {
+		return ErrChatAuthRequired.Error()
+	}
+	return e.Guidance
+}
+
+// Unwrap lets errors.Is match ErrChatAuthRequired.
+func (e *ReviewerAuthRequiredError) Unwrap() error { return ErrChatAuthRequired }
+
 // ReviewCancelSpec is the adapter-selected cancellation behavior for a running
 // reviewer.
 type ReviewCancelSpec struct {
@@ -67,6 +87,14 @@ type ReviewerRestorer interface {
 	ReviewRestoreCommand(ctx context.Context, inv ReviewInvocation) (cmd ReviewCommandSpec, ok bool, err error)
 }
 
+// ReviewerActivityHooks is implemented by reviewer adapters whose terminal
+// reviewer reliably reports active and idle through AO's activity hooks. The
+// review run lifecycle applies its first-activity and idle rules only to
+// these; every other reviewer is judged by liveness and its maximum duration.
+type ReviewerActivityHooks interface {
+	ReviewActivityHooks() bool
+}
+
 // ReviewerReusePolicy is implemented by interactive reviewer adapters that
 // need a fresh TUI for each task because request-scoped context is fixed at
 // process launch. Returning false forces a fresh launch for every pass.
@@ -80,6 +108,20 @@ type ReviewerReusePolicy interface {
 type ReviewerPromptReadinessProvider interface {
 	ReviewPromptReadinessHints(ctx context.Context) (PromptReadinessHints, error)
 }
+
+// ReviewSubmitHeredocDelimiter is the quoted here-document delimiter the review
+// prompt uses to pass review text to the GitHub review POST and to
+// `ao review submit`. Reviewer permission rules match commands ending in it.
+const ReviewSubmitHeredocDelimiter = "AO_REVIEW_EOF"
+
+// ReviewEndpointPattern matches the path used to create a GitHub pull request review.
+const ReviewEndpointPattern = `repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/\d+/reviews`
+
+// ReviewPostCommandPattern matches a GitHub review POST with its body on stdin.
+const ReviewPostCommandPattern = `gh api --method POST ` + ReviewEndpointPattern + ` --input - --jq '[.]id'`
+
+// ReviewRunArgsPattern matches the arguments for recording one review from stdin.
+const ReviewRunArgsPattern = `--run [A-Za-z0-9_.:-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -`
 
 // ReviewInvocation describes one review pass for a reviewer to act on. All ids
 // the reviewer needs are passed explicitly here (and embedded in the prompt /
@@ -107,6 +149,10 @@ type ReviewInvocation struct {
 	ReviewIndex int
 	// Config carries the reviewer's resolved agent configuration override.
 	Config domain.AgentConfig
+	// ProjectEnv is the project's configured environment, which the launcher
+	// merges under the reviewer command's own Env for the pane. Adapters that
+	// probe the CLI before launch use it so the probe sees what the pane sees.
+	ProjectEnv map[string]string
 	// WorkspacePath is the worker's checkout the reviewer reads.
 	WorkspacePath string
 	// DataDir is AO's owned state root. Reviewer prelaunch hooks may use it for

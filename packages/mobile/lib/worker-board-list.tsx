@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps } from "react-native";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps, type ViewToken } from "react-native";
+import { BoardRowScope, createVisibleRows, VisibleRowsContext } from "./boardRowVisibility";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import { SafeAreaListener } from "react-native-safe-area-context";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./agentsView";
 import type { DashboardSession } from "./api";
 import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolProps } from "./AppSymbol.types";
 import { ArchivedWorkerRow } from "./archived-worker-row";
 import { useArchivedSessions, type ArchiveSource } from "./archive/useArchivedSessions";
 import { haptics } from "./haptics";
@@ -25,6 +27,8 @@ import { usePressFeedback } from "./pressFeedback";
 import { refreshControlColors } from "./refreshControlColors";
 import { Spinner } from "./Spinner";
 import { useApp } from "./store";
+import type { MachineFreshness } from "./machineFreshness";
+import { useMachineFreshness } from "./useMachineFreshness";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -91,6 +95,9 @@ const sessionRow = (session: DashboardSession): BoardRow =>
  */
 export const BOARD_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 8, windowSize: 7 } as const;
 
+/** A row any part of which shows counts as on screen, so its lattice is never seen still. */
+const BOARD_ROW_VIEWABILITY = { itemVisiblePercentThreshold: 1, minimumViewTime: 0 } as const;
+
 /**
  * The Workers board's grouped list: Pinned, Needs you, Recent, and a
  * collapsible Archive, with every row action wired.
@@ -156,14 +163,16 @@ function WorkerBoard({
 	/** The list's scroll, for what floats over it (the Android FAB's fold). */
 	onScroll?: ScrollViewProps["onScroll"];
 	/**
-	 * Changes when the *set* of workers changes wholesale — a different project
-	 * filter, or a search. The list is remounted on a new value.
+	 * Changes when the *set* of workers changes wholesale: another machine or
+	 * project filter. The board starts over on a new value (at its top, in the
+	 * current order, Archive folded, no swipe or rename left open), but a row
+	 * on both boards stays as it is.
 	 *
-	 * Swapping the filter in place left the board showing two lists at once:
-	 * recycled cells of the old grouping drawn under the new data, the empty state
-	 * on top of rows that were still on screen. A remount has no old cells to
-	 * recycle, and no row-to-row layout animation to run for a change that is not
-	 * a row moving.
+	 * The whole list used to be remounted instead, so that recycled cells and
+	 * row exit animations of the old board could not draw under the new one.
+	 * Neither exists now (a plain FlatList, and rows with no layout
+	 * animations), and building every row again made choosing a machine take
+	 * seconds on an Android phone.
 	 */
 	identityKey?: string;
 	/**
@@ -189,6 +198,8 @@ function WorkerBoard({
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projects, allProjects, currentHostId, connection, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	// Each machine's dot beside its name on the rows; only drawn where rows name their machine.
+	const freshness = useMachineFreshness();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	// The rows are memoised on their session, so a live text-size change would
 	// leave them drawn at the old size's measurements, cut into fragments,
@@ -260,6 +271,18 @@ function WorkerBoard({
 	);
 	const archiveStatusShown = pagedArchive.loading || pagedArchive.error !== null || pagedArchive.hasMore;
 	const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => snapshotOrder(freshLive, hostedSessionKey));
+	// A new board starts over in the render that shows it, so its first frame is
+	// already in its own order, without the last board's held news.
+	const [shownIdentity, setShownIdentity] = useState(identityKey);
+	const boardMoved = shownIdentity !== identityKey;
+	if (boardMoved) {
+		setShownIdentity(identityKey);
+		setSnapshot(snapshotOrder(freshLive, hostedSessionKey));
+		setArchiveOpen(initialArchiveOpen);
+		setCollapsedSections({});
+		setRenamingWorkerId(undefined);
+		setActiveSwipeId(undefined);
+	}
 	const freshLiveRef = useRef(freshLive);
 	freshLiveRef.current = freshLive;
 	// The list's own handle when the page passes none (a project's page passes
@@ -267,6 +290,18 @@ function WorkerBoard({
 	// re-sorts the rows under the reader.
 	const ownListRef = useRef<FlatList<BoardRow>>(null);
 	const list = listRef ?? ownListRef;
+	// The rows on screen, so a working row's lattice animates only while it is
+	// seen (see boardRowVisibility). Both stable, as FlatList requires.
+	const [visibleRows] = useState(createVisibleRows);
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<BoardRow>[] }) => {
+		visibleRows.set(new Set(viewableItems.map((token) => token.key)));
+	}).current;
+	// Tabs keep the board mounted while another screen shows, so its lattices
+	// also rest while the board is out of focus, and resume on its return.
+	useFocusEffect(useCallback(() => {
+		visibleRows.focus(true);
+		return () => visibleRows.focus(false);
+	}, [visibleRows]));
 	// Where the list's top rests: iOS insets a list under a clear header by the
 	// bars' share of its safe area (`contentInsetAdjustmentBehavior`), so the top
 	// is at minus that, and offset 0 leaves the first rows under the bar. Measured
@@ -320,6 +355,16 @@ function WorkerBoard({
 		const top = restingTop.current;
 		list.current?.scrollToOffset({ offset: top ? -top : 0, animated: false });
 	}, [latestRequest, list]);
+	// A new board opens at its top with no rail left open on a row it kept.
+	const shownBoard = useRef(identityKey);
+	useLayoutEffect(() => {
+		if (shownBoard.current === identityKey) return;
+		shownBoard.current = identityKey;
+		activeSwipeRef.current?.close();
+		activeSwipeRef.current = undefined;
+		const top = restingTop.current;
+		list.current?.scrollToOffset({ offset: top ? -top : 0, animated: false });
+	}, [identityKey, list]);
 	// Opening the board, coming back to the app, or a different set of workers
 	// is looking again, so each re-sorts. Leaving it counts too: tabs keep
 	// visited screens mounted, so unmounting alone does not say the user moved on.
@@ -334,7 +379,7 @@ function WorkerBoard({
 		});
 		return () => sub.remove();
 	}, [resort]);
-	useEffect(resort, [resort, identityKey]);
+	useEffect(resort, [resort]);
 	// Pulling to refresh is asking for the latest order too.
 	const refreshAndResort = useCallback(async () => {
 		setArchiveRefresh((value) => value + 1);
@@ -534,18 +579,19 @@ function WorkerBoard({
 		if (item.kind === "archive") return <ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />;
 		if (item.kind === "archive-status") return <ArchiveStatusRow loading={pagedArchive.loading} error={pagedArchive.error}
 			hasMore={pagedArchive.hasMore} onRetry={pagedArchive.retry} onLoadMore={pagedArchive.loadMore} />;
-		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
+		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open} bare icon={SECTION_ICONS[item.key.replace("header:", "")]}
 			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
 		if (item.kind === "archived") return <ArchivedWorkerRow session={item.session} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			restoring={restoringKey === item.key} restoreDisabled={restoringKey !== undefined}
 			offline={machineOffline(item.session)} restoreError={restoreErrors[item.key]} onRestore={restoreArchived} showMachine={showMachine} />;
-		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
+		return <BoardRowScope rowKey={item.key}><BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
-			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine} />;
+			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine}
+			freshness={freshness.get(sessionHostId(item.session) ?? currentHostId ?? "")} /></BoardRowScope>;
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
-		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline, freshness]);
 
 	// An empty board's message is centred in what the bars leave of the page.
 	// Grown to the list's frame, as `flexGrow` grows it, an iOS list inset for
@@ -565,7 +611,9 @@ function WorkerBoard({
 	// jumped it as the bar's height changed during the pull.
 	const spinnerOffset = Platform.OS === "android" ? overlayTopInset : undefined;
 	const showsEmpty = listData.length === 0 || archiveOnly;
-	useEffect(() => { onEmptyChange?.(showsEmpty); }, [onEmptyChange, showsEmpty]);
+	// Before paint, so a page that hides its own New task while the list is
+	// empty settles on the first frame instead of the one after.
+	useLayoutEffect(() => { onEmptyChange?.(showsEmpty); }, [onEmptyChange, showsEmpty]);
 	// The Archive footer is sized the same way, so it rests just above the tab bar.
 	const contentContainerStyle = insetsForBars && visibleHeight && showsEmpty
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
@@ -584,12 +632,10 @@ function WorkerBoard({
 
 	return (
 		<View style={styles.listWrap}>
-			{/* A filter/search scope is a wholesale replacement, not rows moving
-			    inside one board. Key this boundary and suppress both sides of that
-			    replacement so outgoing native cells cannot overlap the new list or
-			    retain invisible height. Same-board row changes still animate below.
-			    A new text size rebuilds it the same way, so every row is measured again. */}
-			<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>
+			{/* A new text size rebuilds the list, so every row is measured again.
+			    Nothing enters or leaves with an animation as it does. */}
+			<VisibleRowsContext.Provider value={visibleRows}>
+			<LayoutAnimationConfig key={fontScale} skipEntering skipExiting>
 				<FlatList
 					ref={list}
 					data={listData}
@@ -613,8 +659,11 @@ function WorkerBoard({
 					onEndReachedThreshold={1.5}
 					onScroll={handleScroll}
 					scrollEventThrottle={16}
+					viewabilityConfig={BOARD_ROW_VIEWABILITY}
+					onViewableItemsChanged={onViewableItemsChanged}
 				/>
 			</LayoutAnimationConfig>
+			</VisibleRowsContext.Provider>
 			{/* After the list, never before it: iOS's large title follows the page's
 			    first subviews down to a scroll view, and a view ahead of the list
 			    left the title expanded over the rows as they scrolled. */}
@@ -625,9 +674,19 @@ function WorkerBoard({
 	);
 }
 
+/** Each board section's glyph, before its label. */
+const SECTION_ICONS: Record<string, AppSymbolProps["name"]> = {
+	pinned: "pin",
+	needs_you: "notifications",
+	recent: "history",
+	search: "search",
+};
+
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
 	showMachine: boolean;
+	/** The row's machine's freshness: dims the row once it can't be reached. */
+	freshness?: MachineFreshness;
 	actions: {
 		renameStart(id: string | undefined): void;
 		rename(id: string, title: string, hostId?: string): Promise<void>;
@@ -638,10 +697,11 @@ type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 };
 
 // Bind once per changed session, not once per whole-board context publication.
-const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...props }: BoundWorkerRowProps) {
+const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, freshness, ...props }: BoundWorkerRowProps) {
 	const session = props.session;
 	const rowKey = hostedSessionKey(session);
-	const machine = useMemo(() => showMachine ? sessionMachineIdentity(session) : undefined, [session, showMachine]);
+	// Freshness shows once, on the machine's filter chip; rows only dim when it can't be reached.
+	const machine = useMemo(() => (showMachine ? sessionMachineIdentity(session) : undefined), [session, showMachine]);
 	const handlers = useMemo(() => ({
 		onRenameStart: () => actions.renameStart(rowKey),
 		onRenameCancel: () => actions.renameStart(undefined),
@@ -651,7 +711,7 @@ const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...p
 		onResume: () => { void actions.recover(session, "resume"); },
 		onRestore: () => { void actions.recover(session, "restore"); },
 	}), [actions, session, rowKey]);
-	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} {...handlers} />;
+	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} unreachable={freshness === "unreachable"} {...handlers} />;
 });
 
 /**

@@ -183,9 +183,8 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
-	it("offers Open usage only in Developer Mode", () => {
-		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(false);
-		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
+	it("offers Open usage without Developer Mode", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(true);
 	});
 
 	it("offers Archived sessions for the current project only when it has archived sessions", () => {
@@ -346,7 +345,7 @@ const reviewRun = (prNumber: number): ReviewRun => ({
 	prUrl: `https://github.com/o/r/pull/${prNumber}`,
 	reviewId: `review-${prNumber}`,
 	sessionId: "w-pr",
-	status: "delivered",
+	status: "completed",
 	targetSha: "sha",
 	verdict: "approved",
 });
@@ -1026,6 +1025,17 @@ describe("project actions", () => {
 			"project-action:remove",
 		]);
 		expect(byId(items).get("project-action:archive")?.state).toBe("1");
+	});
+
+	it("names Cloud project removal as a delete, like the sidebar", () => {
+		const cloud = { ...workspaces()[0]!, kind: CLOUD_PROJECT_KIND } as WorkspaceSummary;
+		expect(byId(buildProjectActions(cloud, ctx)).get("project-action:remove")?.title).toBe("Delete project");
+		expect(byId(buildProjectActions(workspaces()[0]!, ctx)).get("project-action:remove")?.title).toBe("Remove project");
+	});
+
+	it("leaves out remove for a project shared from another organization", () => {
+		const shared = { ...workspaces()[0]!, kind: CLOUD_PROJECT_KIND, shared: { byName: "Acme" } } as WorkspaceSummary;
+		expect(buildProjectActions(shared, ctx).map((item) => item.id)).not.toContain("project-action:remove");
 	});
 
 	it("leaves out board, settings and remove for Scratchpad, and pin when it can't pin", () => {

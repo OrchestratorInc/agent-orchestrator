@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatDraftScopeSessionId } from "../lib/chat-drafts";
+import { INLINE_ATTACHMENT_BYTES, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isCloudAttachmentReference } from "../lib/cloud-attachment-reference";
 
-// Client-side mirror of the backend spawn caps in
-// backend/internal/httpd/controllers/sessions.go (maxAttachments /
-// maxAttachmentBytes / maxAttachmentsBytes). Enforced here too so the user gets
-// inline feedback at paste/drop time instead of a late rejection after submit.
+// Client-side mirror of the backend count cap (maxAttachments in
+// backend/internal/httpd/controllers/sessions.go), so the user hears at
+// paste/drop time instead of after submit. Files have no size cap: one too
+// large to inline is streamed to the daemon from disk (lib/attachment-uploads).
 export const MAX_ATTACHMENTS = 8;
-export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
-export const MAX_ATTACHMENTS_BYTES = 100 * 1024 * 1024;
 
 const mb = (bytes: number) => Math.round(bytes / (1024 * 1024));
 
@@ -22,22 +21,37 @@ export type FileAttachment = {
 	bytes: number;
 	/** File name for display. */
 	name: string;
-	/** data: URL used to render the thumbnail preview (for images only). */
+	/**
+	 * URL used to render the thumbnail preview (for images only): a data: URL of
+	 * the bytes read, or, for an image too large to read, an object URL of the
+	 * file on disk.
+	 */
 	dataUrl?: string;
-	/** Base64 payload without the "data:...;base64," prefix, for upload. */
+	/**
+	 * Base64 payload without the "data:...;base64," prefix, for upload. Only a
+	 * file up to INLINE_ATTACHMENT_BYTES (or one bound for AO Cloud) is read; a
+	 * larger one keeps just `file`, which is streamed from disk when it is sent.
+	 */
 	data?: string;
 	/** Durable worktree-relative path, present only after daemon staging succeeds. */
 	stagedPath?: string;
-	/** The picked file, kept in memory only, so a sent message can show it at once. */
+	/** The picked file, a handle on disk rather than its bytes: shown at once in a sent message, and uploaded when it has no `data`. */
 	file?: File;
 };
 
-/** Attachment payload shape accepted by the spawn API. */
-export type FileAttachmentPayload = {
-	mimeType: string;
-	data: string;
-	name?: string;
-};
+/**
+ * Attachment payload shape accepted by the spawn API: `data` inline, or, for a
+ * file too large to inline, `data` empty and `file` to upload first
+ * (toWireAttachments).
+ */
+export type FileAttachmentPayload = OutgoingAttachment;
+
+/** The outgoing form of an attachment that has its bytes inline or on disk. */
+export function attachmentPayload({ mimeType, data, name, file }: Pick<FileAttachment, "mimeType" | "data" | "file"> & { name?: string }): FileAttachmentPayload[] {
+	if (data) return [{ mimeType, data, ...(name ? { name } : {}) }];
+	if (file) return [{ mimeType, data: "", file, ...(name ? { name } : {}) }];
+	return [];
+}
 
 export type FileAttachmentOptions = {
 	/** Previously staged descriptors restored for this owning surface. */
@@ -58,11 +72,16 @@ export type FileAttachmentOptions = {
 	prepareEach?: boolean;
 	/** Called after an accepted add, removal, or clear. */
 	onAttachmentsChange?: (attachments: FileAttachment[]) => void;
-	/** The largest file accepted; the daemon's MAX_ATTACHMENT_BYTES when absent (AO Cloud takes less). */
+	/**
+	 * The largest file accepted, for a destination with its own limit (AO Cloud
+	 * says how large one upload may be). Such files are read inline. Absent, any
+	 * size is accepted.
+	 */
 	maxAttachmentBytes?: number;
 };
 
-type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
+/** A file still being read or staged. Its type is known from the start, so its placeholder can take the shape its tile will. */
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name" | "mimeType">;
 
 type SharedAttachmentUpdate = {
 	pending: number;
@@ -138,14 +157,15 @@ export type PendingFileAttachmentCapture = {
 };
 
 function sharedAttachmentSnapshot(attachments: FileAttachment[]): FileAttachment[] {
-	return attachments.map(({ id, mimeType, bytes, name, stagedPath, data, dataUrl }) => ({
+	return attachments.map(({ id, mimeType, bytes, name, stagedPath, data, dataUrl, file }) => ({
 		id,
 		mimeType,
 		bytes,
 		name,
-		// Unstaged files have no durable copy. Keep their bytes in memory for retry.
-		// A cloud file's only local preview is its bytes, so it keeps its dataUrl.
-		...(stagedPath ? { stagedPath, ...(isCloudAttachmentReference(stagedPath) ? { dataUrl } : {}) } : { data, dataUrl }),
+		// Unstaged files have no durable copy. Keep their bytes, or the handle on
+		// disk of one too large to read, for retry. A cloud file's only local
+		// preview is its bytes, so it keeps its dataUrl.
+		...(stagedPath ? { stagedPath, ...(isCloudAttachmentReference(stagedPath) ? { dataUrl } : {}) } : { data, dataUrl, ...(data ? {} : { file }) }),
 	}));
 }
 
@@ -322,6 +342,14 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "
 export const isSupportedImageAttachment = (type: string) =>
 	SUPPORTED_IMAGE_TYPES.has(type.toLowerCase().trim());
 
+/**
+ * A thumbnail URL for an image too large to read. It names the file on disk
+ * rather than holding its bytes, so it is not revoked: it costs a handle, and
+ * the attachment may be shown again after a remount.
+ */
+const fileObjectUrl = (file: File): string | undefined =>
+	typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+
 const readFileAsBase64 = (file: File): Promise<{ dataUrl: string; data: string }> =>
 	new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -343,9 +371,10 @@ const readFileAsBase64 = (file: File): Promise<{ dataUrl: string; data: string }
 
 /**
  * useFileAttachments stages files pasted, dropped, or picked into a brief and
- * exposes them as upload-ready payloads. Count and size caps (mirroring the backend)
- * are enforced here, and rejections / unreadable files surface through `error` for
- * inline feedback.
+ * exposes them as upload-ready payloads. The count cap (mirroring the backend)
+ * is enforced here; files have no size cap unless the destination sets one.
+ * Rejections / unreadable files surface through `error` for inline feedback,
+ * until the next attachment action, a typed key (dismissError), or a send.
  *
  * Supports all file types except SVG (blocked for security). Images show thumbnails,
  * other files show a generic file icon.
@@ -357,7 +386,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		prepareAttachments,
 		prepareEach = false,
 		onAttachmentsChange,
-		maxAttachmentBytes = MAX_ATTACHMENT_BYTES,
+		maxAttachmentBytes,
 	} = options;
 	const [attachments, setAttachments] = useState<FileAttachment[]>(() => initialAttachments);
 	const [error, setError] = useState<string | null>(null);
@@ -431,15 +460,14 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		);
 
 		// Check metadata before each read so rejected files never enter JS memory.
-		// Reserve budget only after a successful read: a later small file can still
-		// fit if an earlier read fails.
+		// Only a small file is read; a large one stays a handle on disk and is
+		// streamed to the daemon when it is sent.
 		const pendingReads = (async () => {
-			const results: Array<{ file: File; result: { dataUrl: string; data: string } }> = [];
-			let freshBytes = 0;
+			const results: Array<{ file: File; result?: { dataUrl: string; data: string } }> = [];
 			for (const file of valid) {
 				if (generationRef.current !== generation ||
 					(initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork))) break;
-				if (file.size > maxAttachmentBytes) {
+				if (maxAttachmentBytes !== undefined && file.size > maxAttachmentBytes) {
 					errors.add(`Each file must be under ${mb(maxAttachmentBytes)} MB.`);
 					continue;
 				}
@@ -447,9 +475,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 					errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
 					break;
 				}
-				const total = attachmentsRef.current.reduce((sum, attachment) => sum + attachment.bytes, freshBytes);
-				if (total + file.size > MAX_ATTACHMENTS_BYTES) {
-					errors.add(`Attachments must total under ${mb(MAX_ATTACHMENTS_BYTES)} MB.`);
+				if (maxAttachmentBytes === undefined && file.size > INLINE_ATTACHMENT_BYTES) {
+					results.push({ file });
 					continue;
 				}
 				const result = await readFileAsBase64(file).catch(() => null);
@@ -458,7 +485,6 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 					continue;
 				}
 				results.push({ file, result });
-				freshBytes += file.size;
 			}
 			return results;
 		})();
@@ -477,30 +503,21 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				mimeType: file.type || "application/octet-stream",
 				bytes: file.size,
 				name: file.name,
-				dataUrl: isImage ? result.dataUrl : undefined,
-				data: result.data,
+				dataUrl: isImage ? result?.dataUrl ?? fileObjectUrl(file) : undefined,
+				data: result?.data,
 				file,
 			});
 		}
 
 		const accepted = [...attachmentsRef.current];
 		const acceptedFresh: FileAttachment[] = [];
-		let total = accepted.reduce((sum, a) => sum + a.bytes, 0);
 		for (const a of fresh) {
 			if (accepted.length >= MAX_ATTACHMENTS) {
 				errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
 				break;
 			}
-			if (total + a.bytes > MAX_ATTACHMENTS_BYTES) {
-				// Only this file is refused: the remaining budget cannot absorb it,
-				// but a later file in the same batch still can. Aborting here (break)
-				// would silently drop every smaller file staged after it.
-				errors.add(`Attachments must total under ${mb(MAX_ATTACHMENTS_BYTES)} MB.`);
-				continue;
-			}
 			accepted.push(a);
 			acceptedFresh.push(a);
-			total += a.bytes;
 		}
 		let added: FileAttachment[] = [];
 		// Append to the live list, read after any wait: a removal that happened
@@ -577,7 +594,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	}, [initialKey, maxAttachmentBytes, onAttachmentsChange, prepareAttachments, prepareEach]);
 
 	/** Resolves with the attachments this batch actually added, staged when staging is on. */
-	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {
+	const addFiles = useCallback((files: Iterable<File>, ids?: ReadonlyMap<File, string>): Promise<FileAttachment[]> => {
 		// Serialize batches. Two paste/drop events can arrive before React publishes
 		// `preparing`; processing both against the same attachment snapshot could
 		// otherwise exceed count/byte caps or overwrite one batch with the other.
@@ -585,7 +602,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
-		const pending = batch.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+		const pending = batch.map((file) => ({ id: ids?.get(file) ?? crypto.randomUUID(), name: file.name, mimeType: file.type }));
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
 		const entries = batch.map((file, index) => ({ file, id: pending[index]!.id }));
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;
@@ -618,6 +635,17 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	}, [initialKey, processFiles]);
 
 	/**
+	 * Clear the notice about files that were not attached. Their files are gone,
+	 * so it would otherwise stay under the composer until the next attachment.
+	 */
+	const dismissError = useCallback(() => {
+		setError(null);
+		if (initialKey && sharedAttachmentEntries.get(initialKey)?.error) {
+			notifySharedAttachmentEntry(initialKey, { error: null }, listenerTokenRef.current);
+		}
+	}, [initialKey]);
+
+	/**
 	 * Remove a file that is still being read or uploaded: its upload is
 	 * cancelled, its chip goes at once, and nothing waits on it any more.
 	 */
@@ -625,7 +653,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		pendingFileControllers.get(id)?.abort();
 		if (initialKey) removeSharedPendingFile(initialKey, id, true);
 		else setPendingAttachments((current) => current.filter((file) => file.id !== id));
-	}, [initialKey]);
+		dismissError();
+	}, [dismissError, initialKey]);
 
 	const remove = useCallback((id: string) => {
 		const next = attachmentsRef.current.filter((a) => a.id !== id);
@@ -674,9 +703,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 
 	const toPayload = useCallback(
 		(): FileAttachmentPayload[] =>
-			attachments.flatMap(({ mimeType, data }) =>
-				data ? [{ mimeType, data }] : [],
-			),
+			attachments.flatMap(({ mimeType, data, file }) => attachmentPayload({ mimeType, data, file })),
 		[attachments],
 	);
 
@@ -689,9 +716,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		while (pendingReadsRef.current.size > 0) {
 			await Promise.allSettled(Array.from(pendingReadsRef.current));
 		}
-		return attachmentsRef.current.flatMap(({ mimeType, data }) =>
-			data ? [{ mimeType, data }] : [],
-		);
+		return attachmentsRef.current.flatMap(({ mimeType, data, file }) => attachmentPayload({ mimeType, data, file }));
 	}, []);
 	// Read from the same ref as toSettledPayload so a submit resumed after FileReader
 	// completion can cache staged paths without waiting for another React render.
@@ -712,6 +737,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		addFiles,
 		remove,
 		cancelPending,
+		dismissError,
 		clear,
 		reconcilePersistedAttachments,
 		getAttachments: () => attachmentsRef.current,

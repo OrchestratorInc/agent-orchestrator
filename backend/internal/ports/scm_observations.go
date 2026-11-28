@@ -157,6 +157,14 @@ type SCMPRObservation struct {
 	HeadRepo string
 	// BaseRepo is the provider's current full name of the base repository.
 	BaseRepo string
+	// HeadFromFork is true when the head branch lives in another repository
+	// than the base, so its name says nothing about the base's branches.
+	// HeadIsDefaultBranch is true when the head is the repository's default
+	// branch, as in a main -> release sync PR. A provider that cannot tell
+	// leaves them false. Both are omitted from the metadata hash when false,
+	// so adding them did not change the hash of an ordinary PR.
+	HeadFromFork        bool `json:",omitempty"`
+	HeadIsDefaultBranch bool `json:",omitempty"`
 	// TargetBranch is the PR base/target branch name.
 	TargetBranch string
 	// HeadSHA is the current head commit SHA for the PR.
@@ -187,6 +195,10 @@ type SCMPRObservation struct {
 	ProviderMergeStateStatus string
 	// HTMLURL is the provider browser URL; it usually matches URL.
 	HTMLURL string
+	// MergeQueueRequired says the base branch merges through a merge queue.
+	MergeQueueRequired bool
+	// MergeQueue is the PR's merge queue entry, nil while it isn't queued.
+	MergeQueue *domain.MergeQueueEntry
 
 	// CreatedAtProvider is the provider's PR creation timestamp.
 	CreatedAtProvider time.Time

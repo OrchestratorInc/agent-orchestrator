@@ -1,7 +1,7 @@
 ---
 name: using-ao
-description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers importing existing agent sessions."
-trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers first-time setup and importing existing agent sessions."
+trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog
@@ -11,7 +11,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 | Command | What it does | When to use | Details |
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
-| `session` | Manage agent sessions (list, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
+| `session` | Manage agent sessions (list, interrupt, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
 | `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
 | `pr` | Merge a PR or resolve its review threads | Completing a reviewed change | `ao pr merge` / `ao pr resolve-comments` |
@@ -19,7 +19,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 | `automation` | Manage durable recurring session automations | Creating, editing, disabling, deleting, and inspecting scheduled runs | [commands/automation.md](commands/automation.md) |
 | `cue` | Create or list reusable project Cues | Saving a repetitive command or agent task at the user's request | [commands/cue.md](commands/cue.md) |
 | `orchestrator` | List orchestrator sessions | Viewing which sessions are orchestrators | [commands/orchestrator.md](commands/orchestrator.md) |
-| `review` | Start, list, cancel, or submit Orchestrator's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by workers. Use a normal review-only worker for someone else's PR | [commands/review.md](commands/review.md) |
+| `review` | Start, list, cancel, or submit Orchestrator's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by workers. For someone else's PR, use a worker that claims it with automatic fixing off | [commands/review.md](commands/review.md) |
 | `send` | Send a message to a running agent session | Messaging a live agent; use `--steer` to correct it mid-turn | [commands/send.md](commands/send.md) |
 | `report` | Persist a meaningful worker report | Checkpoints, blockers, decisions, outputs, and completion | [commands/report.md](commands/report.md) |
 | `artifact` | Register files in the artifact directory as deliverables | Making a finished file appear as one of the session's artifacts | [commands/artifact.md](commands/artifact.md) |
@@ -29,6 +29,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
 | `browser` (remote host) | Drive the host's shared remote Chromium, used when `AO_AGENT_BROWSER_URL` is set | Same browser verification on a self-hosted remote host; one browser is shared across sessions | [commands/browser-remote.md](commands/browser-remote.md) |
 | `remote-host` | Link this machine to the user's Orchestrator account, or turn its remote access on or off | Setting up a VM or other headless machine so the user's desktops and phones can use it | [commands/remote-host.md](commands/remote-host.md) |
+| `device` | Open, install onto and release an iOS Simulator or Android Emulator for this session | Verifying a mobile app on a device the user watches in the Device tab | [commands/device.md](commands/device.md) |
 | `start` | Fetch (if needed) and open the Orchestrator desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
@@ -40,6 +41,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 
 ## Conventions
 
+- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.

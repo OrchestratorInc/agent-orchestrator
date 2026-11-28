@@ -6,7 +6,7 @@
  * kept in one client would look correct in Settings and disagree with the others.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type Query, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -37,6 +37,10 @@ export interface Settings {
 	versionRefresh?: boolean;
 	/** New chat sessions get tools to drive desktop apps through Cua Driver. */
 	computerUse?: boolean;
+	/** Orchestrator attribution beta: new sessions credit Orchestrator on commits and PRs. */
+	commitAttribution?: boolean;
+	/** Every agent gets the user's skills it does not load itself. */
+	skillSharing?: boolean;
 	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
 	accountHandoff?: boolean;
@@ -44,18 +48,18 @@ export interface Settings {
 
 const settingsReadTimeoutMs = 10_000;
 
-export function useSettings(hostId?: string, enabled = true) {
-	const query = useQuery({
+// Settings gate the cloud sign-in UI, so this query must recover from a
+// transient startup failure. The daemon can still be booting on first fetch
+// ("AO daemon is starting"); without a refetch the whole cloud offering stays
+// hidden until a manual reload. Poll like the workspace query so it self-heals
+// once the daemon is ready.
+const settingsRefetchInterval = 15_000;
+
+function settingsQueryOptions(hostId?: string) {
+	return {
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
-		enabled,
-		// Settings gate the cloud sign-in UI, so this query must recover from a
-		// transient startup failure. The daemon can still be booting on first
-		// fetch ("AO daemon is starting"); without a refetch the whole cloud
-		// offering stays hidden until a manual reload. Poll like the workspace
-		// query so it self-heals once the daemon is ready.
-		refetchInterval: 15_000,
 		retry: 5,
-		queryFn: async ({ signal }): Promise<Settings> => {
+		queryFn: async ({ signal }: { signal: AbortSignal }): Promise<Settings> => {
 			// The read is one SQLite row, but the renderer shares six connections
 			// to the daemon with its event streams and slow probes, so a read can
 			// sit queued behind them. Bound it: a read that never completes would
@@ -80,11 +84,39 @@ export function useSettings(hostId?: string, enabled = true) {
 				versionRefresh: data?.versionRefresh ?? false,
 				// A daemon that predates the setting never adds the instruction.
 				computerUse: data?.computerUse ?? false,
+				// A daemon that predates the beta never adds attribution.
+				commitAttribution: data?.commitAttribution ?? false,
+				// Absent on a daemon that predates the setting, which hides the row.
+				skillSharing: data?.skillSharing,
 				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
 				accountHandoff: data?.accountHandoff ?? false,
 			};
 		},
+	};
+}
+
+export function useSettings(hostId?: string, enabled = true) {
+	// A function default would need the query's own types; treat it as 0.
+	const clientStaleTime = useQueryClient().getDefaultOptions().queries?.staleTime;
+	const defaultStaleTime = typeof clientStaleTime === "function" ? 0 : clientStaleTime;
+	const query = useQuery({
+		...settingsQueryOptions(hostId),
+		enabled,
+		// Each observer runs its own refetch-interval and stale timers, and every
+		// settings update re-arms all of them. The local query has hundreds of
+		// observers, so useSettingsPolling() owns the interval. A reader still
+		// refetches on mount once the data is older than the client's stale time,
+		// but its own stale time is only 0 or Infinity, and neither arms a timer. A
+		// disabled reader is never stale, so it stays at Infinity.
+		...(hostId
+			? { refetchInterval: settingsRefetchInterval }
+			: {
+					staleTime: enabled
+						? (settingsQuery: Query<Settings>) =>
+								settingsQuery.isStaleByTime(defaultStaleTime) ? 0 : Infinity
+						: Infinity,
+				}),
 	});
 
 	return {
@@ -92,6 +124,14 @@ export function useSettings(hostId?: string, enabled = true) {
 		isLoading: query.isLoading,
 		error: query.error ? apiErrorMessage(query.error) : undefined,
 	};
+}
+
+/**
+ * Drives the local settings poll from one place. Mounted once by the shell; it
+ * never re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
+ */
+export function useSettingsPolling() {
+	useQuery({ ...settingsQueryOptions(), refetchInterval: settingsRefetchInterval, notifyOnChangeProps: [] });
 }
 
 export function useUpdateSessionInterface() {
@@ -188,6 +228,50 @@ export function useUpdateAccountHandoff() {
 			if (error) throw error;
 			return data;
 		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+/** Switches the Orchestrator attribution beta. Applies to sessions started afterwards. */
+export function useUpdateCommitAttribution() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/commit-attribution", {
+				body: { enabled },
+			});
+			if (error) throw error;
+			return data;
+		},
+		// The daemon is the source of truth: refetch instead of assuming the write.
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+/** Switches sharing the user's skills with every agent. A running session follows at its next resume. */
+export function useUpdateSkillSharing() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/skill-sharing", {
+				body: { enabled },
+			});
+			if (error) throw error;
+			return data;
+		},
+		// The daemon is the source of truth: refetch instead of assuming the write.
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
 	});
 

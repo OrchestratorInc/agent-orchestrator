@@ -1,5 +1,6 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -19,16 +20,16 @@ import {
 	newestActiveOrchestrator,
 	orchestratorHealth,
 	workerSessions,
-	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
 import { isArchivedSession } from "../lib/standalone-archive";
+import { boardSearchTokens, filterBoardSessions } from "../lib/board-search";
 import {
 	boardKanbanColumnOrder,
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useSessionShortcut } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen, useAppShortcut, useSessionShortcut } from "../hooks/useAppShortcut";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
@@ -40,6 +41,7 @@ import { ShareSessionDialog } from "./ShareSessionDialog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { ToolbarSearch } from "./PageToolbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
@@ -65,6 +67,9 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
+
+/** Focus here keeps Cmd/Ctrl+F for itself (its own find, or plain text editing). */
+const BOARD_FIND_YIELDS_TO = "[role='dialog'], input, textarea, [contenteditable='true'], [role='textbox'], .xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview, [data-chat-find-scope], [data-chat-find-surface]";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -140,7 +145,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
 	// A Cloud standalone agent has no board: its one session is the agent.
-	// Arriving on its project (archiving it from Pinned) leaves for Home.
+	// Arriving on its project route leaves for Home.
 	useEffect(() => {
 		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
 	}, [navigate, workspace?.standaloneAgent]);
@@ -188,6 +193,47 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
 	);
+	// Search narrows the cards already loaded for this board; lanes and their
+	// order are the grid's, so a match stays where it was. Each board scope
+	// starts unfiltered (the local project route keeps this component mounted).
+	const [searchQuery, setSearchQuery] = useState("");
+	const [searchScope, setSearchScope] = useState(scopeKey);
+	if (searchScope !== scopeKey) {
+		setSearchScope(scopeKey);
+		setSearchQuery("");
+	}
+	// Typing narrows on a deferred render; clearing (or a new scope) restores
+	// the whole board at once instead of one render with the old query.
+	const deferredQuery = useDeferredValue(searchQuery);
+	const deferredSearchQuery = searchQuery === "" ? "" : deferredQuery;
+	const boardRef = useRef<HTMLDivElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
+	const searching = boardSearchTokens(deferredSearchQuery).length > 0;
+	const visibleBoardSessions = filterBoardSessions(boardSessions, deferredSearchQuery);
+	const searchMissed = searching && boardSessions.length > 0 && visibleBoardSessions.length === 0;
+	const clearSearch = () => {
+		setSearchQuery("");
+		// The button that cleared it goes away with the empty state.
+		requestAnimationFrame(() => searchInputRef.current?.focus());
+	};
+	// Cmd/Ctrl+F is find-in-chat's chord, claimed by whichever surface is in
+	// front. The board takes it while its field is on screen, unless a dialog,
+	// terminal, editor or another field has focus, or a chat on screen owns it.
+	const canFocusSearch = useCallback(() => {
+		const input = searchInputRef.current;
+		if (!input || input.getClientRects().length === 0 || isSettingsPageOpen() || useUiStore.getState().archiveModal) return false;
+		const focused = document.activeElement;
+		if (focused === input) return true;
+		if (focused instanceof Element && focused !== document.body) {
+			if (focused.closest(BOARD_FIND_YIELDS_TO)) return false;
+			if (boardRef.current?.contains(focused)) return true;
+		}
+		return !Array.from(document.querySelectorAll("[data-chat-find-surface]")).some((surface) => surface.getClientRects().length > 0);
+	}, []);
+	useAppShortcut("find-in-chat", () => {
+		searchInputRef.current?.focus();
+		searchInputRef.current?.select();
+	}, true, canFocusSearch);
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -268,16 +314,27 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		});
 	};
 
+	const search = <ToolbarSearch persistent inputRef={searchInputRef} label={t("board.search")} query={searchQuery} onQueryChange={setSearchQuery} />;
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			{memoryLight}
+			{search}
 			{guest ? null : <ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />}
 		</>
 	) : hostOffline ? (
-		<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
-	) : memoryLight ?? undefined;
+		<>
+			{search}
+			<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
+		</>
+	) : (
+		<>
+			{memoryLight}
+			{search}
+		</>
+	);
 
+	useTelemetrySurface("board", !(projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)));
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
@@ -288,7 +345,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
+		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-telemetry-surface="board" ref={boardRef} data-host-id={hostId} data-project-id={projectId}>
 			<PageTopbar
 				lead={showWelcome ? undefined : (
 					<PageTopbarTitle
@@ -302,20 +359,16 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			/>
 			{connected && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}
-			{hostId && projectId && connected && workspace && !orchestrator && !hasConfiguredOrchestratorAgent(workspace) ? (
-				<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
-					<span className="min-w-0 flex-1">{t("remote.configureOrchestratorFirst", { label: labelForHost(hostId) ?? hostId, defaultValue: "Choose an orchestrator agent on {{label}} to start one." })}</span>
-					<Button type="button" variant="ghost" size="xs" className="font-medium" onClick={() => shell?.openRemoteProjectSettings(hostId, projectId)}>{t("restoreUnavailable.configureOrchestrator")}</Button>
-				</div>
-			) : null}
 
 			<div className={cn("min-h-0 flex-1 overflow-hidden", hostOffline && workspace && "opacity-75")} data-host-offline={hostOffline && workspace ? "" : undefined}>
-				{projectId && !guest && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
+				{projectId && !guest && health.state !== "ok" && (!hostId || connected) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
 						<span className="min-w-0 flex-1">{health.message}</span>
-						{health.state === "restart_needed" || health.state === "duplicates" ? (
-							<Button type="button" size="sm" disabled={isProjectRestarting} onClick={() => void restartOrchestrator()} variant="primary">
+						{health.state === "agent_setting_changed" || health.state === "duplicates" ? (
+							// A changed agent setting leaves the running orchestrator working,
+							// so restarting it is offered, not pressed for.
+							<Button type="button" size="sm" disabled={isProjectRestarting} onClick={() => void restartOrchestrator()} variant={health.state === "duplicates" ? "primary" : "secondary"}>
 								<RotateCw className="size-3.5" aria-hidden="true" />
 								{t("shell.restart")}
 							</Button>
@@ -358,6 +411,15 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
 						offer={projectId && !hostId ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
 					/>
+				) : searchMissed ? (
+					<div className="flex h-full min-h-0 flex-col items-center justify-center gap-1 px-4 pb-empty-offset-y text-center" data-testid="board-search-empty">
+						<p className="text-control font-medium text-foreground" role="status">
+							{t("board.searchNoMatches", { query: deferredSearchQuery.trim() })}
+						</p>
+						<Button type="button" variant="quiet" size="sm" onClick={clearSearch}>
+							{t("board.searchClear")}
+						</Button>
+					</div>
 				) : (
 					<SessionsBoardGridView
 						columns={columns}
@@ -380,7 +442,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								session={session}
 							/>
 						)}
-						sessions={boardSessions}
+						sessions={visibleBoardSessions}
 					/>
 				)}
 			</div>

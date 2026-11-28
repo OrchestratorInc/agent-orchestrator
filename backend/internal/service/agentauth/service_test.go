@@ -10,10 +10,31 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
+
+func TestStartPrimeAgentLoginUsesTheSessionProfile(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "shellterm-123", Title: "Log in to Prime Agent"}}
+	svc := NewWithAgentResolver(foundExecutable("prime-agent"), nil, opener, dataDir)
+
+	if _, err := svc.Start(context.Background(), "prime-agent"); err != nil {
+		t.Fatalf("Start(prime-agent): %v", err)
+	}
+	if got, want := opener.input.Env["PRIME_AGENT_CODING_AGENT_DIR"], filepath.Join(dataDir, "agent-runtime", "prime-agent"); got != want {
+		t.Fatalf("login profile = %q, want %q", got, want)
+	}
+	session := map[string]string{}
+	primeagent.New().AugmentRuntimeEnv(session, dataDir)
+	if !reflect.DeepEqual(opener.input.Env, session) {
+		t.Fatalf("login env = %#v, want the session env %#v", opener.input.Env, session)
+	}
+}
 
 func TestStartRejectsUnstartablePlans(t *testing.T) {
 	t.Parallel()
@@ -554,6 +575,40 @@ func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
 	}
 }
 
+// MiniMax's bare logout targets the China account, so a saved Global login
+// must reach the CLI as --region global.
+func TestMiniMaxLogoutTargetsSavedRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name, preference string
+		args             []string
+	}{
+		{"global", `{"version":1,"regions":{"prod":"en"}}`, []string{"logout", "--region", "global"}},
+		{"no preference", "", []string{"logout"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := t.TempDir()
+			t.Setenv("MINIMAX_DATA_DIR", profile)
+			if tc.preference != "" {
+				path := filepath.Join(profile, "preferences", "mcode-region.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tc.preference), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			svc := NewWithAgentResolver(nil, managedExecutableResolver{agentID: "minimax-code", path: "/managed/mcode"}, opener, "")
+			if _, err := svc.Logout(context.Background(), "minimax-code"); err != nil {
+				t.Fatal(err)
+			}
+			if want := append([]string{"/managed/mcode"}, tc.args...); !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
+			}
+		})
+	}
+}
+
 func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 	for _, tc := range []struct{ agent, code string }{
 		{"not-a-harness", "AGENT_AUTH_TARGET_UNKNOWN"},
@@ -569,6 +624,34 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 			}
 			if opener.calls != 0 {
 				t.Fatal("rejected logout opened a terminal")
+			}
+		})
+	}
+}
+
+func TestStartMastraUsesNativeProviderChooserAndSessionProfile(t *testing.T) {
+	for _, override := range []string{"", filepath.Join(t.TempDir(), "native-profile")} {
+		t.Run(override, func(t *testing.T) {
+			t.Setenv("MASTRA_APP_DATA_DIR", override)
+			dir := t.TempDir()
+			opener := &recordingTerminalOpener{}
+			svc := NewWithAgentResolver(foundExecutable("mastracode"), nil, opener, dir)
+			result, err := svc.Start(context.Background(), "mastra-code")
+			if err != nil {
+				t.Fatalf("Start(mastra-code): %v", err)
+			}
+			if !reflect.DeepEqual(opener.input.Argv, []string{"/test/bin/mastracode", "login"}) {
+				t.Fatalf("native provider chooser = %q", opener.input.Argv)
+			}
+			expected := override
+			if expected == "" {
+				expected = filepath.Join(dir, "mastra-code", "profile")
+			}
+			if opener.input.Env["MASTRA_APP_DATA_DIR"] != expected {
+				t.Fatalf("profile = %q, want %q", opener.input.Env, expected)
+			}
+			if result.Action != ActionLogin {
+				t.Fatalf("action = %s", result.Action)
 			}
 		})
 	}

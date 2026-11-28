@@ -17,6 +17,12 @@ import (
 type TelemetryIdentityController struct {
 	Source           ports.TelemetryIdentityStore
 	LifetimeSessions func(context.Context) (int64, error)
+	// LifetimeWork counts worker and standalone sessions ever started; the
+	// desktop's exit feedback prompt asks only installs where it is zero.
+	LifetimeWork func(context.Context) (int64, error)
+	// DaemonVersion is this daemon's release. The phone tags its own error
+	// reports with it, because a paired daemon can be older than the app.
+	DaemonVersion string
 }
 
 // Register mounts the telemetry identity route on the supplied router.
@@ -30,7 +36,7 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 		return
 	}
 	snap := c.Source.Snapshot()
-	resp := TelemetryIdentityResponse{OptedOut: snap.OptedOut}
+	resp := TelemetryIdentityResponse{OptedOut: snap.OptedOut, DaemonVersion: c.DaemonVersion}
 	if !snap.OptedOut {
 		resp.DistinctID = snap.DistinctID()
 		resp.InstallID = snap.InstallID
@@ -42,6 +48,11 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 		if c.LifetimeSessions != nil {
 			if count, err := c.LifetimeSessions(r.Context()); err == nil {
 				resp.LifetimeSessions = &count
+			}
+		}
+		if c.LifetimeWork != nil {
+			if count, err := c.LifetimeWork(r.Context()); err == nil {
+				resp.LifetimeWorkSessions = &count
 			}
 		}
 	}

@@ -33,17 +33,33 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
 	// Native login decides first; the environment key is the fallback.
-	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, nil)
+	unconfirmed := false
+	noteUnconfirmed := func(out []byte) (ports.AgentAuthStatus, bool) {
+		unconfirmed = cursorAccountUnconfirmed(out)
+		return ports.AgentAuthStatusUnknown, false // the shared classifier decides
+	}
+	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, noteUnconfirmed)
 	if err != nil && ctx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
 	}
 	if err == nil && status == ports.AgentAuthStatusAuthorized {
+		if unconfirmed {
+			steps = append(steps, domain.NewAgentAuthDiagnostic("cursor-agent status", "account_unconfirmed"))
+		}
 		return status, cursorLoginAccount(ctx, cursorConfigPath()), steps, nil
 	}
 	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "CURSOR_API_KEY"); name != "" {
 		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), steps, nil
 	}
 	return status, domain.AgentAccountIdentity{}, steps, err
+}
+
+// cursorAccountUnconfirmed reports `cursor-agent status` output for a saved
+// login whose account lookup failed. The CLI still exits 0 and says "Logged
+// in", whether Cursor rejected the login or could not be reached, so this is
+// a caveat on the verdict, not a sign-out.
+func cursorAccountUnconfirmed(out []byte) bool {
+	return strings.Contains(strings.ToLower(string(out)), "unable to fetch user details")
 }
 
 // cursorConfigPath is where the Cursor CLI records its login; tests point it

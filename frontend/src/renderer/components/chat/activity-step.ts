@@ -166,6 +166,22 @@ export function describeCommandStep(command: string): CommandStep {
 }
 
 /**
+ * Whether the command runs `ao spawn`: `ao` (by any path, quoted or not) in a
+ * command's place with `spawn` as its subcommand, here or in a `bash -lc` script.
+ * `grep "ao spawn" docs.md` only mentions it.
+ */
+export function runsAOSpawn(command: string): boolean {
+	return commandSegments(command, true).some((segment) => isAOSpawn(segment, 0));
+}
+
+function isAOSpawn(segment: Segment, depth: number): boolean {
+	if (segment.binary === "ao") return positionals(segment.args, AO_VALUE_FLAGS)[0] === "spawn";
+	if (depth > 1 || !SHELLS.has(segment.binary)) return false;
+	const inline = flagValue(segment.args, ["-c", "-lc", "-ic"]);
+	return inline !== undefined && commandSegments(inline, true).some((inner) => isAOSpawn(inner, depth + 1));
+}
+
+/**
  * A line with no program to name, only shell setup, names that instead: `cd src`,
  * `export CI=1`, `source .env`, `test -f a`.
  */
@@ -624,6 +640,9 @@ function ghStep(args: string[]): CommandStep {
 	return { done: "Ran", live: "Running", target: ["gh", area, action].filter(Boolean).join(" "), icon: "git" };
 }
 
+// Reuse command classification while an activity remains loaded, without retaining discarded history.
+const guideCommandChecks = new WeakMap<ConversationActivity, { command: string; hidden: boolean }>();
+
 /**
  * A step the agent takes only to learn how to drive Orchestrator: reading the
  * guides that ship with it, or `ao … --help`. It is not work on the user's task,
@@ -640,9 +659,17 @@ export function isOrchestratorPlumbing(activity: ConversationActivity): boolean 
 		return typeof path === "string" && isOrchestratorGuide(path);
 	}
 	if (activity.activityKind !== "command" || !detail?.command) return false;
+	const cached = guideCommandChecks.get(activity);
+	if (cached?.command === detail.command) return cached.hidden;
+	const hidden = isPlumbingCommand(detail.command);
+	guideCommandChecks.set(activity, { command: detail.command, hidden });
+	return hidden;
+}
+
+function isPlumbingCommand(command: string): boolean {
 	// Every stage counts, piped ones too: `cat SKILL.md | cat > copy.md` writes a file.
 	let stages = 0;
-	for (const line of logicalLines(detail.command)) {
+	for (const line of logicalLines(command)) {
 		let words: Word[] = [];
 		for (const word of [...tokenize(line), { text: ";", operator: true } as Word]) {
 			if (!word.operator || word.text === ")") {
@@ -719,9 +746,13 @@ function aoStep(args: string[]): CommandStep {
 			return { done: "Shared progress", live: "Sharing progress", icon: "check" };
 		case "send":
 			return { done: "Messaged session", live: "Messaging session", target: flagValue(args, ["--session"]), icon: "tool" };
-		case "spawn":
-			// The spawned agent's own row names it; repeating the name here shows it twice.
-			return { done: "Started a session", live: "Starting a session", icon: "tool" };
+		case "spawn": {
+			// Named for the agent it starts, so a spawn that failed still says which one.
+			const name = flagValue(args, ["--name"]);
+			return name
+				? { done: "Started", live: "Starting", target: name, icon: "run" }
+				: { done: "Started a session", live: "Starting a session", icon: "run" };
+		}
 		case "review":
 			if (action === "trigger") return { done: "Requested a code review", live: "Requesting a code review", icon: "pr" };
 			return { done: "Checked code reviews", live: "Checking code reviews", icon: "pr" };
@@ -1028,11 +1059,13 @@ function onlyObserves(segment: Segment): boolean {
 
 /**
  * Every segment that does something, in order, without `cd` and the like. A
- * `command -v gh &&` check in front of the real work is left out too.
+ * `command -v gh &&` check in front of the real work is left out too. With
+ * `keepQuotedNewlines`, a quoted script keeps its lines, so a `bash -lc` script
+ * whose first line is `cd repo` and second `ao spawn` reads as running `ao spawn`.
  */
-function commandSegments(command: string): Segment[] {
+function commandSegments(command: string, keepQuotedNewlines = false): Segment[] {
 	const segments: Segment[] = [];
-	for (const line of logicalLines(command)) {
+	for (const line of logicalLines(command, keepQuotedNewlines)) {
 		for (const words of splitSegments(tokenize(line))) {
 			const segment = toSegment(words);
 			if (segment && !NAVIGATION.has(segment.binary) && !SHELL_SYNTAX.has(segment.binary)) segments.push(segment);
@@ -1055,7 +1088,7 @@ const HEREDOC_START = /(?<!<)<<(?!<)-?\s*["']?([\w.-]+)["']?/;
  * on to the next line and so does an open quote, comments go, and a heredoc's body
  * is the file's content, not more commands.
  */
-function logicalLines(command: string): string[] {
+function logicalLines(command: string, keepQuotedNewlines = false): string[] {
 	const lines: string[] = [];
 	let line = "";
 	let quote: string | undefined;
@@ -1069,7 +1102,7 @@ function logicalLines(command: string): string[] {
 		quote = scanned.quote;
 		heredoc = HEREDOC_START.exec(scanned.text)?.[1];
 		const text = scanned.text.trimEnd();
-		if (quote) line += `${scanned.text} `;
+		if (quote) line += `${scanned.text}${keepQuotedNewlines ? "\n" : " "}`;
 		else if (text.endsWith("\\")) line += `${text.slice(0, -1)} `;
 		else if (/(?:&&|\|)$/.test(text)) line += `${text} `;
 		else {

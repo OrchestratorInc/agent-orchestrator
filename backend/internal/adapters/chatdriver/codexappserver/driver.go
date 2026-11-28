@@ -11,10 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -39,6 +42,23 @@ const (
 // handshakeTimeout bounds initialize and thread open. These are local IPC calls
 // that normally settle in well under a second.
 const handshakeTimeout = 60 * time.Second
+
+// sandboxProbeTimeout bounds the probe's command/exec call. A host that denies
+// the sandbox fails this command almost immediately; the timeout only exists
+// so a wedged provider cannot hold the review trigger open. It deliberately
+// does not cover spawning app-server and the initialize handshake, which keep
+// their usual handshakeTimeout so a slow cold start is not mistaken for a
+// broken sandbox.
+const sandboxProbeTimeout = 20 * time.Second
+
+// sandboxProbeExecTimeoutMs is the timeoutMs the probe asks Codex to enforce
+// on the no-op command itself.
+const sandboxProbeExecTimeoutMs = 10_000
+
+// codexExecTimeoutExitCode is the exit code Codex's command/exec reports when
+// it kills a command for exceeding timeoutMs (the shell convention used by
+// timeout(1)). The probe's no-op cannot exit 124 on its own.
+const codexExecTimeoutExitCode = 124
 
 // codexPlugin is the subset of AO's existing Codex agent plugin that the Chat
 // driver reuses. Binary resolution and local auth probing already live there and
@@ -218,6 +238,98 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	return capabilities(), nil
 }
 
+// ProbeSandbox proves the read-only sandbox a reviewer runs in can start on
+// this host.
+//
+// Reviewers cannot fall back to a looser posture: approvals are disabled and
+// every read and every submit is a sandboxed shell command. A host whose
+// seccomp, AppArmor, or user-namespace policy denies the sandbox (the reported
+// symptom is `bwrap: setting up uid map: Permission denied`) would otherwise
+// spend a whole model turn on commands that never start, then report only
+// "reviewer Chat turn ended without submitting a result".
+func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeConfig) error {
+	workdir := strings.TrimSpace(cfg.WorkspacePath)
+	if !filepath.IsAbs(workdir) {
+		workdir = ""
+	}
+	if workdir == "" {
+		workdir = os.TempDir()
+	}
+	conv, err := d.connect(ctx, workdir, nil, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conv.Close() }()
+
+	var resp struct {
+		ExitCode int64  `json:"exitCode"`
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+	}
+	params := map[string]any{
+		"command": sandboxProbeCommand(),
+		"cwd":     workdir,
+		// Match the reviewer turn's policy exactly (applyTurnSettings with
+		// readOnly and network left on). On Linux, networkAccess=false makes
+		// Codex add network isolation to the sandbox setup, so probing without
+		// network would exercise a different sandbox from the one the reviewer
+		// actually gets.
+		"sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": true},
+		"timeoutMs":     int64(sandboxProbeExecTimeoutMs),
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, sandboxProbeTimeout)
+	defer cancel()
+	if err := conv.conn.request(probeCtx, "command/exec", params, &resp); err != nil {
+		var refused *rpcError
+		if !errors.As(err, &refused) {
+			// A timeout or a dropped connection says nothing about the
+			// sandbox, so it is reported as the probe failure it is.
+			return fmt.Errorf("sandbox probe: %w", err)
+		}
+		switch refused.Code {
+		case -32601, -32602:
+			// The provider predates command/exec (-32601) or rejects this
+			// request shape (-32602, e.g. SandboxPolicy drift in another Codex
+			// version). Either way the probe cannot answer, so the launch is
+			// left as it was rather than blocked on an unsupported preflight.
+			return nil
+		}
+		return fmt.Errorf("%w: %w", ports.ErrChatSandboxUnavailable, err)
+	}
+	if resp.ExitCode == codexExecTimeoutExitCode {
+		// Codex hit its own timeoutMs before the no-op finished. Like a caller
+		// timeout, that says nothing about whether the sandbox can start.
+		return fmt.Errorf("sandbox probe: provider timed out after %dms: %w", sandboxProbeExecTimeoutMs, context.DeadlineExceeded)
+	}
+	if resp.ExitCode != 0 {
+		return fmt.Errorf("%w: %s", ports.ErrChatSandboxUnavailable, sandboxProbeFailure(resp.ExitCode, resp.Stdout, resp.Stderr))
+	}
+	return nil
+}
+
+// sandboxProbeCommand is a no-op that still has to be spawned inside the
+// provider sandbox. Setup failures happen before it runs, which is the point.
+func sandboxProbeCommand() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd.exe", "/c", "exit", "0"}
+	}
+	return []string{"/bin/sh", "-c", "exit 0"}
+}
+
+func sandboxProbeFailure(exitCode int64, stdout, stderr string) string {
+	output := strings.TrimSpace(stderr)
+	if output == "" {
+		output = strings.TrimSpace(stdout)
+	}
+	if len(output) > 500 {
+		output = output[:500] + "..."
+	}
+	if output == "" {
+		return fmt.Sprintf("probe command exited %d", exitCode)
+	}
+	return fmt.Sprintf("probe command exited %d: %s", exitCode, output)
+}
+
 // DiscoverModels reads the account's current provider catalog without opening
 // a Codex thread. The caller supplies the same project directory and environment
 // overlay used for a normal launch so project-scoped Codex configuration applies.
@@ -304,6 +416,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("persistent chat host already owns a provider conversation for a fresh session")
 	}
 
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork
@@ -352,6 +465,25 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
+// addSkillRoots gives a new app-server the session's bridged skills. The roots
+// last as long as the process, so a reconnect to a live one keeps them. A Codex
+// without the method, or that refuses it, runs without the skills.
+func (d *Driver) addSkillRoots(ctx context.Context, conv *conversation, dataDir string, sessionID domain.SessionID) {
+	roots := codexagent.SkillRoots(dataDir, string(sessionID))
+	if len(roots) == 0 {
+		return
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, skillRootsTimeout)
+	defer cancel()
+	if err := conv.conn.request(requestCtx, codexproto.MethodSkillsExtraRootsSet, map[string]any{"extraRoots": roots}, nil); err != nil {
+		d.log.Warn("codex: bridged skills not added", "sessionID", sessionID, "error", err)
+	}
+}
+
+// skillRootsTimeout bounds how long a session start waits for Codex to take the
+// bridged skills.
+const skillRootsTimeout = 5 * time.Second
+
 // Reconnect attaches to a surviving provider without launching a replacement.
 func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	cfg.ReconnectOnly = true
@@ -386,10 +518,12 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// Neither the tier nor the collaboration mode the thread was left on is
 		// known; the next turn states both.
 		conv.tierUnknown, conv.planUnknown = true, true
+		conv.backgroundHistoryPending = true
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
 
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.launchMode = cfg.Permissions
@@ -535,6 +669,7 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 	}
 
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.codexHome = env["CODEX_HOME"]
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Close()
 		return nil, err
@@ -622,6 +757,7 @@ func (d *Driver) connectSession(
 		},
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.codexHome = env["CODEX_HOME"]
 	if transport.Reconnected {
 		// A daemon stopped mid-initialize leaves a host whose app-server never
 		// was, failing every call "Not initialized". An initialized one refuses
@@ -831,6 +967,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		_ = conv.Close()
 		return nil, errors.New("side provider host already owns a conversation")
 	}
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork

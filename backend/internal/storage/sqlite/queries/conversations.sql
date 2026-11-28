@@ -712,19 +712,20 @@ SELECT * FROM conversation_turns
 WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 LIMIT 1;
 
--- name: BindConversationTurnProviderID :exec
+-- name: BindConversationTurnProviderID :execrows
 UPDATE conversation_turns
 SET provider_turn_id = ?, started_at = COALESCE(started_at, ?)
-WHERE id = ?;
+WHERE id = ? AND state IN ('queued', 'running');
 
--- name: MarkConversationTurnStarted :exec
+-- name: MarkConversationTurnStarted :execrows
 UPDATE conversation_turns
 SET state = 'running', started_at = COALESCE(started_at, ?)
-WHERE id = ?;
+WHERE id = ? AND state IN ('queued', 'running');
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
 SET state = sqlc.arg(state), error_message = sqlc.arg(error_message), failure_code = sqlc.arg(failure_code),
+    started_at = COALESCE(started_at, sqlc.narg(started_at)),
     completed_at = COALESCE(completed_at, sqlc.narg(completed_at)),
     usage_limit_resets_at = COALESCE(sqlc.narg(usage_limit_resets_at), usage_limit_resets_at)
 WHERE id = sqlc.arg(id);
@@ -764,6 +765,34 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND turn_id = sqlc.arg(turn_id)
   AND kind = 'plan';
 
+-- A running row on a turn that has already settled can never finish. Older
+-- daemons stored replayed provider retry/limit notices this way, after their turn
+-- had ended, so clients showed a spinner that never stopped. Give each one the
+-- status SettleTurn would have written (terminalActivityStatus).
+-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = sqlc.arg(conversation_id)
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  );
+
 -- The same invariant applies when startup discovers work abandoned by a dead
 -- controller. This runs before SettleOrphanedConversationTurns while their turn
 -- states still identify the affected rows.
@@ -771,10 +800,23 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)
 WHERE status = 'running'
-  AND turn_id IN (
-      SELECT id FROM conversation_turns
-      WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
-        AND state IN ('queued', 'running')
+  AND (
+      turn_id IN (
+          SELECT id FROM conversation_turns
+          WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
+            AND state IN ('queued', 'running')
+      )
+      -- A compaction the agent ran between prompts has no turn; only the dead
+      -- controller's cycle would have settled it.
+      OR (
+          turn_id IS NULL
+          AND kind = 'system'
+          AND json_extract(detail_json, '$.event') = 'compaction'
+          AND conversation_id IN (
+              SELECT id FROM conversations
+              WHERE current_session_id = sqlc.arg(handled_by_session_id)
+          )
+      )
   );
 
 -- Restart reconciliation: a turn left running by a dead controller is not
@@ -1183,6 +1225,12 @@ WHERE id = sqlc.arg(id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
 
+-- name: MarkQueuedConversationBatchStarted :exec
+UPDATE conversation_turns
+SET started_at = COALESCE(started_at, sqlc.narg(started_at))
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND id IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(sqlc.arg(turn_ids) AS TEXT)));
+
 -- A detached controller may have crossed the provider boundary before its
 -- batch receipt was recorded. Keep the source visible and fail closed on resume.
 -- name: FailReservedQueuedConversationTurns :exec
@@ -1243,7 +1291,7 @@ WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ?;
 -- lock before this runs. There can be no later accepted row to preserve, so the
 -- correct operation is independent of wall-clock ordering and cancels the whole
 -- durable queue.
--- name: CancelAllQueuedConversationTurns :exec
+-- name: CancelAllQueuedConversationTurns :execrows
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
 WHERE conversation_id = ? AND state = 'queued';
@@ -1882,6 +1930,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        conversation_turns.provider_input_text,
@@ -1953,6 +2002,27 @@ WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'failed' AND rolled_back_at IS NULL
   AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= sqlc.arg(now);
 
+-- name: SelectSupersededArmedEventTurn :one
+SELECT armed.id, armed.usage_limit_resets_at FROM conversation_turns AS armed
+JOIN conversation_turns AS newer ON newer.id = sqlc.arg(newer_id)
+WHERE armed.id = (
+    SELECT previous.id FROM conversation_turns AS previous
+    WHERE previous.conversation_id = newer.conversation_id AND previous.branch_id = newer.branch_id
+      AND previous.id <> newer.id AND previous.state NOT IN ('queued', 'cancelled')
+      AND previous.promoted_to_turn_id IS NULL AND previous.rolled_back_at IS NULL
+    ORDER BY previous.requested_at DESC, previous.rowid DESC LIMIT 1)
+  AND (armed.requested_at < newer.requested_at OR (armed.requested_at = newer.requested_at AND armed.rowid < newer.rowid))
+  AND armed.usage_limit_auto_resume = 1 AND armed.state = 'failed'
+  AND armed.handled_by_session_id = newer.handled_by_session_id
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = armed.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0)
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = newer.id AND m.role = 'user' AND m.origin = 'automation')
+  AND NOT EXISTS (SELECT 1 FROM conversation_messages AS m
+      JOIN conversation_turns AS member ON member.id = m.turn_id
+      WHERE (member.id = newer.id OR member.promoted_to_turn_id = newer.id)
+        AND m.role = 'user' AND (m.origin = 'human' OR m.authored_by_user = 1));
+
 -- name: SelectAutoResumeConversationTurns :many
 SELECT * FROM conversation_turns
 WHERE usage_limit_auto_resume = 1
@@ -1966,11 +2036,11 @@ WHERE conversation_id = sqlc.arg(conversation_id)
   AND retry_of_turn_id IS NOT NULL;
 
 -- Prompt eligibility must survive the original message falling outside a page.
--- name: SelectConversationHumanPromptTurnIDs :many
-SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
+-- name: SelectConversationPromptOrigins :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id, origin
 FROM conversation_messages
 WHERE conversation_id = sqlc.arg(conversation_id)
-  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human';
+  AND turn_id IS NOT NULL AND role = 'user' AND origin IN ('human', 'automation');
 
 -- Earliest prompt of the named turns. A page that ends among interleaved turns
 -- (a prompt queued while another turn runs) reaches back to it, so a turn is not

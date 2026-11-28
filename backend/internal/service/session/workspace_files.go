@@ -749,6 +749,9 @@ func (s *Service) sessionWorkspaceRecord(ctx context.Context, id domain.SessionI
 	if !ok {
 		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
+	// Renewed before the path check: the page polls while the worktree is
+	// still being created, and that wait must not use up its lifetime.
+	s.renewTaskPreparation(rec)
 	if strings.TrimSpace(rec.Metadata.WorkspacePath) == "" {
 		return domain.SessionRecord{}, apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace not found")
 	}
@@ -1526,7 +1529,7 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	managedByDir := make(map[string]map[string]struct{})
+	managedByDir := make(map[string]hookutil.ManagedNames)
 	var files []WorkspaceFileSummary
 	truncated := false
 	err = filepath.WalkDir(rootResolved, func(fullPath string, entry fs.DirEntry, walkErr error) error {
@@ -1550,10 +1553,10 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 		dirPath := filepath.Dir(fullPath)
 		managed, ok := managedByDir[dirPath]
 		if !ok {
-			managed = scratchAOManagedNamesIn(dirPath)
+			managed = hookutil.ManagedNamesIn(dirPath)
 			managedByDir[dirPath] = managed
 		}
-		if _, hidden := managed[entry.Name()]; hidden {
+		if managed.Match(entry.Name()) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -1597,35 +1600,6 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 	return files, truncated, nil
 }
 
-// scratchAOManagedNamesIn returns the basenames claimed by an AO-managed
-// .gitignore in dir. Adapter-owned patterns are anchored to that directory and
-// name files only. Missing, malformed, or unreadable markers safely reveal the
-// files instead of failing an otherwise readable workspace-tree request.
-func scratchAOManagedNamesIn(dir string) map[string]struct{} {
-	managed := make(map[string]struct{})
-	marker := filepath.Join(dir, ".gitignore")
-	info, err := os.Lstat(marker)
-	if err != nil || !info.Mode().IsRegular() {
-		return managed
-	}
-	content, binary, _, err := readWorkspaceTextFile(marker, 64*1024)
-	if err != nil || binary || !strings.Contains(content, aoManagedGitignoreSentinel) {
-		return managed
-	}
-	for _, rawLine := range strings.Split(content, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if !strings.HasPrefix(line, "/") || strings.HasPrefix(line, "//") {
-			continue
-		}
-		name := path.Clean(strings.TrimPrefix(line, "/"))
-		if name == "." || name == ".." || strings.Contains(name, "/") {
-			continue
-		}
-		managed[name] = struct{}{}
-	}
-	return managed
-}
-
 func scratchAOManagedCopilotProfile(dir, name, fullPath string) bool {
 	if dir != ".github/agents" || !strings.HasPrefix(name, "ao-") || !strings.HasSuffix(name, ".agent.md") {
 		return false
@@ -1652,7 +1626,7 @@ func scratchDirectoryOnlyAOManaged(rootResolved, rel string) bool {
 	hasManaged := false
 	hasVisible := false
 	visited := 0
-	managedByDir := make(map[string]map[string]struct{})
+	managedByDir := make(map[string]hookutil.ManagedNames)
 	target := filepath.Join(rootResolved, filepath.FromSlash(rel))
 	err := filepath.WalkDir(target, func(fullPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -1679,10 +1653,10 @@ func scratchDirectoryOnlyAOManaged(rootResolved, rel string) bool {
 		dirPath := filepath.Dir(fullPath)
 		managed, ok := managedByDir[dirPath]
 		if !ok {
-			managed = scratchAOManagedNamesIn(dirPath)
+			managed = hookutil.ManagedNamesIn(dirPath)
 			managedByDir[dirPath] = managed
 		}
-		if _, hidden := managed[entry.Name()]; hidden {
+		if managed.Match(entry.Name()) {
 			hasManaged = true
 			return nil
 		}

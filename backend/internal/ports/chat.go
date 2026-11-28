@@ -34,6 +34,12 @@ var (
 	// ErrChatDriverIncompatible means the installed provider speaks a protocol
 	// version AO does not support.
 	ErrChatDriverIncompatible = errors.New("chat driver incompatible")
+	// ErrChatSandboxUnavailable means the provider is installed and speaks the
+	// protocol, but its sandbox cannot start on this host. Reviewers run
+	// read-only with approvals disabled, so the sandbox is their only route to
+	// read the checkout and submit a result; launching one anyway would spend a
+	// model turn on commands that can never run.
+	ErrChatSandboxUnavailable = errors.New("chat sandbox unavailable")
 	// ErrChatAuthRequired means the provider is installed but not authenticated.
 	ErrChatAuthRequired = errors.New("chat driver requires authentication")
 	// ErrChatResumeFailed means a stored provider conversation could not be
@@ -302,6 +308,14 @@ var PermissionModesStrictestFirst = []PermissionMode{
 	PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeAuto, PermissionModeBypassPermissions,
 }
 
+// SkillsOf returns the session whose shared skills a provider gets.
+func SkillsOf(sessionID, skillSessionID domain.SessionID) domain.SessionID {
+	if skillSessionID != "" {
+		return skillSessionID
+	}
+	return sessionID
+}
+
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
@@ -356,6 +370,10 @@ type ChatStartConfig struct {
 	// access alongside WorkspacePath. Workspace projects use this for child repo
 	// worktrees; it is not a replacement for AO's worktree ownership.
 	AdditionalDirectories []string
+	// SkillSessionID is the session whose shared skills the provider gets, when
+	// that is not SessionID: a side conversation runs in a provider host of its
+	// own but uses its session's skills. Empty means SessionID.
+	SkillSessionID domain.SessionID
 	// MCPServers are client-supplied tool servers for this provider conversation.
 	// User/provider configuration still loads normally; these are additive.
 	MCPServers []ChatMCPServerConfig
@@ -396,7 +414,9 @@ type ChatResumeConfig struct {
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string
 	AdditionalDirectories []string
-	MCPServers            []ChatMCPServerConfig
+	// See ChatStartConfig.SkillSessionID.
+	SkillSessionID domain.SessionID
+	MCPServers     []ChatMCPServerConfig
 }
 
 // ChatMCPServerConfig is the provider-neutral session-setup shape for a tool
@@ -572,6 +592,15 @@ type ChatModel struct {
 // Optional: a driver without it simply offers no choice, and the UI shows none.
 type ChatModelLister interface {
 	ListModels(ctx context.Context) ([]ChatModel, error)
+}
+
+// ChatModelVariantResolver is implemented by conversations whose model option
+// lists base models with the reasoning level in a separate option, so a model
+// id that folds the level in (gemini-3.8-flash-low) runs as its base model plus
+// that level. ModelVariantBase reports the offered base model such an id runs
+// as. Optional: without it, a model id runs only as itself.
+type ChatModelVariantResolver interface {
+	ModelVariantBase(model string) (base string, ok bool)
 }
 
 // ChatConfigOptionType is the interaction an advertised provider setting needs.
@@ -1002,6 +1031,12 @@ const (
 	ChatEventTurnDiff ChatEventKind = "turn.diff"
 	// ChatEventCompacted reports that the provider summarized earlier history to
 	// reclaim context. It is a fact about the conversation, not a turn.
+	//
+	// ActivityStatus carries where the compaction is: running while the provider
+	// summarizes, failed (Summary holds the provider's reason) when it gave up,
+	// and empty or completed once the history was replaced. A driver that can see
+	// a compaction start reports it running and then settles the same
+	// ProviderItemID, so the timeline shows one row that changes in place.
 	ChatEventCompacted ChatEventKind = "thread.compacted"
 	// ChatEventUsage is a token accounting update for the conversation.
 	ChatEventUsage ChatEventKind = "usage"
@@ -1202,6 +1237,26 @@ type ChatPermissionModeChecker interface {
 	SupportsPermissionMode(mode PermissionMode) bool
 }
 
+// ChatSandboxProbeConfig is the posture a sandbox probe must reproduce. It
+// carries no model, prompt, or credentials: the probe only proves that a
+// command can start inside the provider's sandbox from this checkout.
+type ChatSandboxProbeConfig struct {
+	// WorkspacePath is the checkout the reviewer will run in.
+	WorkspacePath string
+}
+
+// ChatSandboxProber is implemented by a driver that can prove its sandbox
+// starts before AO commits to a review. It is deliberately separate from
+// ChatDriver: most Chat flows can fall back to a different posture, while a
+// reviewer cannot.
+type ChatSandboxProber interface {
+	// ProbeSandbox runs a no-op command in the provider's read-only sandbox.
+	// It returns ErrChatSandboxUnavailable (wrapped with the provider's own
+	// error) when the sandbox cannot start, and nil when the provider does not
+	// support the probe so callers keep their previous behaviour.
+	ProbeSandbox(ctx context.Context, cfg ChatSandboxProbeConfig) error
+}
+
 // ChatDriver opens conversations for one harness.
 type ChatDriver interface {
 	// Harness is the agent this driver serves.
@@ -1216,6 +1271,14 @@ type ChatDriver interface {
 	// Resume reattaches to an existing one. It returns ErrChatResumeFailed
 	// rather than silently starting a new conversation.
 	Resume(ctx context.Context, cfg ChatResumeConfig) (ChatConversation, error)
+}
+
+// ChatEnvironmentValidator checks provider prerequisites against the environment
+// overrides that a new session will inherit over the daemon environment. It must
+// not mutate the environment, create files, or launch a provider. These checks
+// are per request and must not be cached with global Chat capabilities.
+type ChatEnvironmentValidator interface {
+	ValidateEnvironment(ctx context.Context, env map[string]string) error
 }
 
 // ChatDriverReconnector attaches only to a surviving provider. Implementations

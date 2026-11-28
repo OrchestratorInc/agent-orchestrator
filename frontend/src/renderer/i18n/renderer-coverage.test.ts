@@ -20,11 +20,17 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"Local: http://localhost:5173/",
 	],
 	"components/CenterPane.tsx": ["px"],
+	// Key-cap hint beside Deny.
+	"components/approvals/ApprovalChatCard.tsx": ["Esc"],
+	"components/approvals/ApprovalPrompt.tsx": ["Esc"],
 	"components/CreateProjectFlow.tsx": [
 		"my-workspace/", "my-project", "web-app", "main",
 		"https://github.com/owner/repo",
 	],
 	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
+	"components/onboarding/FirstRunOnboarding.tsx": ["https://github.com/owner/repo"],
+	// The app name in the preview window's titlebar, as TitlebarNav shows it.
+	"components/onboarding/OnboardingPreviews.tsx": ["Orchestrator"],
 	// Technical branch/prefix examples moved with the common settings fields.
 	"components/ProjectSettingsEditor.tsx": ["auto", "ao"],
 	// Key-cap hint beside Cancel.

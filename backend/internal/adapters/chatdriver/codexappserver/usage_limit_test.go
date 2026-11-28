@@ -165,6 +165,66 @@ func TestCodexUsageLimitNotificationOrdering(t *testing.T) {
 	}
 }
 
+// Codex marks a thread systemError on every error until its next turn starts,
+// a usage-limit refusal included. The thread is fine and the refusal has its own
+// failure card, so AO must not report it as a broken thread, whichever of the
+// status and the error Codex sends first.
+func TestCodexUsageLimitDoesNotReportBrokenThread(t *testing.T) {
+	const start = `{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress"}}}`
+	const quota = `{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":false,"error":{"message":"` + codexQuotaCopy + `","codexErrorInfo":"usageLimitExceeded"}}}`
+	const network = `{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":false,"error":{"message":"Network failed."}}}`
+	const quotaCompleted = `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"` + codexQuotaCopy + `","codexErrorInfo":"usageLimitExceeded"}}}}`
+	const completed = `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed"}}}`
+	const systemError = `{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"systemError"}}}`
+	const idleStatus = `{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"idle"}}}`
+	const childSystemError = `{"method":"thread/status/changed","params":{"threadId":"child-thread","status":{"type":"systemError"}}}`
+	const idle = domain.ThreadStatusIdle
+	const broken = domain.ThreadStatusSystemError
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   []domain.ThreadStatus
+	}{
+		{"status after refusal", []string{start, quota, systemError, completed}, []domain.ThreadStatus{idle}},
+		{"status before refusal is corrected", []string{start, systemError, quota, completed}, []domain.ThreadStatus{broken, idle}},
+		{"refusal only on completion", []string{start, systemError, quotaCompleted}, []domain.ThreadStatus{broken, idle}},
+		{"status after completion", []string{start, quota, completed, systemError}, []domain.ThreadStatus{idle}},
+		{"other errors stay system errors", []string{start, network, systemError, completed}, []domain.ThreadStatus{broken}},
+		{"later error replaces the refusal", []string{start, quota, network, systemError}, []domain.ThreadStatus{broken}},
+		{"later error restores a hidden status", []string{start, quota, systemError, network}, []domain.ThreadStatus{idle, broken}},
+		{"later error restores a corrected status", []string{start, systemError, quota, network}, []domain.ThreadStatus{broken, idle, broken}},
+		{"native idle after the refusal stays idle", []string{start, quota, systemError, idleStatus, network}, []domain.ThreadStatus{idle, idle}},
+		{"next turn forgets the refusal", []string{start, quota, completed, start, systemError}, []domain.ThreadStatus{broken}},
+		{"child thread is not the root's refusal", []string{start, quota, childSystemError}, []domain.ThreadStatus{broken}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv, srv := openProviderFailureConversation(t)
+			for _, frame := range tc.frames {
+				srv.push(frame)
+			}
+			srv.push(`{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":"sentinel"}}`)
+			var got []domain.ThreadStatus
+			deadline := time.After(5 * time.Second)
+			for {
+				select {
+				case ev := <-conv.Events():
+					if ev.Kind == ports.ChatEventThreadState && ev.ThreadState != nil {
+						got = append(got, ev.ThreadState.Status)
+					}
+					if ev.Kind == ports.ChatEventThreadRenamed {
+						if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+							t.Fatalf("thread statuses = %v, want %v", got, tc.want)
+						}
+						return
+					}
+				case <-deadline:
+					t.Fatal("timed out awaiting thread statuses")
+				}
+			}
+		})
+	}
+}
+
 func TestCodexUsageLimitTerminalFallbackSafety(t *testing.T) {
 	now := testNow
 	const quota = `{"threadId":"thread-1","turnId":"turn-1","error":{"message":"` + codexQuotaCopy + `","codexErrorInfo":"usageLimitExceeded"}}`

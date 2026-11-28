@@ -23,6 +23,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{
 		TelemetryIdentity: ident,
 		LifetimeSessions:  func(context.Context) (int64, error) { return 3, nil },
+		LifetimeWork:      func(context.Context) (int64, error) { return 0, nil },
 	}, ControlDeps{})
 
 	post := func(host, origin, body string) int {
@@ -50,7 +51,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 
 	// Install ID until someone signs in.
-	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) {
+	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) || got["lifetimeWorkSessions"] != float64(0) {
 		t.Fatalf("anonymous identity = %#v", got)
 	}
 	if _, ok := get()["isSignedIn"]; ok {

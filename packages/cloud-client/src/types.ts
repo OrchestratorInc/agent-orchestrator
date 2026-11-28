@@ -38,6 +38,19 @@ export type CueDefinitionInput = Schemas["CueDefinitionInput"];
 export type InvokeCueInput = Schemas["InvokeCueInput"];
 export type InvokeCueResult = Schemas["InvokeCueResult"];
 
+export type ArtifactShareCommentAnchor = Schemas["ArtifactShareCommentAnchor"];
+export type ArtifactShareCommentLineRange = Schemas["ArtifactShareCommentLineRange"];
+export type ArtifactShareCommentRegion = Schemas["ArtifactShareCommentRegion"];
+export type ArtifactShareCommentAuthor = Schemas["ArtifactShareCommentAuthor"];
+export type ArtifactShareComment = Schemas["ArtifactShareComment"];
+export type ArtifactShareCommentThreadStatus = Schemas["ArtifactShareCommentThreadStatus"];
+export type ArtifactShareCommentThread = Schemas["ArtifactShareCommentThread"];
+export type ArtifactShareCommentsSnapshot = Schemas["ArtifactShareCommentsSnapshot"];
+export type ArtifactShareThreadCreateInput = Schemas["ArtifactShareThreadCreateInput"];
+export type ArtifactShareReplyInput = Schemas["ArtifactShareReplyInput"];
+export type ArtifactShareThreadStatusInput = Schemas["ArtifactShareThreadStatusInput"];
+export type ArtifactShareCommentEditInput = Schemas["ArtifactShareCommentEditInput"];
+
 export type GitHubInstallationStatus = Schemas["GitHubInstallationStatus"];
 export type GitHubSyncStatus = Schemas["GitHubSyncStatus"];
 export type GitHubInstallation = Schemas["GitHubInstallation"];
@@ -193,6 +206,9 @@ export type ChatModelsResponse = Schemas["ChatModelsResponse"];
 export type CloudHarnessVersions = Schemas["CloudHarnessVersions"];
 export type CloudHarnessVersion = Schemas["CloudHarnessVersion"];
 export type CloudHarnessInstallInput = Schemas["CloudHarnessInstallInput"];
+export type DataRetention = Schemas["DataRetention"];
+export type DataRetentionChange = Schemas["DataRetentionChange"];
+export type PutDataRetentionInput = Schemas["PutDataRetentionInput"];
 export type WorkerWorkspaceListPayload =
   Schemas["WorkerWorkspaceListPayload"];
 export type WorkerWorkspaceReadPayload =

@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { reportErrorShown } from "./telemetry/uiUsageRegistry";
 import type { ToastController, ToastMessage, ToastOptions } from "./Toast.types";
 
 /**
@@ -17,6 +18,8 @@ export function useToast(): ToastController {
 	const lastId = useRef(0);
 	const show = useCallback((text: string, options: ToastOptions = {}) => {
 		lastId.current += 1;
+		// A warning toast says an action failed or only partly worked.
+		if (options.tone === "warning") reportErrorShown("toast", "action_failed");
 		setCurrent({ id: lastId.current, text, duration: options.duration ?? "short", tone: options.tone ?? "neutral", dismissible: options.dismissible ?? false });
 	}, []);
 	// A message that times out after a newer one replaced it must not take the

@@ -1,4 +1,5 @@
 import type {
+	ActivityDetail,
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
@@ -15,6 +16,20 @@ export type ConversationGroup = {
 	turn?: ConversationTurn;
 	/** The turn's plan when this turn should show it; see attachCurrentPlans. */
 	plan?: ConversationPlan;
+	/** The group opens at a steer, not at the turn's prompt (see splitAtSteers). */
+	continuesTurn?: boolean;
+	/**
+	 * False on the part of a turn a later steer cut off: its `turn` is a settled
+	 * view of just that stretch, and the turn's actions, diff and plan draw under
+	 * the last part. Unset on groups that are not a turn.
+	 */
+	endsTurn?: boolean;
+	/**
+	 * The daemon's record of the turn, which `turn` only presents: a part a later
+	 * steer cut off reads as settled while the real turn may still run, and its
+	 * rows' statuses follow the real one (settledTurnItems).
+	 */
+	sourceTurn?: ConversationTurn;
 };
 
 export type ActivityNode = {
@@ -101,7 +116,82 @@ export function groupConversationByTurn(
 	}
 	groups.sort((left, right) => left.anchor - right.anchor);
 	attachCurrentPlans(groups);
-	return groups;
+	return groups.flatMap(splitAtSteers);
+}
+
+/**
+ * A steer is the person speaking, so it opens a new visual turn even though the
+ * provider keeps running the same one, as on the desktop: the work before it
+ * settles into its own "Worked for" row instead of folding the steer away with
+ * it, and the steer starts a fresh Working row and reply. Only the last part
+ * carries the real turn's live state, outcome, actions and plan. A steer another
+ * session or a labelled automation sent stays in the work (isAutomationSteer).
+ */
+function splitAtSteers(group: ConversationGroup): ConversationGroup[] {
+	const turn = group.turn;
+	if (!turn) return [group];
+	if (turn.state === "queued") return [{ ...group, endsTurn: true, sourceTurn: turn }];
+	const starts = group.items.flatMap((item, index) => isHumanSteer(item) ? [index] : []);
+	if (starts.length === 0) return [{ ...group, endsTurn: true, sourceTurn: turn }];
+	// A loaded page can open on a steer, the prompt above it not loaded yet. That
+	// part is the steer's, keyed and timed by it, so loading the prompt later
+	// adds the opening part above it and moves no part's key.
+	const bounds = starts[0] === 0 ? [...starts, group.items.length] : [0, ...starts, group.items.length];
+	const opens = (from: number) => from === 0 && starts[0] !== 0;
+	const startedAt = (from: number) => opens(from) ? turn.startedAt ?? turn.requestedAt : group.items[from].createdAt;
+	return bounds.slice(0, -1).map((from, index) => {
+		const to = bounds[index + 1];
+		const items = group.items.slice(from, to);
+		const last = to === group.items.length;
+		const part: ConversationGroup = {
+			key: opens(from) ? group.key : `${group.key}:steer:${items[0].id}`,
+			turnId: group.turnId,
+			anchor: index === 0 ? group.anchor : items[0].sequence,
+			items,
+			turn: segmentTurn(turn, last, startedAt(from), last ? undefined : startedAt(to)),
+			endsTurn: last,
+			sourceTurn: turn,
+		};
+		if (!opens(from)) part.continuesTurn = true;
+		if (last && group.plan) part.plan = group.plan;
+		return part;
+	});
+}
+
+/**
+ * The derived turn views, per source turn object. A part's view is the same
+ * object for as long as its turn record is, so useStableGroups keeps the part
+ * and its memoized render while another turn streams.
+ */
+const segmentTurns = new WeakMap<ConversationTurn, Map<string, ConversationTurn>>();
+
+function segmentTurn(turn: ConversationTurn, last: boolean, startedAt: string | undefined, endedAt: string | undefined): ConversationTurn {
+	const key = last ? `last\u0000${startedAt}` : `${startedAt}\u0000${endedAt}`;
+	let views = segmentTurns.get(turn);
+	if (!views) segmentTurns.set(turn, views = new Map());
+	let view = views.get(key);
+	if (!view) {
+		view = last
+			? { ...turn, startedAt }
+			: { id: turn.id, state: "completed", requestedAt: turn.requestedAt, startedAt, completedAt: endedAt, hasHumanPrompt: turn.hasHumanPrompt };
+		views.set(key, view);
+	}
+	return view;
+}
+
+/** A steer the person typed: not one another session or a labelled automation sent. */
+function isHumanSteer(item: ConversationItem): boolean {
+	return item.kind === "activity" && isSteerItem(item) && !isAutomationSteer(item.detail);
+}
+
+/**
+ * Whether another agent sent this steer: an AO session that names itself, or an
+ * automation with a label (a Cloud orchestrator's message steered into a busy
+ * worker names only its label). As on the desktop's SteerMessage. Such a steer
+ * stays in the work, and its row is drawn as its sender's.
+ */
+export function isAutomationSteer(detail: ActivityDetail | undefined): boolean {
+	return Boolean(detail?.senderSessionId?.trim()) || (detail?.origin === "automation" && Boolean(detail.senderDisplayName?.trim()));
 }
 
 /**
@@ -150,13 +240,42 @@ function rendersNothing(item: ConversationItem): boolean {
 }
 
 /**
- * The one reply that draws the typing cursor: the newest item, while it is
- * still streaming. ACP providers settle a turn's text blocks only when the turn
- * ends, so earlier blocks stay marked streaming after a tool call follows them.
+ * A finished turn's items as the timeline draws them. Older daemons store the
+ * provider's failure notice ("You've hit your 5-hour limit…") again as a running
+ * row each time the agent restarts and replays its history, after the turn has
+ * long ended, so it would spin forever and repeat. On a finished turn nothing
+ * runs: a leftover running row shows the status the daemon gives such rows when
+ * the turn settles, a notice that restates the turn's own error is dropped (the
+ * turn's outcome already says it), and replayed copies of a notice show once.
  */
-export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
-	const last = items.at(-1);
-	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
+export function settledTurnItems(items: ConversationItem[], turn: ConversationTurn | undefined): ConversationItem[] {
+	if (!turn || turn.state === "running" || turn.state === "queued") return items;
+	const turnError = turn.state === "failed" ? turn.errorMessage?.trim() : undefined;
+	const notices = new Set<string>();
+	const settled: ConversationItem[] = [];
+	for (const item of items) {
+		if (item.kind !== "activity") {
+			settled.push(item);
+			continue;
+		}
+		if (item.detail?.event === "provider.failure") {
+			const summary = String(item.summary ?? "").trim();
+			if (turnError && summary === turnError) continue;
+			// A replay repeats the whole notice; one that shares only the title is new.
+			const key = [summary, item.detail.category ?? "", item.detail.severity ?? "", item.detail.text ?? ""].join("\u0000");
+			if (notices.has(key)) continue;
+			notices.add(key);
+		}
+		settled.push(item.status === "running" ? { ...item, status: settledActivityStatus(turn.state) } : item);
+	}
+	return settled;
+}
+
+/** The daemon's terminalActivityStatus: what a settling turn writes over a running row. */
+function settledActivityStatus(state: ConversationTurn["state"]): ConversationActivity["status"] {
+	if (state === "completed" || state === "recovered") return "completed";
+	if (state === "interrupted") return "cancelled";
+	return "failed";
 }
 
 /**
@@ -297,6 +416,25 @@ export function countActivityNodes(nodes: ActivityNode[]): number {
 export function activityNodesRunning(nodes: ActivityNode[]): boolean {
 	return nodes.some((node) => node.activity.status === "running" || activityNodesRunning(node.children));
 }
+
+/**
+ * What a compaction row says, in the desktop's words: under way, could not run
+ * (with why, or that it was stopped), or done with what it freed and how full
+ * the context is now.
+ */
+export function compactionLine(activity: ConversationActivity): string {
+	if (activity.status === "running") return "Compacting conversation";
+	if (activity.status === "failed" || activity.status === "cancelled") {
+		const reason = activity.detail?.error || (activity.status === "cancelled" ? "Stopped" : "");
+		return reason ? `Couldn't compact conversation · ${reason}` : "Couldn't compact conversation";
+	}
+	const reclaimed = activity.detail?.tokensReclaimed;
+	const after = activity.detail?.tokensAfter;
+	const window = activity.detail?.contextWindow;
+	return `Compacted conversation${reclaimed ? ` · −${formatTokens(reclaimed)}` : ""}${after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}`;
+}
+
+function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
 
 export function summarizeActivities(activities: ConversationActivity[]): string {
 	let reads = 0;

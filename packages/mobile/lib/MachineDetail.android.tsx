@@ -1,7 +1,6 @@
 import { Host, Icon, LazyColumn, Text } from "@expo/ui/jetpack-compose";
 import { fillMaxSize, graphicsLayer } from "@expo/ui/jetpack-compose/modifiers";
 import * as Clipboard from "expo-clipboard";
-import { Stack } from "expo-router";
 import { useMemo, useState, type ComponentProps } from "react";
 import { Platform } from "react-native";
 import { GroupedRow, GroupedSection, groupedListPadding } from "./composeGroupedList.android";
@@ -15,6 +14,8 @@ import {
 import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { space } from "./tokens";
+import { useGlassBarInset } from "./useHeaderOverlap";
+import { HeaderPillButton, PillHeaderRight } from "./headerPill";
 import { materialDrawable } from "./toolbarIcon.android";
 
 export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
@@ -25,16 +26,20 @@ export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type Machine
 // or a long press, as a settings row showing a value does.
 export function MachineDetail({ host, activeConfig, isDefault, status, switching, forgetting, testing, canTest, onTest, onMakeDefault, onReconnect, onForget, onEdit, notify }: MachineDetailProps) {
 	const t = useTheme();
+	// Under a clear pill bar the list starts below it, clear of the frost's 16dp seam too.
+	const barInset = useGlassBarInset();
+	const listPadding = useMemo(() => (barInset > 0 ? { ...groupedListPadding, top: Math.max(groupedListPadding.top, space.lg) + barInset } : groupedListPadding), [barInset]);
 	const { scheme } = useThemeState();
 	const [showOtherRoutes, setShowOtherRoutes] = useState(false);
 	const endpoints = environmentEndpointRows(host, activeConfig);
 	const primary = primaryEnvironmentEndpoint(endpoints);
 	const others = endpoints.filter((endpoint) => endpoint.key !== primary?.key);
 	const busy = switching || forgetting;
+	// On a pill of its own over the clear bar, beside the title pill.
 	const headerItems = useMemo(() => (
-		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={materialDrawable("edit")} accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} />
-		</Stack.Toolbar>
+		<PillHeaderRight>
+			<HeaderPillButton icon="rename" label={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} testID="machine-edit" />
+		</PillHeaderRight>
 	), [forgetting, host.name, onEdit]);
 
 	function copyAddress(authority: string) {
@@ -47,7 +52,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 		<>
 			{headerItems}
 			<Host style={{ flex: 1 }} colorScheme={scheme}>
-				<LazyColumn contentPadding={groupedListPadding} verticalArrangement={{ spacedBy: space.lg }} modifiers={[fillMaxSize()]}>
+				<LazyColumn contentPadding={listPadding} verticalArrangement={{ spacedBy: space.lg }} modifiers={[fillMaxSize()]}>
 					<GroupedSection footer={isDefault ? DEFAULT_MACHINE_NOTE : undefined}>
 						<GroupedRow headline="Status" trailing={<Text color={environmentStatusColor(t, status)}>{status.label}</Text>} testID="machine-status" />
 						{host.platform ? <GroupedRow headline="Platform" trailing={environmentPlatformLabel(host.platform)} /> : null}

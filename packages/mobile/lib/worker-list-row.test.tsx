@@ -4,8 +4,10 @@ import type { DashboardSession } from "./api";
 import { createContext, createElement, useContext, useImperativeHandle, Fragment } from "react";
 
 const appContext = createContext({ currentHostId: "host-1", notificationsUnread: 0 });
-const counters = vi.hoisted(() => ({ renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
+const counters = vi.hoisted(() => ({ openPage: vi.fn(), renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
 const boardStore = vi.hoisted(() => ({
+	// The board reads each machine's freshness; no live sync time belongs to any here.
+	getPrimaryLastSyncAt: () => undefined,
 	projects: [], allProjects: [], connection: "open", hostStates: [] as { hostId: string; connection: string }[],
 	kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn(),
 	configForHost: (hostId: string) => ({ host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", password: "secret", hostId }),
@@ -14,6 +16,7 @@ const boardStore = vi.hoisted(() => ({
 const archivePages = vi.hoisted(() => ({
 	requests: [] as { hostId?: string; cursor?: string | null; resolve(page: { sessions: unknown[]; nextCursor: string | null }): void; reject(cause: unknown): void }[],
 }));
+vi.mock("./chat/LatticeCometLoader", () => ({ LatticeCometLoader: () => null }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
@@ -58,7 +61,7 @@ vi.mock("./agentsView", async (importOriginal) => ({
 	workerRowPresentation: () => { counters.renders++; return { title: "Polish workers", project: "Agent Orchestrator", branch: "feat/mobile", trailing: "2m", trailingKind: "time" }; },
 	workerStatusGlyph: () => undefined,
 }));
-vi.mock("./prView", () => ({ toneColor: () => "tone" }));
+vi.mock("./prView", async (importOriginal) => ({ ...await importOriginal<typeof import("./prView")>(), toneColor: (_t: unknown, tone: string) => `tone:${tone}` }));
 vi.mock("./theme", () => ({ statusVisual: () => ({ label: "Working", color: "orange", breathing: false }) }));
 vi.mock("./ThemeProvider", () => {
 	const theme = {
@@ -68,7 +71,7 @@ vi.mock("./ThemeProvider", () => {
 		blue: "blue", green: "green", purple: "purple", orange: "orange", amber: "amber",
 		tintBlue: "blue-tint", tintGreen: "green-tint", tintPurple: "purple-tint", tintOrange: "orange-tint", tintAmber: "amber-tint",
 	};
-	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
+	return { useTheme: () => theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
 vi.mock("./worker-action-model", async (importOriginal) => ({
 	...await importOriginal<typeof import("./worker-action-model")>(),
@@ -82,7 +85,12 @@ vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appCon
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("react-native-safe-area-context", () => ({ SafeAreaListener: "SafeAreaListener" }));
 vi.mock("react-native-reanimated", () => ({
-	default: { FlatList: TestList },
+	default: { FlatList: TestList, View: "AnimatedView" },
+	useSharedValue: (value: number) => ({ value }),
+	useAnimatedStyle: (style: () => object) => style(),
+	withSequence: (...steps: number[]) => steps.at(-1),
+	withSpring: (value: number) => value,
+	withTiming: (value: number) => value,
 	LayoutAnimationConfig: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 	LinearTransition: { duration: () => ({}) },
 }));
@@ -91,10 +99,10 @@ function TestList({ ref, ...props }: { ref?: React.Ref<unknown>; data: {key: str
 	useImperativeHandle(ref, () => ({ scrollToOffset: counters.scrollToOffset }), []);
 	return createElement("virtual-list", props, props.data.map(item => <Fragment key={item.key}>{props.renderItem({ item })}</Fragment>));
 }
-vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
-vi.mock("./reviewView", () => ({ reviewRouteForSession: () => undefined }));
+vi.mock("./pageNavigation", () => ({ useOpenPage: () => counters.openPage }));
+vi.mock("./reviewView", () => ({ reviewRouteForPR: (sessionId: string, pr: { number: number }) => ({ pathname: "/review/[sessionId]", params: { sessionId, prNumber: String(pr.number) } }) }));
 
-import { WorkerListRow } from "./worker-list-row";
+import { pullRequestLabel, WorkerListRow } from "./worker-list-row";
 import { WorkerBoardList } from "./worker-board-list";
 
 const session: DashboardSession = {
@@ -195,6 +203,23 @@ describe("WorkerListRow", () => {
 		expect(counters.renders).toBe(0);
 		act(() => renderer.unmount());
 	});
+	// Choosing a machine rebuilds every row, so a row must settle on its first
+	// render rather than draw itself again once its effects run.
+	it("renders a newly mounted worker once", () => {
+		counters.renders = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Project" isRenaming={false} nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={vi.fn()}
+					onRename={vi.fn(async () => {})} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		expect(counters.renders).toBe(1);
+		act(() => renderer.unmount());
+	});
 	it("places a distinct machine name and symbol on the bottom metadata line", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => {
@@ -223,11 +248,79 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
 	});
 
+	// The row of a machine that can't be reached shows the last thing heard: it
+	// stays readable, at a lower voice, and says so to a screen reader.
+	it("dims a row whose machine can't be reached and says it is the last known state", () => {
+		let renderer!: ReactTestRenderer;
+		const handlers = {
+			onSwipeOpen: vi.fn(), onSwipeClose: vi.fn(), onRenameStart: vi.fn(), onRenameCancel: vi.fn(),
+			onRename: vi.fn(async () => {}), onSetPinned: vi.fn(async () => {}), onDelete: vi.fn(), onResume: vi.fn(), onRestore: vi.fn(),
+		};
+		act(() => {
+			renderer = create(<WorkerListRow session={session} projectName="Agent Orchestrator" unreachable isRenaming={false} nowBucket={1} {...handlers} />);
+		});
+		const dimmed = renderer.root.findAll((node) => Array.isArray(node.props.style) && node.props.style.some((value: { opacity?: number } | false) => value && value.opacity === 0.5));
+		// The whole row dims as one, lead and lines together.
+		expect(dimmed.length).toBeGreaterThanOrEqual(1);
+		expect(renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.endsWith("Last known; its machine can't be reached.")).length).toBeGreaterThan(0);
+	});
+
 });
 
 // Haptics mark an outcome or a destructive confirmation; opening a row,
 // pressing a rail control or folding a section stays silent, and one action
 // never buzzes twice.
+// Choosing another machine or project gives the board a new identity. Rows on
+// both boards stay as they are (rebuilding every row took seconds on a phone),
+// and the board still starts over as a new list would.
+describe("switching the board's filter", () => {
+	const a = { ...session, id: "a", hostId: "mac", lastEventAt: "2026-10-08T02:00:00Z" };
+	const b = { ...session, id: "b", hostId: "dev", lastEventAt: "2026-10-08T01:00:00Z" };
+	const onRefresh = vi.fn();
+	const render = (sessions: DashboardSession[], identityKey: string) =>
+		<WorkerBoardList sessions={sessions} identityKey={identityKey} contentBottomInset={0} refreshing={false} onRefresh={onRefresh} />;
+	const rowIds = (renderer: ReactTestRenderer) => renderer.root.findByType("virtual-list" as never).props.data
+		.filter((row: { kind: string }) => row.kind === "session").map((row: { session: DashboardSession }) => row.session.id);
+
+	it("keeps the rows both boards share instead of building them again", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(render([a, b], "all|all")); });
+		counters.renders = 0;
+		act(() => { renderer.update(render([a], "mac|all")); });
+		expect(rowIds(renderer)).toEqual(["a"]);
+		expect(counters.renders).toBe(0);
+		act(() => renderer.unmount());
+	});
+
+	it("starts the new board at its top, in its current order, with no news held back", () => {
+		const scrollToOffset = counters.scrollToOffset.mockClear();
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(render([a, b], "all|all")); });
+		const newer = { ...b, lastEventAt: "2026-10-08T03:00:00Z" };
+		act(() => { renderer.update(render([a, newer], "all|all")); });
+		// Held still on the same board, behind the pill.
+		expect(rowIds(renderer)).toEqual(["a", "b"]);
+		expect(scrollToOffset).not.toHaveBeenCalled();
+		act(() => { renderer.update(render([a, newer], "all|project-1")); });
+		expect(rowIds(renderer)).toEqual(["b", "a"]);
+		expect(renderer.root.findAllByType("Pressable" as never).filter((node) => node.props.accessibilityLabel?.includes("updated"))).toHaveLength(0);
+		expect(scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+		act(() => renderer.unmount());
+	});
+
+	it("closes a row's open swipe rail when the board moves", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(render([a, b], "all|all")); });
+		const close = vi.fn();
+		const key = JSON.stringify(["mac", "a"]);
+		const rowA = renderer.root.findAllByType("RowInteraction" as never).find((node) => node.props.sessionId === key)!;
+		act(() => rowA.props.onSwipeOpen(key, close));
+		act(() => { renderer.update(render([a], "mac|all")); });
+		expect(close).toHaveBeenCalled();
+		act(() => renderer.unmount());
+	});
+});
+
 describe("worker board haptics", () => {
 	it("fires one warning as Archive asks to confirm, and nothing for the presses before it", async () => {
 		const { haptics } = await import("./haptics");
@@ -682,6 +775,85 @@ describe("a machine that pages its archive", () => {
 		expect(archivePages.requests).toHaveLength(1);
 		await answer({ sessions: [arch("a1", 1)], nextCursor: null });
 		expect(archivedIds(renderer)).toEqual(["a1"]);
+		act(() => renderer.unmount());
+	});
+});
+
+describe("pullRequestLabel", () => {
+	it("names the worker's pull request by number, counts the rest, and is null with none", () => {
+		expect(pullRequestLabel({ pr: { number: 1253 } } as never)).toBe("#1253");
+		// The newest of two open pull requests leads.
+		expect(pullRequestLabel({ prs: [{ number: 12 }, { number: 13 }] } as never)).toBe("#13 +1");
+		expect(pullRequestLabel({ pr: { number: 0 } } as never)).toBeNull();
+		expect(pullRequestLabel({} as never)).toBeNull();
+	});
+});
+
+describe("the pull request pill on a row", () => {
+	const handlers = {
+		onSwipeOpen: vi.fn(), onSwipeClose: vi.fn(), onRenameStart: vi.fn(), onRenameCancel: vi.fn(),
+		onRename: vi.fn(async () => {}), onSetPinned: vi.fn(async () => {}), onDelete: vi.fn(), onResume: vi.fn(), onRestore: vi.fn(),
+	};
+	const render = (over: Partial<DashboardSession>) => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerListRow session={{ ...session, ...over }} projectName="Agent Orchestrator" isRenaming={false} nowBucket={1} {...handlers} />); });
+		return renderer;
+	};
+
+	// A worker that closed #12 and opened #15 is on #15, and the pill says so.
+	it("names the live pull request in its own lifecycle's tone, whatever the session's status", () => {
+		const renderer = render({ status: "needs_input", prs: [{ number: 12, state: "closed" }, { number: 15, state: "open" }] as never });
+		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
+		expect(pill.findByType("Feather" as never).props).toMatchObject({ name: "git-pull-request", color: "tone:success" });
+		const [label, more] = pill.findAllByType("Text" as never);
+		expect(label.props.children[0]).toBe("#15");
+		expect(more.props).toMatchObject({ children: " +1", style: { color: "tone:error" } });
+		act(() => renderer.unmount());
+	});
+
+	// One open pull request and three merged ones: the +3 is purple, not the lead's green.
+	it("colours the +N by the pull requests it counts", () => {
+		const renderer = render({ prs: [{ number: 15, state: "open" }, { number: 12, state: "merged" }, { number: 11, state: "merged" }, { number: 10, state: "merged" }] as never });
+		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
+		const [label, more] = pill.findAllByType("Text" as never);
+		expect(label.props.style).toEqual(expect.arrayContaining([{ color: "tone:success" }]));
+		expect(more.props).toMatchObject({ children: " +3", style: { color: "tone:merged" } });
+		act(() => renderer.unmount());
+	});
+
+	it("draws no +N for a single pull request", () => {
+		const renderer = render({ prs: [{ number: 15, state: "open" }] as never });
+		expect(renderer.root.findByProps({ testID: "worker-pr-pill" }).findAllByType("Text" as never)).toHaveLength(1);
+		act(() => renderer.unmount());
+	});
+
+	it("reads a closed pull request as closed, in red, rather than as an open one", () => {
+		const renderer = render({ prs: [{ number: 12, state: "closed" }] as never });
+		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
+		expect(pill.findByType("Feather" as never).props).toMatchObject({ name: "git-pull-request-closed", color: "tone:error" });
+		act(() => renderer.unmount());
+	});
+
+	// A merged pull request whose agent went back to work stays merged on its pill.
+	it("keeps a merged pull request purple while its agent works again", () => {
+		const renderer = render({ status: "working", prs: [{ number: 9, state: "merged" }] as never });
+		expect(renderer.root.findByProps({ testID: "worker-pr-pill" }).findByType("Feather" as never).props).toMatchObject({ name: "git-merge", color: "tone:merged" });
+		act(() => renderer.unmount());
+	});
+
+	it("tells a screen reader the mark's state, the pull request and when it changed", () => {
+		const renderer = render({ status: "pr_open", displayStatus: "Merge conflicts", activity: "idle", prs: [{ number: 15, state: "open" }] as never });
+		const label = renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.startsWith("Polish workers."))[0].props.accessibilityLabel as string;
+		expect(label).toMatch(/^Polish workers\. Merge conflicts\. Pull request 15, open\. Agent Orchestrator\. Updated .+\.$/);
+		act(() => renderer.unmount());
+	});
+
+	// The pill names #15; "Open PR" from the row's menu must open #15 too.
+	it("opens the pull request the pill names from the row's Open PR", () => {
+		counters.openPage.mockClear();
+		const renderer = render({ prs: [{ number: 12, state: "closed" }, { number: 15, state: "open" }] as never });
+		act(() => renderer.root.findByType("RowInteraction" as never).props.onAction("openPr"));
+		expect(counters.openPage).toHaveBeenCalledWith({ pathname: "/review/[sessionId]", params: { sessionId: "worker-1", prNumber: "15" } });
 		act(() => renderer.unmount());
 	});
 });

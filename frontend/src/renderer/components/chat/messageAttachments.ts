@@ -62,8 +62,15 @@ export const ATTACHMENT_TILE_CLASS = "relative flex h-16 w-32 min-w-0 select-non
 /** A tile's type tag: a tiny control, so slightly rounded rather than a pill (DESIGN.md radius). */
 export const ATTACHMENT_TILE_PILL_CLASS = "inline-flex h-4 shrink-0 items-center rounded-xs border border-border px-1.5 text-micro whitespace-nowrap";
 
+/**
+ * An opaque fill for whatever covers a tile. `bg-background` is clear in a
+ * translucent window, which let the name card show through a text preview, so
+ * this uses the solid copy of the canvas; an opaque window resolves to the same color.
+ */
+export const ATTACHMENT_TILE_SOLID_FILL_CLASS = "bg-[var(--solid-bg-primary,var(--color-bg-primary))]";
+
 /** The type pill laid over a preview: solid, so it reads on any frame. */
-export const ATTACHMENT_TILE_OVERLAY_PILL_CLASS = "pointer-events-none absolute bottom-1.5 left-1.5 bg-background text-foreground";
+export const ATTACHMENT_TILE_OVERLAY_PILL_CLASS = `pointer-events-none absolute bottom-1.5 left-1.5 text-foreground ${ATTACHMENT_TILE_SOLID_FILL_CLASS}`;
 
 export type AttachmentPreviewKind = "video" | "pdf" | "text";
 

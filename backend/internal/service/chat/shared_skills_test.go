@@ -1,0 +1,313 @@
+package chat_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillbridge"
+)
+
+func shareSkill(t *testing.T, name, body string) skillbridge.Skill {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: Does "+name+".\n---\n"+body+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return skillbridge.Skill{Name: name, Description: "Does " + name + ".", Path: dir}
+}
+
+func shareSkills(t *testing.T, h *harness, skills ...skillbridge.Skill) {
+	t.Helper()
+	if err := skillbridge.WriteIndex(h.rendersDir, string(testSession), skills); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillsAddWhatTheAgentDoesNotList(t *testing.T) {
+	conv := &skillfulConversation{
+		fakeConversation: newFakeConversation(),
+		skills:           []ports.ChatSkill{{Name: "review", DisplayName: "review", Source: "agent"}, {Name: "skill:pi-one", Source: "agent"}},
+	}
+	h := newHarnessWithConversation(t, conv)
+	shareSkills(t, h, shareSkill(t, "Review", ""), shareSkill(t, "pi-one", ""), shareSkill(t, "deploy", ""), shareSkill(t, "two words", ""))
+
+	skills, err := h.svc.Skills(context.Background(), testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, skill := range skills {
+		got = append(got, skill.Name+":"+skill.Source)
+	}
+	// A name with a space, such as "Poteto Mode", is offered too: agents list
+	// skills under their frontmatter name.
+	if want := "review:agent skill:pi-one:agent deploy:orchestrator two words:orchestrator"; strings.Join(got, " ") != want {
+		t.Fatalf("skills = %v, want %s", got, want)
+	}
+}
+
+func TestSkillsForAnAgentThatListsNone(t *testing.T) {
+	h := newHarness(t)
+	shareSkills(t, h, shareSkill(t, "deploy", ""))
+	skills, err := h.svc.Skills(context.Background(), testSession)
+	if err != nil || len(skills) != 1 || skills[0].Name != "deploy" || skills[0].Description != "Does deploy." {
+		t.Fatalf("skills = %+v, %v", skills, err)
+	}
+}
+
+func TestSharedSkillInstructionsGoWithTheMessage(t *testing.T) {
+	deploy := func(t *testing.T) skillbridge.Skill { return shareSkill(t, "deploy", "Ship it with ./ship.sh") }
+	for _, tc := range []struct {
+		name   string
+		msg    ports.ChatUserMessage
+		expand bool
+	}{
+		{"named first", ports.ChatUserMessage{Text: "/deploy to staging"}, true},
+		{"ignoring case", ports.ChatUserMessage{Text: "  /DEPLOY to staging"}, true},
+		{"named twice", ports.ChatUserMessage{Text: "/deploy /deploy to staging"}, true},
+		{"in a sentence", ports.ChatUserMessage{Text: "please /deploy to staging"}, false},
+		{"a path", ports.ChatUserMessage{Text: "/deploy/staging.yml is wrong"}, false},
+		{"a longer name", ports.ChatUserMessage{Text: "/deploy-all now"}, false},
+		{"not shared", ports.ChatUserMessage{Text: "/other to staging"}, false},
+		{"the user's opening brief", ports.ChatUserMessage{Text: "/deploy to staging", SpawnOpeningPrompt: true}, true},
+		{"an issue in an opening prompt", ports.ChatUserMessage{Text: "Work on tracker issue o/r#1.\n\nBody:\n/deploy to staging", SpawnOpeningPrompt: true}, false},
+		{"relayed by the user", ports.ChatUserMessage{Text: "/deploy to staging", Origin: domain.MessageOriginAutomation, AuthoredByUser: true}, true},
+		{"written by someone else", ports.ChatUserMessage{Text: "/deploy to staging", Origin: domain.MessageOriginAutomation}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			skill := deploy(t)
+			shareSkills(t, h, skill)
+			tc.msg.ClientMessageID = "m-1"
+			if tc.msg.Origin == "" {
+				tc.msg.Origin = domain.MessageOriginHuman
+			}
+			if _, err := h.svc.Send(context.Background(), testSession, tc.msg); err != nil {
+				t.Fatal(err)
+			}
+			h.conv.mu.Lock()
+			sent := h.conv.sent[len(h.conv.sent)-1].Text
+			h.conv.mu.Unlock()
+			if !tc.expand {
+				if sent != tc.msg.Text {
+					t.Fatalf("sent %q, want the message as written", sent)
+				}
+				return
+			}
+			if !strings.HasPrefix(sent, "Use the \"deploy\" skill.\n\nto staging\n\n<user_skill name=\"deploy\"") ||
+				!strings.Contains(sent, "Ship it with ./ship.sh") || !strings.Contains(sent, filepath.ToSlash(skill.Path)) {
+				t.Fatalf("sent %q, want the skill's instructions", sent)
+			}
+			if n := strings.Count(sent, "<user_skill "); n != 1 {
+				t.Fatalf("sent %d copies of the skill, want 1: %q", n, sent)
+			}
+			// The timeline keeps what the user wrote.
+			snapshot, err := h.svc.Snapshot(context.Background(), testSession)
+			if err != nil || len(snapshot.Messages) != 1 || snapshot.Messages[0].Text != tc.msg.Text {
+				t.Fatalf("timeline = %+v, %v, want what the user wrote", snapshot.Messages, err)
+			}
+		})
+	}
+}
+
+func TestSharedSkillsTheAgentHasAreLeftToIt(t *testing.T) {
+	conv := &skillfulConversation{fakeConversation: newFakeConversation(), skills: []ports.ChatSkill{{Name: "deploy"}}}
+	h := newHarnessWithConversation(t, conv)
+	shareSkills(t, h, shareSkill(t, "deploy", "Ship it"))
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "/deploy now", ClientMessageID: "m-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
+	if got := conv.sent[0].Text; got != "/deploy now" {
+		t.Fatalf("sent %q, want the agent's own command", got)
+	}
+}
+
+func TestSharedSkillsSeveralLongAndGone(t *testing.T) {
+	h := newHarness(t)
+	long := shareSkill(t, "long", strings.Repeat("x", 80<<10))
+	gone := shareSkill(t, "gone", "")
+	if err := os.RemoveAll(gone.Path); err != nil {
+		t.Fatal(err)
+	}
+	shareSkills(t, h, shareSkill(t, "one", "First."), long, gone)
+	send := func(id, text string) string {
+		t.Helper()
+		if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+			Text: text, ClientMessageID: id, Origin: domain.MessageOriginHuman,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		h.conv.mu.Lock()
+		defer h.conv.mu.Unlock()
+		return h.conv.sent[len(h.conv.sent)-1].Text
+	}
+	got := send("m-1", "/one /long go")
+	if !strings.HasPrefix(got, "Use the \"one\" and \"long\" skills.\n\ngo\n\n") || !strings.Contains(got, "First.") ||
+		!strings.Contains(got, "Read SKILL.md in its folder") || len(got) > 4<<10 {
+		t.Fatalf("sent %d bytes: %.400q", len(got), got)
+	}
+}
+
+func TestSharedSkillThatIsGoneIsLeftAsWritten(t *testing.T) {
+	h := newHarness(t)
+	gone := shareSkill(t, "gone", "")
+	if err := os.RemoveAll(gone.Path); err != nil {
+		t.Fatal(err)
+	}
+	shareSkills(t, h, gone)
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "/gone", ClientMessageID: "m-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.conv.mu.Lock()
+	defer h.conv.mu.Unlock()
+	if got := h.conv.sent[0].Text; got != "/gone" {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+func TestSharedSkillInstructionsGoWithASideQuestion(t *testing.T) {
+	h := newSideWorkflow(t, "", domain.HarnessOpenCode)
+	shareSkills(t, h.harness, shareSkill(t, "deploy", "Ship it with ./ship.sh"))
+	side := h.side(t, "skills", true)
+	if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "/deploy now", ClientMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
+	provider := h.provider(0)
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if got := provider.sent[0].Text; !strings.Contains(got, "Use the \"deploy\" skill.\n\nnow") || !strings.Contains(got, "Ship it with ./ship.sh") {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+func TestPromotedSkillRecordsWhatTheAgentReceived(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	shareSkills(t, h, shareSkill(t, "deploy", "Ship it with ./ship.sh"))
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "/deploy staging", ClientMessageID: "queued", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatal(err)
+	}
+	calls := provider.steers()
+	sent := calls[len(calls)-1].msg.Text
+	if !strings.Contains(sent, "Ship it with ./ship.sh") {
+		t.Fatalf("steered %q", sent)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, activity := range snapshot.Activities {
+		var detail struct {
+			Text              string `json:"text"`
+			ProviderInputText string `json:"providerInputText"`
+		}
+		if json.Unmarshal(activity.Detail, &detail) == nil && detail.ProviderInputText != "" {
+			if detail.ProviderInputText != sent || detail.Text != "/deploy staging" {
+				t.Fatalf("activity = %+v, want what was sent and what was written", detail)
+			}
+			return
+		}
+	}
+	t.Fatal("no steer activity recorded what the agent received")
+}
+
+// A skill's name may have spaces. The message names it when it starts with the
+// whole name, ignoring case, followed by a space or the end; the longest name
+// wins, so "/deploy prod" is not "/deploy" with "prod" after it.
+func TestSharedSkillNamesWithSpaces(t *testing.T) {
+	for _, tc := range []struct {
+		text, skill, rest string
+	}{
+		{"/Poteto Mode", "Poteto Mode", ""},
+		{"  /poteto mode answer this", "Poteto Mode", "answer this"},
+		{"/deploy prod now", "deploy prod", "now"},
+		{"/deploy staging", "deploy", "staging"},
+		{"/Poteto", "", ""},
+		{"/Poteto Moderate", "", ""},
+		{"/Poteto Mode/x", "", ""},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			h := newHarness(t)
+			shareSkills(t, h, shareSkill(t, "Poteto Mode", "Answer as a potato."), shareSkill(t, "deploy", "Ship it."), shareSkill(t, "deploy prod", "Ship to prod."))
+			msg := ports.ChatUserMessage{Text: tc.text, ClientMessageID: "m-1", Origin: domain.MessageOriginHuman}
+			if _, err := h.svc.Send(context.Background(), testSession, msg); err != nil {
+				t.Fatal(err)
+			}
+			h.conv.mu.Lock()
+			sent := h.conv.sent[len(h.conv.sent)-1].Text
+			h.conv.mu.Unlock()
+			if tc.skill == "" {
+				if sent != tc.text {
+					t.Fatalf("sent %q, want the message as written", sent)
+				}
+				return
+			}
+			want := "Use the \"" + tc.skill + "\" skill."
+			if tc.rest != "" {
+				want += "\n\n" + tc.rest
+			}
+			if !strings.HasPrefix(sent, want+"\n\n<user_skill name=\""+tc.skill+"\"") || strings.Count(sent, "<user_skill ") != 1 {
+				t.Fatalf("sent %q, want it to start %q with one skill", sent, want)
+			}
+		})
+	}
+}
+
+// Switching skill sharing takes effect in a running chat at once. Off, its /
+// menu loses the shared skills and a message naming one goes as written; on,
+// both come back without a resume.
+func TestSharedSkillsFollowTheSettingInARunningChat(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run(fmt.Sprintf("switched on=%v", on), func(t *testing.T) {
+			conv := &skillfulConversation{fakeConversation: newFakeConversation()}
+			h := newHarnessWithConversation(t, conv)
+			shareSkills(t, h, shareSkill(t, "deploy", "Ship it with ./ship.sh"))
+			// The chat is running; now the user flips the setting.
+			h.skillSharingOff.Store(!on)
+			ctx := context.Background()
+			skills, err := h.svc.Skills(ctx, testSession)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offered := false
+			for _, skill := range skills {
+				offered = offered || (skill.Name == "deploy" && skill.Source == "orchestrator")
+			}
+			if offered != on {
+				t.Fatalf("deploy offered = %v", offered)
+			}
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "/deploy now", ClientMessageID: "m-1", Origin: domain.MessageOriginHuman}); err != nil {
+				t.Fatal(err)
+			}
+			conv.mu.Lock()
+			sent := conv.sent[len(conv.sent)-1].Text
+			conv.mu.Unlock()
+			if expanded := strings.HasPrefix(sent, `Use the "deploy" skill.`); expanded != on {
+				t.Fatalf("sent %q", sent)
+			}
+		})
+	}
+}

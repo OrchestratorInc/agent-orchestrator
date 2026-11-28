@@ -7,14 +7,16 @@ import {
 	type AppShortcutId,
 } from "../../shared/shortcuts";
 import { aoBridge } from "../lib/bridge";
+import { queryShown } from "../lib/dom-selectors";
 import { isMacPlatform } from "../lib/platform";
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useUiStore } from "../stores/ui-store";
 
-/** Focuses the first element matching `selector` once the next render has painted. */
+/** Focuses the first shown element matching `selector` once the next render has painted. */
 export function focusAfterPaint(selector: string): void {
 	window.requestAnimationFrame(() => {
-		window.requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
+		window.requestAnimationFrame(() => queryShown<HTMLElement>(selector)?.focus());
 	});
 }
 
@@ -123,6 +125,9 @@ export function useAppShortcut(
 			) {
 				return;
 			}
+			// The chords main leaves to the page (find, add selection) and, with no
+			// main process, all of them. Counted once however many handlers claim it.
+			if (!claimedEvents.has(event)) uiUsage.shortcutUsed(id, "key");
 			claimedEvents.add(event);
 			event.preventDefault();
 			if (beforeTerminal) event.stopPropagation();

@@ -443,10 +443,10 @@ func (q *Queries) BeginConversationEditProviderWork(ctx context.Context, arg Beg
 	return result.RowsAffected()
 }
 
-const bindConversationTurnProviderID = `-- name: BindConversationTurnProviderID :exec
+const bindConversationTurnProviderID = `-- name: BindConversationTurnProviderID :execrows
 UPDATE conversation_turns
 SET provider_turn_id = ?, started_at = COALESCE(started_at, ?)
-WHERE id = ?
+WHERE id = ? AND state IN ('queued', 'running')
 `
 
 type BindConversationTurnProviderIDParams struct {
@@ -455,9 +455,12 @@ type BindConversationTurnProviderIDParams struct {
 	ID             string
 }
 
-func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindConversationTurnProviderIDParams) error {
-	_, err := q.db.ExecContext(ctx, bindConversationTurnProviderID, arg.ProviderTurnID, arg.StartedAt, arg.ID)
-	return err
+func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindConversationTurnProviderIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindConversationTurnProviderID, arg.ProviderTurnID, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const bindProjectConversationSession = `-- name: BindProjectConversationSession :exec
@@ -476,7 +479,7 @@ func (q *Queries) BindProjectConversationSession(ctx context.Context, arg BindPr
 	return err
 }
 
-const cancelAllQueuedConversationTurns = `-- name: CancelAllQueuedConversationTurns :exec
+const cancelAllQueuedConversationTurns = `-- name: CancelAllQueuedConversationTurns :execrows
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
 WHERE conversation_id = ? AND state = 'queued'
@@ -491,9 +494,12 @@ type CancelAllQueuedConversationTurnsParams struct {
 // lock before this runs. There can be no later accepted row to preserve, so the
 // correct operation is independent of wall-clock ordering and cancels the whole
 // durable queue.
-func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg CancelAllQueuedConversationTurnsParams) error {
-	_, err := q.db.ExecContext(ctx, cancelAllQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
-	return err
+func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg CancelAllQueuedConversationTurnsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelAllQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const cancelQueuedConversationTurnByID = `-- name: CancelQueuedConversationTurnByID :execrows
@@ -692,10 +698,23 @@ const failOrphanedConversationActivities = `-- name: FailOrphanedConversationAct
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = ?1
 WHERE status = 'running'
-  AND turn_id IN (
-      SELECT id FROM conversation_turns
-      WHERE handled_by_session_id = ?2
-        AND state IN ('queued', 'running')
+  AND (
+      turn_id IN (
+          SELECT id FROM conversation_turns
+          WHERE handled_by_session_id = ?2
+            AND state IN ('queued', 'running')
+      )
+      -- A compaction the agent ran between prompts has no turn; only the dead
+      -- controller's cycle would have settled it.
+      OR (
+          turn_id IS NULL
+          AND kind = 'system'
+          AND json_extract(detail_json, '$.event') = 'compaction'
+          AND conversation_id IN (
+              SELECT id FROM conversations
+              WHERE current_session_id = ?2
+          )
+      )
   )
 `
 
@@ -1741,10 +1760,10 @@ func (q *Queries) MarkConversationCompacted(ctx context.Context, arg MarkConvers
 	return err
 }
 
-const markConversationTurnStarted = `-- name: MarkConversationTurnStarted :exec
+const markConversationTurnStarted = `-- name: MarkConversationTurnStarted :execrows
 UPDATE conversation_turns
 SET state = 'running', started_at = COALESCE(started_at, ?)
-WHERE id = ?
+WHERE id = ? AND state IN ('queued', 'running')
 `
 
 type MarkConversationTurnStartedParams struct {
@@ -1752,9 +1771,12 @@ type MarkConversationTurnStartedParams struct {
 	ID        string
 }
 
-func (q *Queries) MarkConversationTurnStarted(ctx context.Context, arg MarkConversationTurnStartedParams) error {
-	_, err := q.db.ExecContext(ctx, markConversationTurnStarted, arg.StartedAt, arg.ID)
-	return err
+func (q *Queries) MarkConversationTurnStarted(ctx context.Context, arg MarkConversationTurnStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markConversationTurnStarted, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markConversationTurnsRolledBack = `-- name: MarkConversationTurnsRolledBack :execrows
@@ -1796,6 +1818,24 @@ func (q *Queries) MarkConversationTurnsRolledBack(ctx context.Context, arg MarkC
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const markQueuedConversationBatchStarted = `-- name: MarkQueuedConversationBatchStarted :exec
+UPDATE conversation_turns
+SET started_at = COALESCE(started_at, ?1)
+WHERE conversation_id = ?2
+  AND id IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?3 AS TEXT)))
+`
+
+type MarkQueuedConversationBatchStartedParams struct {
+	StartedAt      sql.NullTime
+	ConversationID string
+	TurnIds        string
+}
+
+func (q *Queries) MarkQueuedConversationBatchStarted(ctx context.Context, arg MarkQueuedConversationBatchStartedParams) error {
+	_, err := q.db.ExecContext(ctx, markQueuedConversationBatchStarted, arg.StartedAt, arg.ConversationID, arg.TurnIds)
+	return err
 }
 
 const moveConversationActivities = `-- name: MoveConversationActivities :exec
@@ -3297,37 +3337,6 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 	return i, err
 }
 
-const selectConversationHumanPromptTurnIDs = `-- name: SelectConversationHumanPromptTurnIDs :many
-SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
-FROM conversation_messages
-WHERE conversation_id = ?1
-  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human'
-`
-
-// Prompt eligibility must survive the original message falling outside a page.
-func (q *Queries) SelectConversationHumanPromptTurnIDs(ctx context.Context, conversationID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, selectConversationHumanPromptTurnIDs, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var turn_id string
-		if err := rows.Scan(&turn_id); err != nil {
-			return nil, err
-		}
-		items = append(items, turn_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
 SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ? AND client_message_id <> ''
@@ -3651,6 +3660,42 @@ func (q *Queries) SelectConversationNativeForkAvailableAfterSequence(ctx context
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const selectConversationPromptOrigins = `-- name: SelectConversationPromptOrigins :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id, origin
+FROM conversation_messages
+WHERE conversation_id = ?1
+  AND turn_id IS NOT NULL AND role = 'user' AND origin IN ('human', 'automation')
+`
+
+type SelectConversationPromptOriginsRow struct {
+	TurnID string
+	Origin domain.MessageOrigin
+}
+
+// Prompt eligibility must survive the original message falling outside a page.
+func (q *Queries) SelectConversationPromptOrigins(ctx context.Context, conversationID string) ([]SelectConversationPromptOriginsRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationPromptOrigins, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationPromptOriginsRow{}
+	for rows.Next() {
+		var i SelectConversationPromptOriginsRow
+		if err := rows.Scan(&i.TurnID, &i.Origin); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectConversationProviderEvents = `-- name: SelectConversationProviderEvents :many
@@ -4804,6 +4849,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        conversation_turns.provider_input_text,
@@ -4831,6 +4877,7 @@ type SelectRetryableConversationPromptParams struct {
 type SelectRetryableConversationPromptRow struct {
 	Text                string
 	Origin              domain.MessageOrigin
+	AuthoredByUser      int64
 	Continuation        int64
 	DeliveryContentJson string
 	ProviderInputText   string
@@ -4846,6 +4893,7 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 	err := row.Scan(
 		&i.Text,
 		&i.Origin,
+		&i.AuthoredByUser,
 		&i.Continuation,
 		&i.DeliveryContentJson,
 		&i.ProviderInputText,
@@ -4947,6 +4995,40 @@ func (q *Queries) SelectSpanningPlanCopiesOnActivePath(ctx context.Context, conv
 		return nil, err
 	}
 	return items, nil
+}
+
+const selectSupersededArmedEventTurn = `-- name: SelectSupersededArmedEventTurn :one
+SELECT armed.id, armed.usage_limit_resets_at FROM conversation_turns AS armed
+JOIN conversation_turns AS newer ON newer.id = ?1
+WHERE armed.id = (
+    SELECT previous.id FROM conversation_turns AS previous
+    WHERE previous.conversation_id = newer.conversation_id AND previous.branch_id = newer.branch_id
+      AND previous.id <> newer.id AND previous.state NOT IN ('queued', 'cancelled')
+      AND previous.promoted_to_turn_id IS NULL AND previous.rolled_back_at IS NULL
+    ORDER BY previous.requested_at DESC, previous.rowid DESC LIMIT 1)
+  AND (armed.requested_at < newer.requested_at OR (armed.requested_at = newer.requested_at AND armed.rowid < newer.rowid))
+  AND armed.usage_limit_auto_resume = 1 AND armed.state = 'failed'
+  AND armed.handled_by_session_id = newer.handled_by_session_id
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = armed.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0)
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = newer.id AND m.role = 'user' AND m.origin = 'automation')
+  AND NOT EXISTS (SELECT 1 FROM conversation_messages AS m
+      JOIN conversation_turns AS member ON member.id = m.turn_id
+      WHERE (member.id = newer.id OR member.promoted_to_turn_id = newer.id)
+        AND m.role = 'user' AND (m.origin = 'human' OR m.authored_by_user = 1))
+`
+
+type SelectSupersededArmedEventTurnRow struct {
+	ID                 string
+	UsageLimitResetsAt sql.NullTime
+}
+
+func (q *Queries) SelectSupersededArmedEventTurn(ctx context.Context, newerID string) (SelectSupersededArmedEventTurnRow, error) {
+	row := q.db.QueryRowContext(ctx, selectSupersededArmedEventTurn, newerID)
+	var i SelectSupersededArmedEventTurnRow
+	err := row.Scan(&i.ID, &i.UsageLimitResetsAt)
+	return i, err
 }
 
 const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one
@@ -5248,15 +5330,17 @@ func (q *Queries) SettleConversationMessage(ctx context.Context, arg SettleConve
 const settleConversationTurn = `-- name: SettleConversationTurn :exec
 UPDATE conversation_turns
 SET state = ?1, error_message = ?2, failure_code = ?3,
-    completed_at = COALESCE(completed_at, ?4),
-    usage_limit_resets_at = COALESCE(?5, usage_limit_resets_at)
-WHERE id = ?6
+    started_at = COALESCE(started_at, ?4),
+    completed_at = COALESCE(completed_at, ?5),
+    usage_limit_resets_at = COALESCE(?6, usage_limit_resets_at)
+WHERE id = ?7
 `
 
 type SettleConversationTurnParams struct {
 	State              domain.TurnState
 	ErrorMessage       string
 	FailureCode        string
+	StartedAt          sql.NullTime
 	CompletedAt        sql.NullTime
 	UsageLimitResetsAt sql.NullTime
 	ID                 string
@@ -5267,6 +5351,7 @@ func (q *Queries) SettleConversationTurn(ctx context.Context, arg SettleConversa
 		arg.State,
 		arg.ErrorMessage,
 		arg.FailureCode,
+		arg.StartedAt,
 		arg.CompletedAt,
 		arg.UsageLimitResetsAt,
 		arg.ID,
@@ -5341,6 +5426,45 @@ func (q *Queries) SettleRunningConversationActivitiesForTurn(ctx context.Context
 		arg.ConversationID,
 		arg.TurnID,
 	)
+	return err
+}
+
+const settleStrandedConversationActivities = `-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = ?2
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  )
+`
+
+type SettleStrandedConversationActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+}
+
+// A running row on a turn that has already settled can never finish. Older
+// daemons stored replayed provider retry/limit notices this way, after their turn
+// had ended, so clients showed a spinner that never stopped. Give each one the
+// status SettleTurn would have written (terminalActivityStatus).
+func (q *Queries) SettleStrandedConversationActivities(ctx context.Context, arg SettleStrandedConversationActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, settleStrandedConversationActivities, arg.UpdatedAt, arg.ConversationID)
 	return err
 }
 

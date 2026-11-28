@@ -72,6 +72,24 @@ func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts
 	s.handoffSince = s.now()
 }
 
+// AccountHandoffIdle reports whether no account handoff is being claimed, is
+// running, or waits for its next step, so the loop that drives them may rest
+// while handoff is off. A finished handoff kept only to avoid repeating it
+// does not count.
+func (s *Service) AccountHandoffIdle() bool {
+	s.handoffMu.Lock()
+	defer s.handoffMu.Unlock()
+	if s.handoffScanning {
+		return false
+	}
+	for _, h := range s.handoffs {
+		if !h.done {
+			return false
+		}
+	}
+	return true
+}
+
 // HandoffUsageLimitedTurns advances the automatic usage-limit account handoffs by one step.
 func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 	store, ok := s.store.(accountHandoffStore)
@@ -381,7 +399,7 @@ func actionableUsageLimitTurn(ctx context.Context, turns Store, source domain.Co
 	if source.State != domain.TurnStateFailed || source.RolledBackAt != nil || source.UsageLimit == nil {
 		return fmt.Errorf("%w: this turn is not an actionable usage-limit failure", ErrUsageLimitAutoResumeInvalid)
 	}
-	return validateUsageLimitRetry(ctx, turns, store, source)
+	return validateUsageLimitRetry(ctx, turns, store, source, false)
 }
 
 func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {

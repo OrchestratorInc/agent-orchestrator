@@ -124,7 +124,7 @@ type ReviewerChatStart struct {
 // typed Chat service. It deliberately excludes HTTP and renderer concerns.
 type ReviewerChatController interface {
 	SupportsReviewChat(domain.AgentHarness) bool
-	PreflightReviewChat(context.Context, domain.AgentHarness) error
+	PreflightReviewChat(context.Context, domain.AgentHarness, string) error
 	StartReviewChat(context.Context, ReviewerChatStart) (string, error)
 	RestoreReviewChat(context.Context, ReviewerChatStart) (string, error)
 	SendReviewChat(context.Context, string, string, string) error
@@ -161,6 +161,8 @@ type agentLauncher struct {
 	auth       agentAuthResolver
 	executable func() (string, error)
 	chat       ReviewerChatController
+	forceStop  forceStopHooks
+	stops      forceStopState
 }
 
 type preLaunchReviewer interface {
@@ -231,7 +233,7 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 		return fmt.Errorf("no reviewer adapter for harness %q", harness)
 	}
 	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && (len(mode) == 0 || mode[0] != domain.ReviewerInterfaceTUI) && l.reviewChatSupported(profile) {
-		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness())
+		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness(), workspacePath)
 	}
 	cmd, err := reviewer.ReviewCommand(ctx, ports.ReviewInvocation{WorkspacePath: workspacePath})
 	if err != nil {
@@ -329,6 +331,7 @@ func (l *agentLauncher) invocation(spec LaunchSpec) ports.ReviewInvocation {
 		ReviewQueue:     spec.ReviewQueue,
 		ReviewIndex:     spec.ReviewIndex,
 		Config:          spec.AgentConfig,
+		ProjectEnv:      spec.ProjectEnv,
 		WorkspacePath:   spec.WorkspacePath,
 		DataDir:         l.dataDir,
 		RunFilePath:     l.runFile,
@@ -404,6 +407,7 @@ func (l *agentLauncher) prepareIdleInvocation(spec LaunchSpec) (ports.ReviewInvo
 		WorkerSessionID:  spec.WorkerID,
 		AgentSessionID:   spec.AgentSessionID,
 		Config:           spec.AgentConfig,
+		ProjectEnv:       spec.ProjectEnv,
 		WorkspacePath:    spec.WorkspacePath,
 		DataDir:          l.dataDir,
 		RunFilePath:      l.runFile,
@@ -820,6 +824,17 @@ func (l *agentLauncher) Reusable(harness domain.ReviewerHarness) bool {
 	}
 	policy, ok := reviewer.(ports.ReviewerReusePolicy)
 	return !ok || policy.ReviewProcessReusable()
+}
+
+// ReportsActivity reports whether the harness's terminal reviewer reliably
+// reports activity through hooks, for the review run lifecycle.
+func (l *agentLauncher) ReportsActivity(harness domain.ReviewerHarness) bool {
+	reviewer, ok := l.reviewers.Reviewer(harness)
+	if !ok {
+		return false
+	}
+	hooks, ok := reviewer.(ports.ReviewerActivityHooks)
+	return ok && hooks.ReviewActivityHooks()
 }
 
 func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error {

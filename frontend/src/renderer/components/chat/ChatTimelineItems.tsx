@@ -1,3 +1,4 @@
+import { uiUsage } from "../../lib/ui-usage-telemetry";
 import { AppLink } from "../AppLink";
 import { TurnForkButton } from "../SessionForkControls";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
@@ -18,6 +19,7 @@ import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
@@ -26,7 +28,7 @@ import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
 import { ArtifactThumbnail } from "../ArtifactThumbnail";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
-import { useChatEntrance } from "./chat-entrance";
+import { useChatEntrance, useRequestedEntrance } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -48,7 +50,6 @@ import {
 	Copy,
 	CornerDownLeft,
 	CornerDownRight,
-	File as FileIcon,
 	FileDiff,
 	FilePen,
 	FilePlus,
@@ -74,6 +75,7 @@ import {
 	Pencil,
 	Plug,
 	RotateCw,
+	ScrollText,
 	Search,
 	ShieldCheck,
 	ShieldQuestion,
@@ -154,7 +156,7 @@ import {
 	isNonzeroCommandExit,
 } from "./activity-command";
 import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, type CommandStep, type StepIcon } from "./activity-step";
-import { actionDetailLines, describeConversationActivity } from "./activity-action";
+import { actionDetailLines, describeConversationActivity, isSpawnFailure } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
@@ -183,6 +185,8 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
+import { WorkspacePathSegments } from "../ChangedFilesList";
+import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -492,19 +496,57 @@ function TwoRowTimelineMarker({
 	);
 }
 
+/**
+ * Where the agent summarized earlier history to free context: the summary mark, what
+ * happened, and what it freed ("−41.2k · 12% full"), or why it could not.
+ *
+ * While a compaction runs in a live turn the live row says so (see
+ * LiveResponseStatus); this row is what stays in the turn. It has the live row's
+ * height, slot and type, so the handoff between the two moves nothing.
+ */
 export function CompactionMarker({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const running = activity.status === "running";
+	const failed = activity.status === "failed" || activity.status === "cancelled";
+	const label = running
+		? t("chat.compaction.running")
+		: failed
+			? t("chat.compaction.failed")
+			: t("chat.compaction.done");
+	const detail = running
+		? undefined
+		: failed
+			? activity.detail?.error || (activity.status === "cancelled" ? t("chat.compaction.stopped") : undefined)
+			: compactionFigures(activity, t);
+	return (
+		<div
+			data-chat-activity-id={activity.id}
+			data-testid="compaction-row"
+			className="-mx-1 flex h-7 min-w-0 select-none items-center gap-2 px-1 text-sm text-muted-foreground"
+		>
+			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
+				<ScrollText className="size-3" />
+			</span>
+			<span className="shrink-0">{label}</span>
+			{detail ? (
+				<span className="min-w-0 truncate tabular-nums text-muted-foreground/70" title={detail}>
+					{detail}
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+/** "−41.2k · 12% full": what a compaction freed and how full the context is now, as far as known. */
+function compactionFigures(activity: ConversationActivity, t: TFunction): string | undefined {
 	const reclaimed = activity.detail?.tokensReclaimed;
 	const after = activity.detail?.tokensAfter;
 	const contextWindow = activity.detail?.contextWindow;
-	const detail = reclaimed ? `−${formatTokens(reclaimed)}` : undefined;
-	const fullness = after && contextWindow ? `${Math.round((after / contextWindow) * 100)}% full` : undefined;
-
-	return (
-		<TwoRowTimelineMarker
-			message="The conversation history was compacted"
-			detail={[detail, fullness].filter(Boolean).join(" · ") || undefined}
-		/>
-	);
+	const parts = [
+		reclaimed ? `−${formatTokens(reclaimed)}` : undefined,
+		after && contextWindow ? t("chat.compaction.full", { percent: Math.round((after / contextWindow) * 100) }) : undefined,
+	].filter(Boolean);
+	return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
@@ -817,6 +859,29 @@ export interface TurnOutcomeLogin {
 }
 
 /** Sends a failed turn's prompt again as a new turn. */
+// Failed turns already reported this launch, so a re-render, a scroll back or a
+// return to the chat does not count the same failure twice.
+const reportedFailures = new Set<string>();
+const FRESH_FAILURE_MS = 2 * 60_000;
+
+/**
+ * Counts a failed turn as an error shown, once, when it failed moments ago (not
+ * one read from history). Called by the turn's owner, so a failure counts however
+ * it is shown: as the turn's outcome or as a login note under the message.
+ * `failedAt` is when the turn ended; `failureKey` is the turn's id.
+ */
+export function useFreshFailureReport(state: string | undefined, failedAt: string | undefined, failureKey: string | undefined, failureCode: string | undefined) {
+	useEffect(() => {
+		if (state !== "failed" || !failedAt) return;
+		const at = Date.parse(failedAt);
+		if (!Number.isFinite(at) || Date.now() - at > FRESH_FAILURE_MS) return;
+		const key = `${failureKey ?? failedAt}|${failureCode ?? ""}`;
+		if (reportedFailures.has(key)) return;
+		reportedFailures.add(key);
+		uiUsage.errorShown("chat_turn_failed", "inline", "chat", failureCode ? failureCode.toUpperCase() : undefined);
+	}, [failedAt, failureCode, failureKey, state]);
+}
+
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 	return (
 		<Button
@@ -826,6 +891,7 @@ function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 			onClick={retry.onRetry}
 			disabled={retry.pending || retry.disabled}
 			aria-label="Retry this turn"
+			data-telemetry-id="chat.retry"
 			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 			data-testid="retry-turn"
 		>
@@ -950,8 +1016,10 @@ function useUserTextRenderer(sessionId: string, body: string, attachments: strin
 }
 
 // A list, quote or code block at either end of a message sits flush with the
-// bubble's padding instead of adding its own outer margin.
-const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+// bubble's padding instead of adding its own outer margin. Lines wrap normally:
+// `text-wrap: pretty` pulls words down to avoid a short last line after the bubble
+// has already sized itself to the full line, leaving empty room on the right.
+const USER_BODY_CLASS = "break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0";
 
 const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
 
@@ -1067,7 +1135,7 @@ export function formatTime(iso: string): string {
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
 
-function formatMessageTimestamp(iso: string, now = new Date()): string {
+export function formatMessageTimestamp(iso: string, now = new Date()): string {
 	const parsed = new Date(iso);
 	if (Number.isNaN(parsed.getTime())) return "";
 
@@ -1147,7 +1215,8 @@ export function HumanMessage({
 	sessionId,
 	apiBaseUrl = getApiBaseUrl(),
 	queued,
-	animateIn = false,
+	animateIn: animateInRequested = false,
+	entranceKey,
 	onEdit,
 	editing = false,
 	editText,
@@ -1163,6 +1232,8 @@ export function HumanMessage({
 	branchPoint,
 	onActivateBranch,
 	activateBranchPending = false,
+	activateBranchDisabled = false,
+	activateBranchTarget,
 	activateBranchError,
 	onSelectAnnotation,
 	status,
@@ -1176,6 +1247,8 @@ export function HumanMessage({
 	queued?: boolean;
 	/** True only for a human message added after the timeline first mounted. */
 	animateIn?: boolean;
+	/** The timeline's key for this prompt, shared by its local echo and durable row; the entrance plays once per key. */
+	entranceKey?: string;
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
@@ -1191,6 +1264,8 @@ export function HumanMessage({
 	branchPoint?: ConversationBranchPoint;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/**
@@ -1199,6 +1274,7 @@ export function HumanMessage({
 	 */
 	status?: ReactNode;
 }) {
+	const animateIn = useRequestedEntrance(entranceKey ?? message.id, animateInRequested);
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
@@ -1225,15 +1301,12 @@ export function HumanMessage({
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
-	// Hover-only actions float under the bubble instead of reserving a blank row;
-	// a branch navigator is always visible, so it keeps its place in the flow.
-	// So does a status: it leads the row, and the time and actions follow it in
-	// view, one line under the bubble.
-	const inFlowActions = Boolean(branchPoint && onActivateBranch);
-	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10 mt-1");
-	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
-	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
-	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
+	// The time and actions keep their own line under the bubble, shown on hover, so
+	// they never sit over the reply's "Worked for" line below. A status leads the
+	// row and keeps it in view.
+	const actionRowClass = cn("flex h-7 items-center gap-1", status ? "-mt-0.5" : "mt-1");
+	// The editor's Cancel and Send take that same line, so starting an edit moves nothing.
+	const editActionRowClass = "mt-1 flex h-7 items-center gap-1";
 	return (
 		<div
 			className="group/message relative flex flex-col items-end gap-1"
@@ -1338,7 +1411,14 @@ export function HumanMessage({
 						<ConversationBranchNavigator
 							point={branchPoint}
 							pending={activateBranchPending}
-							error={activateBranchError}
+							disabled={activateBranchDisabled}
+							error={
+								!activateBranchTarget ||
+								branchPoint.previousBranchId === activateBranchTarget ||
+								branchPoint.nextBranchId === activateBranchTarget
+									? activateBranchError
+									: undefined
+							}
 							onActivate={onActivateBranch}
 						/>
 					) : null}
@@ -1413,7 +1493,7 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 		<Pressable
 			onClick={onClick}
 			aria-expanded={expanded}
-			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent-text transition-colors hover:text-markdown-link-hover"
 		>
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}
@@ -1428,6 +1508,8 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
+	beforeActions,
+	retry,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
@@ -1441,6 +1523,10 @@ export function AssistantMessage({
 	onRollback?: () => void;
 	/** Keep the rollback action mounted while another response is streaming. */
 	rollbackDisabled?: boolean;
+	/** What the answer introduced, drawn under its prose and above its action row. */
+	beforeActions?: ReactNode;
+	/** Retry the failed turn this answer closes, when nothing below it offers that. */
+	retry?: TurnOutcomeRetryControl;
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
@@ -1450,7 +1536,8 @@ export function AssistantMessage({
 	// when the turn settles, so nothing moves.
 	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
-	const showActions = copyReady || rollbackReady;
+	const retryReady = Boolean(retry) && !live && !renderingStreaming;
+	const showActions = copyReady || rollbackReady || retryReady;
 	return (
 		<div
 			className="group/message relative"
@@ -1461,12 +1548,14 @@ export function AssistantMessage({
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
 		>
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
+			{beforeActions ? <div className="mt-2.5">{beforeActions}</div> : null}
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
 				// fragment the provider emitted while working. Copy and rollback stay
 				// visible; only the wall-clock time reveals on hover.
 				<TurnActions
 					className="mt-1"
+					retry={retryReady ? retry : undefined}
 					copyText={copyReady ? message.text : undefined}
 					onRollback={rollbackReady ? onRollback : undefined}
 					rollbackDisabled={rollbackDisabled}
@@ -1556,7 +1645,7 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, compaction, reconnect, children }: {
 	/** Names this row across remounts (windowing), so its label's entrance plays once. */
 	entranceKey?: string;
 	startedAt?: string;
@@ -1570,37 +1659,48 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	 * row then opens onto the step's command and output, as that row would.
 	 */
 	step?: ConversationActivity;
+	/**
+	 * A compaction under way. The loader stays in front and the row says
+	 * "Compacting conversation" with the compaction's own time in place of the
+	 * task and the turn's timer; the compaction's row joins the turn when it
+	 * settles, and the loader carries on under it.
+	 */
+	compaction?: ConversationActivity;
 	/** The provider is retrying; the row says so in place of the task. */
 	reconnect?: { label: string; detail?: string };
 	children?: ReactNode;
 }) {
+	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const labelId = useId();
+	// Setup and a provider retry still say so first; a compaction is the work.
+	const compacting = Boolean(compaction && !startupLabel && !reconnect);
 	// Per step: the row stays one line, even while the step prints, until the reader
 	// opens it. The next step starts closed again.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
 	const stepChoices = useContext(LiveStepChoices);
-	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
+	const expandable = Boolean(step && !startupLabel && !reconnect && !compacting && liveStepHasDetail(step));
 	const stepOpen = expandable && stepChoice?.id === step?.id && stepChoice!.open;
 	// A finished step stays on the row for a moment before it moves up. It says what
 	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
 	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
+	const timedFrom = compacting ? compaction?.createdAt : startedAt;
 	const started = useMemo(() => {
-		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
+		const parsed = timedFrom ? Date.parse(timedFrom) : Date.now();
 		return Number.isFinite(parsed) ? parsed : Date.now();
-	}, [startedAt]);
+	}, [timedFrom]);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		const timer = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(timer);
 	}, []);
 	const elapsedMs = Math.max(0, now - started);
-	const label = startupLabel ?? reconnect?.label ?? task;
+	const label = startupLabel ?? reconnect?.label ?? (compacting ? t("chat.compaction.running") : task);
 	// The provider re-saves its retry on every attempt, and the step label changes
 	// with every tool call. Keyed by its text the label would remount, and replay its
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
-	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : compacting ? "compaction" : task ? "task" : undefined;
 	// A row that mounts with its chat (a switch to a working session) shows the
 	// label it opened with in place; any label after that fades in.
 	const labelEnters = useChatEntrance(entranceKey ?? labelId);
@@ -1638,8 +1738,9 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 						)}
 					</span>
 				) : null}
-				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's. */}
-				{label && labelKind && !startupLabel ? (
+				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's.
+				    "Compacting conversation 1m" has no numbers of its own, and the time is its own. */}
+				{label && labelKind && !startupLabel && !compacting ? (
 					<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">
 						·
 					</span>
@@ -1796,7 +1897,7 @@ export function ActivityRow({
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
-	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
+	else if (artifactRef) content = <RenderFrame artifact={artifactRef} foldKey={activity.id} />;
 	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;
@@ -1932,7 +2033,8 @@ function GenericActivityRow({
 	const revealedId = useContext(RevealedChatActivity);
 	const revealed = revealedId !== undefined
 		&& (revealedId === activity.id || repeats.some((each) => each.id === revealedId));
-	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
+	// A spawn that failed starts open: why it failed is the whole point of the row.
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? (revealed || isSpawnFailure(activity)));
 	useEffect(() => {
 		if (revealed) setOpen(true);
 	}, [revealed]);
@@ -2124,6 +2226,7 @@ function genericActivityHasBody(activity: ConversationActivity): boolean {
 	const hasFileBody =
 		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
 	return Boolean(
+		isSpawnFailure(activity) ||
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
@@ -2134,6 +2237,10 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
+	if (isSpawnFailure(activity)) {
+		// The daemon's reason, in its words, under the step it explains.
+		return <p className="pb-1 pl-5 text-xs leading-relaxed text-muted-foreground">{detail?.error}</p>;
+	}
 	if (
 		activity.activityKind === "command" &&
 		(detail?.command || detail?.output || detail?.terminalInput)
@@ -2152,7 +2259,7 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
 				// deliberately keeps only the category.
-				<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 					{detail.command}
 				</pre>
 			) : null}
@@ -2234,7 +2341,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 
 			{command ? (
-				<pre
+				<pre data-no-swipe-nav=""
 					className={cn(
 						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
@@ -2278,7 +2385,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
 				{shown}
 			</pre>
 			{truncated ? (
@@ -2358,7 +2465,7 @@ function CommandOutput({
 
 	return (
 		<>
-			<pre
+			<pre data-no-swipe-nav=""
 				ref={pre}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
@@ -2478,6 +2585,8 @@ function ActivityState({
 			</span>
 		);
 	}
+	// A spawn that failed reads in words, as its run line counts it, not as a process exit.
+	if (isSpawnFailure(activity)) return <span className="shrink-0 text-xs text-muted-foreground">failed</span>;
 	if (status === "failed") {
 		return (
 			<span
@@ -2688,6 +2797,16 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Whether a tool payload field carries anything. The daemon stores an ACP tool
+ * call's missing input or content as JSON null (Hermes rows have left it out
+ * since #6635; other ACP providers and older Hermes rows still carry it), so
+ * null counts as absent: printing it would show the word "null" as the body.
+ */
+function present(value: unknown): boolean {
+	return value !== undefined && value !== null;
+}
+
+/**
  * A call to a tool served by an MCP server.
  *
  * Deliberately not shaped like a command row. These used to render as though the
@@ -2814,9 +2933,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 function mcpToolHasBody(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
 	return Boolean(
-		mcpToolArguments(activity) !== undefined ||
-		detail?.result !== undefined ||
-		detail?.content !== undefined ||
+		present(mcpToolArguments(activity)) ||
+		present(detail?.result) ||
+		present(detail?.content) ||
 		detail?.error ||
 		detail?.progress,
 	);
@@ -2833,11 +2952,11 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 					{detail.error}
 				</p>
 			) : null}
-			{args !== undefined ? <JsonPayload label="Arguments" value={args} /> : null}
-			{detail?.result !== undefined ? (
-				<JsonPayload label="Result" value={detail.result} />
+			{present(args) ? <JsonPayload label="Arguments" value={args} /> : null}
+			{present(detail?.result) ? (
+				<JsonPayload label="Result" value={detail?.result} />
 			) : null}
-			{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
+			{present(detail?.content) ? <ToolContent value={detail?.content} /> : null}
 			{detail?.progress ? (
 				<div className="flex flex-col gap-1">
 					<span className="text-caption text-muted-foreground/70">
@@ -2937,7 +3056,7 @@ function ToolContent({ value }: { value: unknown }) {
 	if (text) {
 		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
 		return (
-			<pre className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
+			<pre data-no-swipe-nav="" className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
 				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
 					{ text }
 				</code>
@@ -2946,7 +3065,7 @@ function ToolContent({ value }: { value: unknown }) {
 	}
 	const truncated = truncationNote(value);
 	return (
-		<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
+		<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
 			<code className="font-mono text-caption leading-[1.55] text-foreground">
 				{truncated ?? formatJson(value)}
 			</code>
@@ -3036,7 +3155,7 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 					{capped}
 				</p>
 			) : (
-				<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
+				<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
 					<code className="font-mono text-caption leading-[1.55] text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>
@@ -3080,12 +3199,8 @@ function lastLine(text: string): string {
 /* auto review                                                                 */
 /* -------------------------------------------------------------------------- */
 
-const RISK_TONE: Record<string, string> = {
-	low: "text-muted-foreground",
-	medium: "text-warning",
-	high: "text-destructive",
-	critical: "text-destructive",
-};
+/** Only a risk worth stopping on takes a color; the rest read as the row's own detail. */
+const ALARMING_RISK = new Set(["high", "critical"]);
 
 /**
  * A decision the provider made instead of asking.
@@ -3093,130 +3208,127 @@ const RISK_TONE: Record<string, string> = {
  * This is not an approval card and must not read like one: nobody was asked, and
  * there is nothing to answer. What the row owes the user is the fact that a decision
  * was taken on their behalf, what it allowed, and — reachable rather than shouted —
- * the reasoning that allowed it. Denials are called out more loudly than approvals,
- * because a denial is why something the user expected did not happen.
+ * the reasoning that allowed it. It is a step line like the calls around it: what
+ * was decided and at what risk, opening onto the command and the reasoning. Denials
+ * are called out more loudly than approvals, because a denial is why something the
+ * user expected did not happen.
  */
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
+	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
 	const denied = (detail?.status ?? "").toLowerCase().includes("den");
 	const Icon = denied ? ShieldX : ShieldCheck;
 	const paths = reviewedPaths(activity);
-	const hasBody = Boolean(
-		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
-	);
+	const command = detail?.command || activity.summary;
+	const risk = detail?.riskLevel;
+	const hasMeta = Boolean(detail?.cwd || detail?.host || paths.length || detail?.decisionSource);
+	const hasBody = Boolean(command || detail?.rationale || hasMeta);
+	// Said in full rather than implied by the label: "auto-approved" alone leaves it
+	// ambiguous whether the user set something up that did this.
+	const onYourBehalf = denied
+		? "The agent asked to do this and the provider declined on your behalf. You were not asked."
+		: "The agent asked to do this and the provider allowed it on your behalf. You were not asked.";
 
 	return (
-		<div className="group/activity border-t border-border first:border-t-0">
+		<div className="flex min-w-0 max-w-full flex-col">
 			<Pressable
 				onClick={() => setOpen((prev) => !prev)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
-				className={cn(
-					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
-					hasBody && "hover:text-foreground",
-					!hasBody && "cursor-default",
-				)}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
 				<Icon
 					aria-hidden="true"
-					className={cn(
-						"w-[15px] shrink-0 text-center",
-						denied ? "text-destructive" : "text-muted-foreground/70",
-					)}
-					size={14}
+					className={cn("size-3 shrink-0", denied ? "text-destructive" : "text-muted-foreground/70")}
 				/>
-				<strong className="shrink-0 font-medium text-foreground">
+				<strong className="shrink-0 text-xs font-medium text-foreground" title={onYourBehalf}>
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
-				<span
-					className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground"
-					title={activity.summary}
-				>
-					<ActivityTitle text={shortenPaths(activity.summary)} />
-				</span>
-				{detail?.riskLevel ? (
+				{activity.summary ? (
+					<span className="min-w-0 truncate font-mono text-caption text-muted-foreground" title={activity.summary}>
+						{shortenPaths(activity.summary)}
+					</span>
+				) : null}
+				{risk ? (
 					<span
 						className={cn(
 							"shrink-0 text-xs",
-							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
+							ALARMING_RISK.has(risk.toLowerCase()) ? "text-destructive" : "text-muted-foreground",
 						)}
-						title={`Risk assessed as ${detail.riskLevel}`}
+						title={`Risk assessed as ${risk}`}
 					>
-						{detail.riskLevel}
+						{risk} risk
 					</span>
 				) : null}
 				{hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
 						className={cn(
-							"size-3 shrink-0 text-muted-foreground/50 transition-all",
-							open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
+							"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground",
+							open && "rotate-90",
 						)}
 					/>
 				) : null}
 			</Pressable>
 
-			{open && hasBody ? (
-				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
-					{/* Said in full rather than implied by the label: "auto-approved" alone
-					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{denied
-							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
-							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
-					</p>
-					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
-							{detail.rationale}
-						</p>
-					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
-						{detail?.command ? (
-							<>
-								<dt className="text-muted-foreground/70">command</dt>
-								<dd className="min-w-0 break-all text-foreground">{detail.command}</dd>
-							</>
-						) : null}
-						{detail?.cwd ? (
-							<>
-								<dt className="text-muted-foreground/70">cwd</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{shortenPaths(detail.cwd)}
-								</dd>
-							</>
-						) : null}
-						{detail?.host ? (
-							<>
-								<dt className="text-muted-foreground/70">host</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">{detail.host}</dd>
-							</>
-						) : null}
-						{paths.length ? (
-							<>
-								<dt className="text-muted-foreground/70">files</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{paths.map((path) => shortenPaths(path)).join(", ")}
-								</dd>
-							</>
-						) : null}
-						{detail?.decisionSource ? (
-							<>
-								<dt className="text-muted-foreground/70">decided by</dt>
-								<dd className="text-muted-foreground">
-									{/* A model making the call is a materially different thing to be
-									    told than a policy rule matching, so the provider's own word
-									    for it is carried rather than flattened to "automatically". */}
-									{detail.decisionSource}
-									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDecisionDuration(detail.durationMs)}`
-										: ""}
-								</dd>
-							</>
-						) : null}
-					</dl>
-				</div>
-			) : null}
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex min-w-0 flex-col gap-1 pb-1 pl-5">
+							<p className="sr-only">{onYourBehalf}</p>
+							{command ? (
+								<p className="whitespace-pre-wrap break-all font-mono text-caption leading-relaxed text-muted-foreground">{command}</p>
+							) : null}
+							{detail?.rationale ? (
+								<p className="text-xs leading-relaxed text-muted-foreground">{detail.rationale}</p>
+							) : null}
+							{hasMeta ? (
+								<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-caption leading-relaxed text-muted-foreground">
+									{detail?.cwd ? (
+										<>
+											<dt className="text-muted-foreground/70">cwd</dt>
+											<dd className="min-w-0 break-all">{shortenPaths(detail.cwd)}</dd>
+										</>
+									) : null}
+									{detail?.host ? (
+										<>
+											<dt className="text-muted-foreground/70">host</dt>
+											<dd className="min-w-0 break-all">{detail.host}</dd>
+										</>
+									) : null}
+									{paths.length ? (
+										<>
+											<dt className="text-muted-foreground/70">files</dt>
+											<dd className="min-w-0 break-all">{paths.map((path) => shortenPaths(path)).join(", ")}</dd>
+										</>
+									) : null}
+									{detail?.decisionSource ? (
+										<>
+											<dt className="text-muted-foreground/70">decided by</dt>
+											<dd>
+												{/* A model making the call is a materially different thing to be
+												    told than a policy rule matching, so the provider's own word
+												    for it is carried rather than flattened to "automatically". */}
+												{detail.decisionSource}
+												{detail.durationMs !== undefined && detail.durationMs > 0
+													? ` · ${formatDecisionDuration(detail.durationMs)}`
+													: ""}
+											</dd>
+										</>
+									) : null}
+								</dl>
+							) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }
@@ -4195,12 +4307,12 @@ export function TurnChangedFiles({
 					const body = (
 						<>
 							<span className="sr-only">{status.label}</span>
-							<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+							<WorkspaceEntryIcon kind="file" name={fileBasename(openPath)} />
 							<span
-								className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+								className="flex min-w-0 flex-1 text-xs"
 								title=""
 							>
-								{fileBasename(file.path)}
+								<WorkspacePathSegments path={openPath} nameClassName="text-foreground/80" />
 							</span>
 							{file.additions > 0 ? (
 								<span className="shrink-0 font-mono text-caption tabular-nums text-success">
@@ -4240,13 +4352,14 @@ export function TurnChangedFiles({
 							) : (
 								<div className={rowClass}>
 									<span className="sr-only">{status.label}</span>
-									<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+									<WorkspaceEntryIcon kind="file" name={fileBasename(openPath)} />
 									<FileLocationLabel
-										path={file.path}
+										path={openPath}
+										showFullPath
 										oldPath={file.oldPath}
 										locationPath={tooltipPath}
 										locationOldPath={tooltipOldPath}
-										className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+										className="flex min-w-0 flex-1 text-xs"
 									/>
 									{file.additions > 0 ? (
 										<span className="shrink-0 font-mono text-caption tabular-nums text-success">
@@ -4291,14 +4404,15 @@ export function TurnChangedFiles({
 }
 
 /**
- * Basename only — color distinguishes it from "Edited", no hover fill. Hovering
- * shows the home-shortened worktree path in a monospace tooltip.
+ * File path beside an edit or changed-file row. Hovering shows the
+ * home-shortened worktree path in a monospace tooltip.
  */
 function FileLocationLabel({
 	path,
 	oldPath,
 	locationPath,
 	locationOldPath,
+	showFullPath,
 	className,
 }: {
 	path: string;
@@ -4306,6 +4420,7 @@ function FileLocationLabel({
 	/** Absolute/worktree path for the tooltip when `path` is only a basename. */
 	locationPath?: string;
 	locationOldPath?: string;
+	showFullPath?: boolean;
 	className?: string;
 }) {
 	const location = fileLocationLabel(locationPath ?? path, locationOldPath ?? oldPath);
@@ -4314,15 +4429,15 @@ function FileLocationLabel({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				{/* `title=""` blocks Chromium's native ellipsis tooltip so only the
-				    path tooltip below appears — otherwise hover shows the basename. */}
+				    worktree path tooltip below appears. */}
 				<span
 					className={cn(
-						"min-w-0 truncate text-xs text-foreground/65 outline-none",
+						showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
 						className,
 					)}
 					title=""
 				>
-					{fileBasename(path)}
+					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : fileBasename(path)}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">

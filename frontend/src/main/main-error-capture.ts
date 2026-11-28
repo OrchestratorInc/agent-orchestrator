@@ -4,7 +4,7 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 // Electron main's handled failures (daemon start and exit, auto-update, IPC
 // handlers, hung windows) used to reach only the console and PostHog. This
 // module is the single path from those sites to the consented Sentry
-// transport. Only fixed categories and reasons cross it; error text never does.
+// transport. Error messages are scrubbed by the transport before sending.
 
 export const MAIN_ERROR_CATEGORIES = ["daemon", "update", "ipc", "window", "acp_runtime", "side_chat"] as const;
 export type MainErrorCategory = (typeof MAIN_ERROR_CATEGORIES)[number];
@@ -27,22 +27,25 @@ export type MainErrorReason = (typeof MAIN_ERROR_REASONS)[number];
 export type MainErrorCapture = {
 	category: MainErrorCategory;
 	reason: MainErrorReason;
-	// Only the error's standard type is used.
+	// The transport extracts the error type and a scrubbed message.
 	error?: unknown;
-	// A short fixed detail such as "signal:SIGKILL" or "code:1".
+	// A short fixed detail such as "signal:SIGKILL" or "code:1". Exit codes allow
+	// ten digits for Windows NTSTATUS codes such as 3221225477 (0xC0000005).
 	detail?: string;
 };
 
 const CATEGORIES = new Set<string>(MAIN_ERROR_CATEGORIES);
 const REASONS = new Set<string>(MAIN_ERROR_REASONS);
-const SAFE_DETAIL = /^(?:signal:SIG[A-Z0-9]{1,10}|code:-?\d{1,5}|channel:[a-z][A-Za-z0-9:_-]{0,63}|kind:[a-z-]{1,24})$/;
+const SAFE_DETAIL = /^(?:signal:SIG[A-Z0-9]{1,10}|code:-?\d{1,10}(?::[a-z_]{1,32})?|channel:[a-z][A-Za-z0-9:_-]{0,63}|kind:[a-z-]{1,24})$/;
 const PENDING_LIMIT = 20;
 
 type Sink = (capture: MainErrorCapture) => void;
 
 // User validation, connectivity and authentication states still reject over
 // IPC, but are not application faults. Unexpected throws remain reportable.
-export class ExpectedIpcError extends Error {}
+export class ExpectedIpcError extends Error {
+	readonly code: string = "EXPECTED_IPC_ERROR";
+}
 
 let sink: Sink | null = null;
 let pending: MainErrorCapture[] = [];
@@ -151,6 +154,8 @@ export function reportDaemonFailure(previous: DaemonStatus, next: DaemonStatus):
 	if (!code || !REPORTED_DAEMON_FAILURES.has(code)) return;
 	// One report per transition into a failure, not one per status refresh.
 	if (previous.code === code && previous.state === next.state) return;
-	const detail = next.signal ? `signal:${next.signal}` : typeof next.exitCode === "number" ? `code:${next.exitCode}` : undefined;
+	// An exit carries the reason read from the daemon's last output line, e.g. "code:1:already_running".
+	const exit = typeof next.exitCode === "number" ? `code:${next.exitCode}${next.exitReason ? `:${next.exitReason}` : ""}` : undefined;
+	const detail = next.signal ? `signal:${next.signal}` : exit;
 	captureMainError({ category: "daemon", reason: code as MainErrorReason, ...(detail ? { detail } : {}) });
 }

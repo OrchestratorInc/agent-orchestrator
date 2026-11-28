@@ -2,6 +2,8 @@ import createClient from "openapi-fetch";
 import type { components, paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
+import { freshMachineSimActive, simulateFreshMachine } from "./fresh-machine-sim";
+import { IS_DEV } from "./is-dev";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
 import { markApiError, withApiErrorOwnership } from "./reported-errors";
@@ -96,6 +98,7 @@ const ROUTE_TEMPLATES = [
     "/api/v1/awake/sessions/{awakeId}/extend",
     "/api/v1/session-import",
 	"/api/v1/agents",
+	"/api/v1/attachment-uploads",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
 	"/api/v1/agents/installers",
@@ -133,12 +136,19 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/{agent}/models",
 	"/api/v1/agents/{agent}/models/refresh",
 	"/api/v1/agents/{agent}/probe",
+	"/api/v1/agents/{agent}/skills",
 	"/api/v1/agents/{agent}/verify",
 	"/api/v1/desktop/sessions/{sessionId}/workspace",
 	"/api/v1/events",
 	"/api/v1/import",
 	"/api/v1/imports/prepare-git",
 	"/api/v1/imports/validate",
+	"/api/v1/approvals",
+	"/api/v1/approvals/stream",
+	"/api/v1/approvals/{id}/decision",
+	"/api/v1/approvals/audit",
+	"/api/v1/approvals/policy",
+	"/api/v1/approvals/sites",
 	"/api/v1/notifications",
 	"/api/v1/notifications/{id}",
 	"/api/v1/notifications/read-all",
@@ -160,6 +170,10 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/prs/{id}/comments",
 	"/api/v1/prs/{id}/attachment-access",
 	"/api/v1/sessions",
+	"/api/v1/sessions/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",
 	"/api/v1/sessions/{sessionId}/exit-agent",
@@ -277,6 +291,9 @@ const EXPECTED_PROBE_CONFLICTS = new Set([
 	"GET /api/v1/sessions/:id/conversation/config-options",
 	"GET /api/v1/sessions/:id/conversation/models",
 	"GET /api/v1/sessions/:id/conversation/skills",
+	// A remote host older than the new chat page's skill scan answers 404; the
+	// page keeps the list a session last reported.
+	"GET /api/v1/agents/:id/skills",
 ]);
 
 function expectedProbeConflict(operation: string, status?: number): boolean {
@@ -290,6 +307,7 @@ function reportApiError(
 	status?: number,
 	code?: string,
 	requestId?: string,
+	message?: string,
 ): void {
 	const key = `${operation}|${category}|${status ?? ""}`;
 	const now = Date.now();
@@ -303,7 +321,7 @@ function reportApiError(
 		error_code: code,
 	});
 	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
-		captureApiErrorToSentry(operation, category, status, code, requestId);
+		captureApiErrorToSentry(operation, category, status, code, requestId, message);
 	}
 }
 
@@ -312,9 +330,11 @@ function reportApiError(
 async function reportResponseError(operation: string, response: Response): Promise<void> {
 	let code: string | undefined;
 	let requestId: string | undefined;
+	let message: string | undefined;
 	try {
 		const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
+		if (typeof body?.message === "string") message = body.message;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
 	} catch {
 		// Non-JSON or empty body: fall back to status-only classification.
@@ -325,6 +345,7 @@ async function reportResponseError(operation: string, response: Response): Promi
 		response.status,
 		code,
 		requestId,
+		message,
 	);
 }
 
@@ -371,14 +392,6 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	tagClientTimeZone(input);
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
-	if (baseUrl === null) {
-		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
-		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
-			status: 503,
-			headers: { "Content-Type": "application/json" },
-		});
-	}
-
 	const send = async (): Promise<Response> => {
 		if (!baseUrl) {
 			return fetch(input);
@@ -410,6 +423,23 @@ async function runtimeFetch(input: Request): Promise<Response> {
 			keepalive: input.keepalive,
 		});
 	};
+
+	// Dev builds with Developer mode on can simulate a new machine for walking
+	// first-run onboarding (fresh-machine-sim). Ahead of the daemon check, so
+	// the browser preview, which has no daemon, is answered too. IS_DEV folds
+	// to false in production, which strips this.
+	if (IS_DEV && freshMachineSimActive()) {
+		const simulated = await simulateFreshMachine(input, send);
+		if (simulated) return simulated;
+	}
+
+	if (baseUrl === null) {
+		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
+		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
+			status: 503,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
 
 	let response: Response;
 	try {

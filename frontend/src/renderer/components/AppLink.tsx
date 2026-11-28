@@ -47,7 +47,9 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	const showBrowserAction = browserLink && !(contextPath && pathMenuContext);
 	const hasHoverPreview = !noHoverPreview && (webLink || Boolean(hoverPreview));
 	const [previewOpen, setPreviewOpen] = useState(false);
-	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
+	// A link with its own card (a session, an artifact, a pull request) never
+	// asks for the page's Open Graph preview.
+	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink && !hoverPreview);
 	const anchorRef = useRef<HTMLAnchorElement>(null);
 	useImperativeHandle(ref, () => anchorRef.current as HTMLAnchorElement);
 	// Gaining or losing a card remounts the anchor, so that re-runs this too.
@@ -132,8 +134,8 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	return (
 		<HoverCard onOpenChange={setPreviewOpen}>
 			{menu}
-			{previewOpen && webLink && <LinkPreviewHoverCard url={href} query={previewQuery} onBrowserOpen={openBrowser} />}
-			{previewOpen && !webLink && hoverPreview?.(previewOpen)}
+			{previewOpen && webLink && !hoverPreview && <LinkPreviewHoverCard url={href} query={previewQuery} onBrowserOpen={openBrowser} />}
+			{previewOpen && hoverPreview?.(previewOpen)}
 		</HoverCard>
 	);
 }

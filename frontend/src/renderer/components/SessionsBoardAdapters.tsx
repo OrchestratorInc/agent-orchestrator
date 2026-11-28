@@ -18,13 +18,17 @@ import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
-import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { commitSessionRename } from "../lib/commit-session-rename";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
+import { useSettings } from "../hooks/useSettings";
+import { prepareUnpublish, sessionDeleteTargets, sessionPublishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { sessionPRMix } from "../lib/session-pr-mix";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace";
@@ -42,16 +46,22 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { prefetchEditorHandoffState } from "../hooks/useEditorHandoff";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
+import { useHostShareLinks } from "./ShareArtifactPopover";
+import { Checkbox } from "./ui/checkbox";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
+import { MovedHereNote } from "./MovedHereNote";
+import { MovedToCloudNote } from "./MovedToCloudNote";
+import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -89,6 +99,7 @@ export function toBoardSessionPresentation(
 		isTerminated: session.isTerminated,
 		kanbanColumn: session.kanbanColumn,
 		displayStatus: session.displayStatus,
+		prMix: sessionPRMix(session),
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
@@ -107,6 +118,7 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	backgroundTasks,
 	me,
 	participants,
 	memory,
@@ -118,6 +130,7 @@ export function BoardSessionCardAdapter({
 	onTerminate,
 	session,
 }: {
+	backgroundTasks?: ReactNode;
 	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
 	/** Colour for the chip; neutral unless this card is part of the fix. */
@@ -137,6 +150,7 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
+			footer={backgroundTasks}
 			me={me}
 			participants={participants}
 			memory={memory}
@@ -188,6 +202,8 @@ export function ArchivedSessionCardAdapter({
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
+	// The control plane refused its restore for data retention: say so instead of offering Restore.
+	const contentExpired = useSessionContentExpired(session.cloud ? session.id : undefined);
 	return (
 		<DesktopSessionCard
 			compact={compact}
@@ -200,12 +216,15 @@ export function ArchivedSessionCardAdapter({
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
-					<ArchiveRestoreButton
-						isDisabled={isRestoreDisabled}
-						isRestoring={isRestoring}
-						label={t("shell.restoreNamed", { title: session.title })}
-						onClick={restoreAction}
-					/>
+					{/* A session that moved (to Orchestrator Cloud, or a Cloud one to another computer) continues there; the footer says where. */}
+					{contentExpired || session.movedTo || session.cloud?.movedAway ? null : (
+						<ArchiveRestoreButton
+							isDisabled={isRestoreDisabled}
+							isRestoring={isRestoring}
+							label={t("shell.restoreNamed", { title: session.title })}
+							onClick={restoreAction}
+						/>
+					)}
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
 					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
@@ -219,7 +238,15 @@ export function ArchivedSessionCardAdapter({
 					/>
 				) : undefined
 			}
-			footer={<ArchiveRestoreError message={restoreError} />}
+			footer={
+				session.movedTo ? (
+					<MovedToCloudNote session={session} className="border-t border-border px-2 py-1.5" />
+				) : session.cloud?.movedAway ? (
+					<MovedHereNote session={session} className="border-t border-border px-2 py-1.5" />
+				) : (
+					<ArchiveRestoreError message={contentExpired ? t("restoreUnavailable.contentExpired") : restoreError} />
+				)
+			}
 			interactive={Boolean(onOpen)}
 			onOpen={onOpen}
 			session={session}
@@ -275,6 +302,8 @@ function DesktopSessionCard({
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [renameOpen, setRenameOpen] = useState(false);
+	const menuPrefetchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(menuPrefetchTimer.current), []);
 	const summaries = sessionPRDisplaySummaries(
 		session,
 		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
@@ -431,9 +460,21 @@ function DesktopSessionCard({
 		<>
 			<ContextMenu>
 				<ContextMenuTrigger asChild>
-					<div>{card}</div>
+					{/* The menu opens on its final rows: its data is read when the pointer
+					    rests on the card, or at once on a press or focus. */}
+					<div
+						onFocusCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerDownCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerEnter={() => {
+							clearTimeout(menuPrefetchTimer.current);
+							menuPrefetchTimer.current = setTimeout(() => prefetchEditorHandoffState(queryClient, session), 100);
+						}}
+						onPointerLeave={() => clearTimeout(menuPrefetchTimer.current)}
+					>
+						{card}
+					</div>
 				</ContextMenuTrigger>
-				<ContextMenuContent className="min-w-44">
+				<ContextMenuContent className="w-48">
 					<SessionContextMenuItems
 						onArchive={showTerminate ? () => {
 							clearTerminateSessionState(queryClient, session.id, session.hostId);
@@ -463,17 +504,12 @@ function SessionRenameDialog({
 	const queryClient = useQueryClient();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState(session.title);
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	// Start each opening from the current title, but keep what is typed if the
 	// title changes while the dialog is open.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) {
-			setDraft(session.title);
-			setError(null);
-		}
+		if (open) setDraft(session.title);
 	}
 	useEffect(() => {
 		if (!open) return;
@@ -482,34 +518,18 @@ function SessionRenameDialog({
 		return () => cancelAnimationFrame(frame);
 	}, [open]);
 	const name = draft.trim();
-	const save = async () => {
-		if (name === session.title) {
-			onOpenChange(false);
-			return;
-		}
-		setBusy(true);
-		try {
-			if (session.cloud) {
-				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
-			} else {
-				await renameSession(session.id, name, session.hostId);
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-			}
-			onOpenChange(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
+	// The card shows the new title as the dialog closes; a failure rolls it back
+	// and says so in a toast.
+	const save = () => {
+		onOpenChange(false);
+		void commitSessionRename(queryClient, session, name);
 	};
 	return (
 		<ConfirmDialog
-			busy={busy}
 			confirmDisabled={!name}
 			confirmLabel={t("shell.rename")}
 			description={null}
-			error={error}
-			onConfirm={() => void save()}
+			onConfirm={save}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("shell.renameSession", { title: session.title })}
@@ -519,9 +539,9 @@ function SessionRenameDialog({
 				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name) return;
 					event.preventDefault();
-					void save();
+					save();
 				}}
 				ref={inputRef}
 				value={draft}
@@ -823,19 +843,37 @@ export function DeleteArchivedSessionDialog({
 	const queryClient = useQueryClient();
 	const [deleting, setDeleting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Each opening starts without the last attempt's error.
+	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
+	// Each opening starts without the last attempt's error, keeping the artifacts.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) setError(null);
+		if (open) {
+			setError(null);
+			setDeleteArtifacts(false);
+		}
 	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
+	// Only a local or remote host's session is deleted here: its files, matched
+	// to this computer's host links on a remote host, say which are published.
+	const publishedCount = sessionPublishedCheck(session, useHostShareLinks()).known;
+	// This computer's session keeps its artifacts unless the box is checked;
+	// they stay on the Artifacts page. A remote host's are deleted with it.
+	const keepable = !session.hostId;
+	const artifactCount = sessionDeliverables(session).length;
+	const checkboxId = useId();
+	// An empty or stale list is no proof the folder is empty; the daemon deletes
+	// a session without files plainly.
+	const keeping = keepable && !deleteArtifacts;
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);
 		try {
+			// Looked up while the files are there; unpublished only once they are gone.
+			const links = keeping ? null : await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ hostId: session.hostId, sessionId: session.id }] });
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
-				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+				params: { path: { sessionId: session.id }, query: { cleanup: true, ...(keeping ? { keepArtifacts: true } : {}) } },
 			});
 			if (deleteError) {
 				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
@@ -843,26 +881,56 @@ export function DeleteArchivedSessionDialog({
 			}
 			onOpenChange(false);
 			onDeleted?.();
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			if (links) warnLinksStillLive(t, await links.unpublish());
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
+				...(keepable ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
+			]);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
 		} finally {
 			setDeleting(false);
 		}
 	};
+	const body = keepable
+		? released ? t("deleteSession.bodyKeep") : t("deleteSession.bodyKeepCleanup")
+		: released ? t("deleteSession.body") : t("deleteSession.bodyCleanup");
 	return (
 		<ConfirmDialog
 			busy={deleting}
 			confirmAriaLabel={t("deleteSession.confirmAria")}
 			confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
-			description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+			description={body}
 			destructive
 			error={error}
 			onConfirm={() => void confirmDelete()}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("deleteSession.dialog")}
-		/>
+		>
+			{keepable && artifactCount > 0 ? (
+				<div className="flex items-start gap-2">
+					<Checkbox
+						id={checkboxId}
+						className="mt-0.5"
+						checked={deleteArtifacts}
+						onCheckedChange={(next) => setDeleteArtifacts(next === true)}
+					/>
+					<div className="min-w-0 text-control leading-5">
+						<label htmlFor={checkboxId} className="text-foreground">
+							{t("deleteSession.deleteArtifacts", { count: artifactCount })}
+						</label>
+						<p className="text-settings-muted">
+							{deleteArtifacts
+								? publishedCount > 0 ? t("deleteSession.published", { count: publishedCount }) : t("deleteSession.deleteArtifactsHint", { count: artifactCount })
+								: t("deleteSession.keepArtifactsHint", { count: artifactCount })}
+						</p>
+					</div>
+				</div>
+			) : publishedCount > 0 ? (
+				<p className="text-control leading-5 text-foreground">{t("deleteSession.published", { count: publishedCount })}</p>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 

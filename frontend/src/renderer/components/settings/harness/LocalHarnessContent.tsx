@@ -71,10 +71,12 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // a few times before the panel reports it did not take.
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
+// Harnesses whose auth probe reports stored credentials as "configured", never "authorized".
+const LOCALLY_CONFIRMED_AUTH_AGENTS = new Set(["mimo-code", "minimax-code"]);
 
 function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
 	if (workflow.action === "logout") return status === "unauthorized";
-	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "claude-code"));
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || LOCALLY_CONFIRMED_AUTH_AGENTS.has(workflow.agentId) || workflow.agentId === "claude-code"));
 }
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
@@ -113,6 +115,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [inUseSessions, setInUseSessions] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
+	// Harnesses whose install or update just succeeded and whose readiness is
+	// still being checked again: their job reads as verifying until it answers.
+	const [confirmingInstalls, setConfirmingInstalls] = useState<AgentId[]>([]);
 	const [authCheckErrors, setAuthCheckErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [selectedMethods, setSelectedMethods] = useState<Partial<Record<AgentId, string>>>({});
@@ -122,12 +127,21 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [uiLoginAgent, setUiLoginAgent] = useState<AgentId | null>(null);
 	const pendingUILogins = useSyncExternalStore(subscribeAgentLogins, pendingAgentLogins);
 	const uiLoginAgentRef = useRef<AgentId | null>(null);
-	const closeUILogin = () => { uiLoginAgentRef.current = null; setUiLoginAgent(null); };
+	// The harness whose verified sign-in just closed its login panel; its
+	// Account tab announces it and takes focus back.
+	const [signedInAgent, setSignedInAgent] = useState<AgentId | null>(null);
+	const closeUILogin = (signedIn = false) => {
+		setSignedInAgent(signedIn ? uiLoginAgentRef.current : null);
+		uiLoginAgentRef.current = null;
+		setUiLoginAgent(null);
+	};
 	const authWorkflowRef = useRef<AuthTerminalWorkflow | null>(null);
 	const authStartPendingRef = useRef(false);
 	const mountedRef = useRef(true);
 	authWorkflowRef.current = authWorkflow;
 	const activeInstallJobs = useRef(new Set<AgentId>());
+	// Post-job readiness confirmations still running, per harness.
+	const pendingConfirmations = useRef(new Map<AgentId, number>());
 	const expandedFailures = useRef(new Map<AgentId, string>());
 	const pendingActions = useRef(new Set<AgentId>());
 	const authChecksInFlight = useRef(new Map<AgentId, Promise<AgentAuthProbeResult | undefined>>());
@@ -152,6 +166,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const modelsRefreshPending = useRef<AgentId | null>(null);
 	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
 		if (uiLoginAgentRef.current && (uiLoginAgentRef.current !== agentId || tab !== "account")) closeUILogin();
+		setSignedInAgent(null);
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
@@ -267,9 +282,32 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}));
 	}, []);
 	const checkAuthRef = useRef<(agentId: AgentId) => Promise<unknown>>(async () => undefined);
-	const refreshInstalledAgent = useCallback((agentId: AgentId) => {
+	const refreshInstalledAgent = useCallback((agentId: AgentId, { confirmsJob = false }: { confirmsJob?: boolean } = {}) => {
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
-		void checkAuthRef.current(agentId).finally(async () => {
+		if (confirmsJob) {
+			pendingConfirmations.current.set(agentId, (pendingConfirmations.current.get(agentId) ?? 0) + 1);
+			setConfirmingInstalls((current) => current.includes(agentId) ? current : [...current, agentId]);
+		}
+		void checkAuthRef.current(agentId).then((confirmed) => {
+			if (!confirmsJob) return;
+			// Checks for one harness queue behind each other: only the last to
+			// settle, holding the newest readiness, ends Verifying.
+			const remaining = (pendingConfirmations.current.get(agentId) ?? 1) - 1;
+			if (remaining > 0) {
+				pendingConfirmations.current.set(agentId, remaining);
+				return;
+			}
+			pendingConfirmations.current.delete(agentId);
+			setConfirmingInstalls((current) => current.filter((id) => id !== agentId));
+			// A failed readiness refresh confirms nothing: no Done, and the row
+			// reports the check so it can be run again. A job that succeeded but
+			// still reads not installed says why, beside the retry.
+			const installation = queryClient.getQueryData<AgentReadiness>(readinessKey)?.agents.find((agent) => agent.id === agentId)?.installation;
+			const error = confirmed === undefined ? t("settings.harness.health.checkFailed")
+				: installation?.state === "not_installed" ? installation.reason || t("settings.harness.verifyFailed", { agent: agentLabel(agentId) })
+				: undefined;
+			if (error) setActionErrors((current) => ({ ...current, [agentId]: error }));
+		}).finally(async () => {
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId, hostId) }),
 				queryClient.invalidateQueries({ queryKey: installerKey }),
@@ -277,7 +315,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				invalidateAgentModelCatalogs(queryClient, agentId, hostId),
 			]);
 		});
-	}, [authPlansKey, hostId, installerKey, queryClient]);
+	}, [authPlansKey, hostId, installerKey, queryClient, readinessKey, t]);
 
 	useEffect(() => {
 		let active = true;
@@ -418,7 +456,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			}
 			const completedWhileMounted = activeInstallJobs.current.delete(agentId);
 			if (job.status !== "succeeded" || !completedWhileMounted) continue;
-			refreshInstalledAgent(agentId);
+			refreshInstalledAgent(agentId, { confirmsJob: true });
 		}
 	}, [jobs.data, refreshInstalledAgent]);
 
@@ -525,7 +563,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			}
 			setOperationAttempts((current) => ({ ...current, [agentId]: { operation, startedAt: data.startedAt } }));
 			updateJob(data);
-			if (data.status === "succeeded") refreshInstalledAgent(agentId);
+			if (data.status === "succeeded") refreshInstalledAgent(agentId, { confirmsJob: true });
 			return true;
 		} catch (error) {
 			return fail(error instanceof Error ? error.message : t("settings.harness.startFailed"));
@@ -566,7 +604,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				return;
 			}
 			updateJob(data);
-			if (data.status === "succeeded") refreshInstalledAgent(agentId);
+			if (data.status === "succeeded") refreshInstalledAgent(agentId, { confirmsJob: true });
 		} finally {
 			endAction(agentId);
 		}
@@ -588,6 +626,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
 		const authPlan = agentAuthPlans.get(agentId);
+		// Any new login or logout ends the last sign-in's announcement.
+		setSignedInAgent(null);
 		// Any plan with inline methods opens the Account login panel; a plan
 		// without methods falls back to its terminal or documentation flow.
 		if (action === "login" && !terminal && authPlan?.methods?.length) {
@@ -796,12 +836,18 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		};
 	}, [hostId]);
 
+	// A job that succeeded stays verifying until readiness answers again, so
+	// Done never sits beside an installation state from before the install.
+	const displayedJob = (agentId: AgentId): InstallJob | undefined => {
+		const job = jobMap.get(agentId);
+		return job?.status === "succeeded" && confirmingInstalls.includes(agentId) ? { ...job, status: "verifying" } : job;
+	};
 	const describe = (agentId: AgentId) => describeHarness({
 		agentId,
 		t,
 		language: i18n.resolvedLanguage ?? "en",
 		plan: plans.get(agentId),
-		job: jobMap.get(agentId),
+		job: displayedJob(agentId),
 		installed: installed.has(agentId),
 		selectedMethodId: selectedMethods[agentId],
 		advisoryQuery: advisoryMap.get(agentId),
@@ -816,6 +862,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authPlansFailed: authPlans.isError,
 		authState: { error: authStates[agentId]?.error ?? null, pending: Boolean(authStates[agentId]?.pending || uiLoginAgent === agentId || pendingUILogins.has(agentLoginKey(agentId, hostId))) },
 		authWorkflow: authWorkflow?.agentId === agentId ? authWorkflow : null,
+		authCheckFailed: Boolean(authCheckErrors[agentId]),
 		updatedAt: lastUpdatedAt[agentId],
 	});
 	const healthReport = (details: HarnessDetails) => healthText(details, { hostId, authCheckError: authCheckErrors[details.agentId], t });
@@ -871,6 +918,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				onProviderKeysChanged={() => void invalidateProviderKeys()}
 			/> : undefined}
 			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
+			signedIn={signedInAgent === agentId}
 			copied={copiedAgent === agentId}
 			diagnosticsExpanded={expandedDiagnostics[agentId] === true}
 			onToggleDiagnostics={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}
