@@ -7336,6 +7336,7 @@ components:
         eventId:
           type: string
         metadata:
+          type: object
           description: >-
             Detail by type: a `mentioned` row's is a
             MentionNotificationMetadata, an `aside_reply` row's an
