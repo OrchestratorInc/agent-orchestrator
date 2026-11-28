@@ -2063,10 +2063,11 @@ function ChatWorkspaceContent({
 	const queuedLocalBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const queuedAttachmentSource = useMemo(
 		() => ({
-			sessionId: snapshot.sessionId,
+			// A New Chat's snapshot has a stand-in id; its files are staged in the prepared session.
+			sessionId: assetSessionId ?? snapshot.sessionId,
 			apiBaseUrl: activeRemoteHostId ? assetBaseUrl ?? null : assetBaseUrl ?? queuedLocalBaseUrl,
 		}),
-		[activeRemoteHostId, assetBaseUrl, queuedLocalBaseUrl, snapshot.sessionId],
+		[activeRemoteHostId, assetBaseUrl, assetSessionId, queuedLocalBaseUrl, snapshot.sessionId],
 	);
 	const composerQueuedDock = useMemo(
 		() =>

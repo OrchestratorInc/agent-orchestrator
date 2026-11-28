@@ -17,7 +17,7 @@ beforeEach(() => {
 const path = ".ao/attachments/attachment-shot.png";
 const suffix = `Attached files (read these files in the workspace):\n- ${path}`;
 
-function setup(text = "inspect this", content: ConversationContentSummary[] = [], nativeImages = true) {
+function setup(text = "inspect this", content: ConversationContentSummary[] = [], nativeImages = true, assetSessionId?: string) {
 	const edit = vi.fn().mockResolvedValue(undefined);
 	const send = vi.fn().mockResolvedValue(undefined);
 	const stage = vi.fn().mockResolvedValue([path]);
@@ -50,6 +50,7 @@ function setup(text = "inspect this", content: ConversationContentSummary[] = []
 				onCancelQueuedTurn={cancel}
 				onStageAttachments={stage}
 				nativeImages={nativeImages}
+				assetSessionId={assetSessionId}
 			/>
 		</TooltipProvider>,
 	);
@@ -71,6 +72,7 @@ function setup(text = "inspect this", content: ConversationContentSummary[] = []
 						onCancelQueuedTurn={cancel}
 						onStageAttachments={stage}
 						nativeImages={nativeImages}
+						assetSessionId={assetSessionId}
 					/>
 				</TooltipProvider>,
 			),
@@ -100,6 +102,12 @@ describe("queued message attachments", () => {
 		const image = within(row).getByRole("button", { name: "Open image: Image 1" }).querySelector("img");
 		expect(image?.getAttribute("src")).toContain(`/sessions/${encodeURIComponent(chatFixture.sessionId)}/preview/files/.ao/attachments/attachment-shot.png`);
 		expect(row).not.toHaveTextContent("Attached files");
+	});
+
+	it("reads a queued image from the session that staged it, not a New Chat's stand-in id", () => {
+		setup(suffix, [], true, "prepared-1");
+		const image = within(screen.getByTestId("queued-message-q1")).getByRole("button", { name: "Open image: Image 1" }).querySelector("img");
+		expect(image?.getAttribute("src")).toContain("/sessions/prepared-1/preview/files/.ao/attachments/attachment-shot.png");
 	});
 
 	it("keeps a reused delivery key locked for recovery", async () => {
