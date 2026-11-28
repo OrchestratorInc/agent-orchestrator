@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -90,6 +90,7 @@ import {
   readAuthStore,
   resolveCloudAuthDir,
   resolveCloudAuthRedirect,
+  setCloudSignInClearedRecorder,
   showCloudSignInFailure,
   signOutCloud,
   writeAuthStore,
@@ -992,6 +993,83 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.openExternal).not.toHaveBeenCalled();
     await expect(getCloudSession(dataDir)).resolves.toBeNull();
+  });
+
+  describe("recording why a sign-in was cleared", () => {
+    const cleared = vi.fn();
+    const signInWithExpiredToken = async () => {
+      mocks.authenticateWithCode.mockResolvedValueOnce({
+        accessToken: EXPIRED_ACCESS_TOKEN,
+        refreshToken: "refresh_123",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      });
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    };
+
+    beforeEach(() => {
+      cleared.mockReset();
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      setCloudSignInClearedRecorder(cleared);
+    });
+    afterEach(() => setCloudSignInClearedRecorder(null));
+
+    it("records a sign-out", async () => {
+      await signOutCloud(dataDir);
+      expect(cleared).toHaveBeenCalledExactlyOnceWith({ reason: "signed_out" });
+    });
+
+    it.each([
+      [Object.assign(new Error("Refresh token already consumed"), { error: "invalid_grant" }), "consumed"],
+      [new Error("refresh token expired"), "expired"],
+      [new Error("refresh token revoked"), "revoked"],
+      [Object.assign(new Error("Bad request"), { rawData: { error: "invalid_grant" } }), "invalid_grant"],
+    ])("records how WorkOS refused the refresh token (%s)", async (error, detail) => {
+      await signInWithExpiredToken();
+      mocks.authenticateWithRefreshToken.mockRejectedValueOnce(error);
+
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+      expect(cleared).toHaveBeenCalledExactlyOnceWith({ reason: "refresh_rejected", detail });
+      // Only the category is recorded: no token and no raw error text.
+      expect(JSON.stringify(cleared.mock.calls)).not.toContain("refresh_123");
+    });
+
+    it("records nothing when a retryable refresh failure keeps the sign-in", async () => {
+      await signInWithExpiredToken();
+      mocks.authenticateWithRefreshToken.mockRejectedValueOnce(
+        Object.assign(new Error("WorkOS temporarily unavailable"), { status: 503 }),
+      );
+
+      await expect(getCloudSession(dataDir)).resolves.not.toBeNull();
+      expect(cleared).not.toHaveBeenCalled();
+    });
+
+    it("records a file that decrypts but holds no sign-in", async () => {
+      await writeFile(path.join(dataDir, "cloud-auth.bin"), "not json");
+
+      await expect(readAuthStore(dataDir)).resolves.toMatchObject({ session: null });
+      expect(cleared).toHaveBeenCalledExactlyOnceWith({ reason: "unusable_file" });
+    });
+
+    it("records the cleared sign-in even when the legacy session file cannot be removed", async () => {
+      await signInWithExpiredToken();
+      // A directory in its place makes rm without recursive reject.
+      await mkdir(path.join(dataDir, "cloud-session.json", "child"), { recursive: true });
+
+      await expect(signOutCloud(dataDir)).rejects.toThrow();
+      await expect(readFile(path.join(dataDir, "cloud-auth.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(cleared).toHaveBeenCalledExactlyOnceWith({ reason: "signed_out" });
+    });
+
+    it("still clears the sign-in when recording the reason fails", async () => {
+      cleared.mockImplementation(() => {
+        throw new Error("log unavailable");
+      });
+      await signInWithExpiredToken();
+
+      await signOutCloud(dataDir);
+      await expect(readFile(path.join(dataDir, "cloud-auth.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   describe("a saved login the app cannot read just now", () => {
