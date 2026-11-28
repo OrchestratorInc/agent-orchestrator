@@ -16,6 +16,7 @@ export function resumeAgentErrorMessage(error: unknown, status?: number): string
 		case "AGENT_NOT_EXITED": return appI18n.t("inspector.resumeAlreadyRunning");
 		case "AGENT_RESUME_IN_PROGRESS": return appI18n.t("inspector.resumeInProgress");
 		case "CHAT_RESUME_FAILED": return appI18n.t("inspector.resumeSavedConversationFailed");
+		case "CHAT_USAGE_LIMITED": return appI18n.t("inspector.resumeUsageLimited");
 		case "CHAT_AUTH_REQUIRED":
 		case "AGENT_AUTH_REQUIRED": return appI18n.t("inspector.resumeAuthRequired");
 		default: return apiErrorMessage(error, `Failed to resume agent (${status ?? "unknown"})`);

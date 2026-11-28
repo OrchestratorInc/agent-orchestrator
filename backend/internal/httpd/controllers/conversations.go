@@ -1487,6 +1487,10 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_AUTH_REQUIRED", "the agent is installed but not authenticated", nil)
 
+	case errors.Is(err, ports.ErrChatUsageLimited):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_USAGE_LIMITED", "the agent's account reached its usage limit", nil)
+
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		// Deliberately not a silent recovery: the client must offer the user a
 		// choice rather than have AO invent a fresh conversation.

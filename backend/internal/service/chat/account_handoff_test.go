@@ -140,6 +140,12 @@ func (hh *handoffHarness) wire(svc *chatsvc.Service) {
 	svc.SetAccountHandoff(func(context.Context) bool { return hh.enabled.Load() }, hh.accounts, hh.mover)
 }
 
+func (hh *handoffHarness) limitOwnAccount(usedPercent float64) {
+	hh.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error) {
+		return handoffSource, domain.AgentAccountLimits{Windows: []domain.AgentAccountLimitWindow{{UsedPercent: usedPercent}}}, nil
+	}))
+}
+
 func (hh *handoffHarness) tick(t *testing.T) {
 	t.Helper()
 	if err := hh.svc.HandoffUsageLimitedTurns(context.Background()); err != nil {
@@ -535,5 +541,73 @@ func TestAccountHandoffLeavesEventTurnsOnTheirAccount(t *testing.T) {
 	hh.tick(t)
 	if moves := hh.mover.moves(); len(moves) != 0 {
 		t.Fatalf("moves after a refused continue = %+v, want none", moves)
+	}
+}
+
+func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
+	ctx := context.Background()
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+
+	hh.limitOwnAccount(100)
+	hh.enabled.Store(false)
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || hh.accounts.calls != 0 {
+		t.Fatal("moved with the setting off")
+	}
+	hh.enabled.Store(true)
+	hh.accounts.target = ""
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 0 {
+		t.Fatal("moved without a candidate")
+	}
+	hh.accounts.target = handoffTarget
+	hh.limitOwnAccount(20)
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 0 {
+		t.Fatal("moved an account that has room")
+	}
+	hh.limitOwnAccount(100)
+	hh.mover.err = errors.New("account is signed out")
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) {
+		t.Fatal("reported a move that did not start")
+	}
+	hh.mover.err = nil
+	if !hh.svc.MoveUsageLimitedSession(ctx, testSession) {
+		t.Fatal("did not move to the candidate")
+	}
+	hh.mover.finish(t, domain.SessionInterfaceTransitionFailed)
+	hh.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error) {
+		return handoffSource, domain.AgentAccountLimits{}, errors.New("could not fetch usage limits")
+	}))
+	if !hh.svc.MoveUsageLimitedSession(ctx, testSession) {
+		t.Fatal("an unreadable meter kept the chat on its account")
+	}
+	if moves := hh.mover.moves(); len(moves) != 2 || moves[0].TargetAccountID != handoffTarget || moves[0].Policy != domain.SessionInterfaceTransitionDrain {
+		t.Fatalf("moves = %+v", moves)
+	}
+}
+
+func TestWakeKnowsWhetherTheChatIsOpen(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
+		t.Fatalf("hibernate = %v, %v", hibernated, err)
+	}
+	open := make(chan bool, 2)
+	h.svc.SetWakeCallback(func(_ context.Context, id domain.SessionID) error {
+		open <- h.svc.HasChatView(id)
+		return ports.ErrChatUsageLimited
+	})
+	if _, err := h.svc.RelayChatTurn(ctx, testSession, "CI is failing on PR 12"); err != nil {
+		t.Fatal(err)
+	}
+	if <-open {
+		t.Fatal("an event's wake found the chat open")
+	}
+	if err := h.svc.WaitForWake(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.SetChatView(ctx, testSession, "view", true); !errors.Is(err, ports.ErrChatUsageLimited) {
+		t.Fatalf("open = %v", err)
+	}
+	if !<-open {
+		t.Fatal("opening the chat did not count as open")
 	}
 }

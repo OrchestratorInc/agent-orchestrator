@@ -13,11 +13,11 @@ func TestClosedChatViewTimestampExpiresAfterGrace(t *testing.T) {
 	id := domain.SessionID("closed-chat")
 	svc.setViewLease(id, "view", true)
 	svc.setViewLease(id, "view", false)
-	if !svc.hasChatView(id) {
+	if !svc.HasChatView(id) {
 		t.Fatal("closing a view skipped the warm grace period")
 	}
 	now = now.Add(chatHibernateGrace)
-	if svc.hasChatView(id) || len(svc.viewClosedAt) != 0 {
+	if svc.HasChatView(id) || len(svc.viewClosedAt) != 0 {
 		t.Fatalf("expired view retained: %v", svc.viewClosedAt)
 	}
 }

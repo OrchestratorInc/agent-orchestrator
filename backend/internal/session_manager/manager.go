@@ -4065,8 +4065,30 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // Unlike RestoreWithMode, it preserves the existing worktree and terminal
 // identity and never changes the durable terminated flag as an intermediate
 // step.
-func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
-	return m.resumeAgentWithMode(ctx, id, false, nil)
+func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	mover, ok := m.chat.(ChatUsageLimitMover)
+	open := ok && mover.HasChatView(id)
+	result, err := m.resumeAgentWithMode(ctx, id, false, nil)
+	if !open || !errors.Is(err, ports.ErrChatUsageLimited) || !mover.MoveUsageLimitedSession(ctx, id) {
+		return result, err
+	}
+	m.transitionMu.Lock()
+	run := m.transitions[id]
+	m.transitionMu.Unlock()
+	if run != nil {
+		<-run.done
+	}
+	if !m.chat.HasLiveChatController(id) {
+		return result, err
+	}
+	rec, err := m.getRecord(context.WithoutCancel(ctx), id)
+	return RestoreResult{Session: rec, Mode: RestoreModeNative}, err
+}
+
+// ChatUsageLimitMover starts an account move for a usage-limited Chat session.
+type ChatUsageLimitMover interface {
+	HasChatView(id domain.SessionID) bool
+	MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool
 }
 
 // resumeAgentWithMode preserves strict native-history intent for automatic

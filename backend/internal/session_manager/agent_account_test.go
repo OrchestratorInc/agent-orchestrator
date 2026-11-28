@@ -462,6 +462,85 @@ func TestAccountTransitionContinuesAnExitedAgentOnTheNewAccount(t *testing.T) {
 	}
 }
 
+type usageLimitedChat struct {
+	*transitionChat
+	manager   *Manager
+	sourceErr error
+	targetErr error
+	target    string
+	moves     int
+	open      bool
+	live      bool
+	moving    func()
+}
+
+func (c *usageLimitedChat) HasLiveChatController(domain.SessionID) bool { return c.live }
+
+func (c *usageLimitedChat) HasChatView(domain.SessionID) bool { return c.open }
+
+func (c *usageLimitedChat) StartChat(ctx context.Context, cfg ChatStart) (ChatStarted, error) {
+	c.open = false
+	c.startErr = c.sourceErr
+	if cfg.Env["CLAUDE_CONFIG_DIR"] == "/accounts/b" {
+		c.startErr = c.targetErr
+	}
+	started, err := c.transitionChat.StartChat(ctx, cfg)
+	c.live = err == nil
+	return started, err
+}
+
+func (c *usageLimitedChat) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
+	c.moves++
+	_, err := c.manager.StartAccountTransition(ctx, id, c.target, domain.SessionInterfaceTransitionDrain)
+	c.moving()
+	return err == nil
+}
+
+func TestUsageLimitedResumeWaitsForTheAccountMove(t *testing.T) {
+	limited := fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, ports.ErrChatUsageLimited)
+	for _, tc := range []struct {
+		name      string
+		sourceErr error
+		targetErr error
+		target    string
+		closed    bool
+		want      error
+		bound     string
+		moves     int
+	}{
+		{"resumes on the other account", limited, nil, "acct-b", false, nil, "acct-b", 1},
+		{"no account to move to", limited, nil, "device-claude", false, ports.ErrChatUsageLimited, "device-claude", 1},
+		{"nobody has it open", limited, nil, "acct-b", true, ports.ErrChatUsageLimited, "device-claude", 0},
+		{"the other account refuses too", limited, limited, "acct-b", false, ports.ErrChatUsageLimited, "device-claude", 1},
+		{"other failures stay", ports.ErrChatResumeFailed, nil, "acct-b", false, ports.ErrChatResumeFailed, "device-claude", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, store, _, base, accounts, _ := newAccountTransitionManager(t, domain.SessionModeChat)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			chat := &usageLimitedChat{transitionChat: base, manager: manager, sourceErr: tc.sourceErr, targetErr: tc.targetErr, target: tc.target, open: !tc.closed, moving: cancel}
+			manager.chat = chat
+			rec := store.sessions["session-1"]
+			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
+			store.sessions["session-1"] = rec
+
+			result, err := manager.ResumeAgentWithMode(ctx, "session-1")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("resume error = %v, want %v", err, tc.want)
+			}
+			if tc.want == nil && (result.Session.ID != "session-1" || result.Mode != RestoreModeNative || !chat.live) {
+				t.Fatalf("resume result = %+v, live = %v", result, chat.live)
+			}
+			if got := accounts.boundTo("session-1"); got != tc.bound {
+				t.Fatalf("binding = %q, want %q", got, tc.bound)
+			}
+			if chat.moves != tc.moves {
+				t.Fatalf("move attempts = %d, want %d", chat.moves, tc.moves)
+			}
+		})
+	}
+}
+
 // A move that stops the turn tells the chat that the switch ended it, so the
 // conversation shows the switch rather than a failed turn. A drain lets the
 // turn finish, so there is nothing to explain.
