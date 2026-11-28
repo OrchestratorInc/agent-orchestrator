@@ -180,6 +180,9 @@ if (typeof window !== "undefined") {
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
 			resolveQuitConfirm: () => undefined,
+			onExitFeedbackRequest: () => () => undefined,
+			onExitFeedbackSecondClose: () => () => undefined,
+			reportExitFeedback: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -307,12 +310,14 @@ if (typeof window !== "undefined") {
 			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
+			setPlan: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,
 			takeResourceSummary: async () => null,
 			launchSteps: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
+			sendExitFeedbackEvent: () => undefined,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
@@ -441,6 +446,15 @@ if (typeof window !== "undefined") {
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
 		},
+		vault: {
+			list: async () => ({ available: false, items: [] }),
+			save: async () => {
+				throw new Error("Saved passwords need the desktop app");
+			},
+			delete: async () => undefined,
+			audit: async () => [],
+			reset: async () => undefined,
+		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
@@ -536,6 +550,7 @@ if (typeof window !== "undefined") {
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",
 			externalUrl: async (_hostId: string, url: string) => url,
+			loopbackReach: async () => false,
 		},
 		cloud: {
 			getSession: async () => null,

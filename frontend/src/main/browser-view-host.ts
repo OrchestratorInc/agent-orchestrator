@@ -21,7 +21,7 @@ import type {
   OpenDevToolsOptions,
 } from "electron";
 import { nativeImage } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BrowserCloseFailure } from "./browser-close-diagnostics";
 import type {
   BrowserAnnotationCancelPayload,
@@ -54,6 +54,7 @@ import type {
   ShortcutChord,
 } from "../shared/shortcuts";
 import type { AgentBrowserRuntime } from "./agent-browser-runtime";
+import type { CredentialFiller } from "./browser-vault-fill";
 import type {
   AgentBrowserTarget,
   AgentBrowserTargetProvider,
@@ -67,7 +68,7 @@ import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
-import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
+import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse, isLoopbackHost } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
 import type {
 	BrowserLiveSink,
@@ -163,6 +164,7 @@ export type BrowserTabState = {
   // Set when the tab shows the agent's own browser: the agent browser tab it
   // shows ("" until its viewer first reports).
   remote?: { tabId: string };
+  preview?: boolean;
 };
 
 export type BrowserTabsState = {
@@ -246,6 +248,7 @@ type BrowserBoundsInput = {
 type BrowserNavigateInput = {
   viewId: string;
   url: string;
+  preview?: boolean;
 };
 
 type BrowserHistorySuggestInput = {
@@ -272,6 +275,7 @@ type BrowserMuteTabInput = {
 type BrowserOpenTabInput = {
   viewId: string;
   url?: string;
+  preview?: boolean;
 };
 
 type BrowserShortcutInput = {
@@ -561,6 +565,9 @@ export type BrowserViewHostOptions = {
   getKeybindingOverrides?: () => KeybindingOverrides;
   isKeybindingRecording?: () => boolean;
   agentBrowserRuntime?: AgentBrowserRuntime;
+  // Fills vault credentials at the edge and scrubs filled secrets from every
+  // result returned to the agent.
+  credentialFiller?: CredentialFiller;
   isCloseShellTerminalShortcutEnabled?: () => boolean;
   browserProfileStore?: BrowserProfileStore;
   browserHistoryStore?: BrowserHistoryStore;
@@ -572,6 +579,7 @@ export type BrowserViewHostOptions = {
   describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
   prepareBrowserPartition?: (partition: string) => void;
+  routeBrowserPartition?: (partition: string, hostId: string) => Promise<void>;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
   clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
@@ -722,6 +730,8 @@ type BrowserEntry = {
 type BrowserSessionEntry = {
   sessionId: string;
   viewId: string;
+  hostId?: string;
+  previewTabId?: string;
   profileId: BrowserProfileId | null;
   profilePartition: string;
   tabs: Map<string, BrowserEntry>;
@@ -899,12 +909,44 @@ const SITE_CHALLENGE_LOOP_MS = 60_000;
 // up to 60s, so without a cap the switch would hang and block every other agent
 // command that long. After this, it fails with "still busy" and the user retries.
 const PROFILE_SWITCH_SETTLE_MS = 10_000;
-// A remote session's previews show on AO's own preview origins (remote-proxy.ts),
-// as the renderer's showPreview matches them.
+// A remote session's previews show on AO's own preview origins (remote-proxy.ts).
 const REMOTE_PREVIEW_URL = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
+
+function isPreviewPage(url: string, hostId?: string): boolean {
+  if (REMOTE_PREVIEW_URL.test(url)) return true;
+  if (!hostId) return false;
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function previewTab(session: BrowserSessionEntry): BrowserEntry | undefined {
+  const tab = session.previewTabId ? session.tabs.get(session.previewTabId) : undefined;
+  if (!tab || tab.agentTab !== undefined) return undefined;
+  return isPreviewPage(tab.view.webContents.getURL(), session.hostId) ? tab : undefined;
+}
 
 function temporaryBrowserPartition(): string {
   return `${TEMPORARY_BROWSER_PARTITION_PREFIX}${randomUUID()}`;
+}
+
+export function remoteHostOfBrowserSession(sessionId: string): string | undefined {
+  const ref = sessionId.startsWith("remote:") ? sessionId.slice("remote:".length) : "";
+  const separator = ref.indexOf(":");
+  if (separator <= 0) return undefined;
+  try {
+    return decodeURIComponent(ref.slice(0, separator));
+  } catch {
+    return undefined;
+  }
+}
+
+export function sessionBrowserPartition(profileId: BrowserProfileId | null, hostId?: string): string {
+  if (!profileId) return temporaryBrowserPartition();
+  const partition = browserProfilePartition(profileId);
+  return hostId ? `${partition}-host-${createHash("sha256").update(hostId).digest("hex").slice(0, 32)}` : partition;
 }
 
 function isTemporaryBrowserPartition(partition: string): boolean {
@@ -1196,6 +1238,21 @@ export function createBrowserViewHost(
       profileId: profile ? session.profileId : null,
       ...(profile ? { profileName: profile.name } : {}),
       temporary: !profile,
+    };
+  };
+  // Read-only: reports the live browser's profile, or the one this session
+  // would open with, without creating a browser.
+  const agentProfileResult = (sessionId: string) => {
+    const viewId = viewIdsBySessionId.get(sessionId);
+    const live = viewId ? entries.get(viewId) : undefined;
+    const profileId = live ? live.profileId : initialProfileIdForSession(sessionId);
+    const profile = profileId
+      ? options.browserProfileStore?.getProfile(profileId)
+      : undefined;
+    return {
+      profileId: profile ? profileId : null,
+      profileName: profile?.name ?? "Temporary",
+      persistent: Boolean(profile),
     };
   };
   const pushProfileState = (
@@ -1604,16 +1661,16 @@ export function createBrowserViewHost(
     let session = entries.get(viewId);
     if (!session) {
       const profileId = initialProfileIdForSession(sessionId);
+      const hostId = remoteHostOfBrowserSession(sessionId);
       session = {
         sessionId,
         viewId,
+        hostId,
         profileId,
         // Temporary workers still use a persist: partition: Electron's built-in
         // PDF viewer does not reliably render in in-memory partitions, while AO
         // clears this session-scoped partition when the browser session ends.
-        profilePartition: profileId
-          ? browserProfilePartition(profileId)
-          : temporaryBrowserPartition(),
+        profilePartition: sessionBrowserPartition(profileId, hostId),
         tabs: new Map(),
         activeTabId: "",
         activationRevision: 0,
@@ -1978,6 +2035,7 @@ export function createBrowserViewHost(
     // otherwise the runtime keeps issuing further actions against the tab the
     // agent was on before the link, not the one it's actually looking at now.
     syncNativeOnActivate = false,
+    preview = false,
   ): Promise<BrowserEntry> => {
     assertTabsNotReplacing(session);
     return withBrowserOperation(session, async () => {
@@ -1990,6 +2048,7 @@ export function createBrowserViewHost(
         normalizedURL = normalized.href;
       }
       const entry = createTab(session, activate, syncNativeOnActivate);
+      if (preview) session.previewTabId = entry.tabId;
       registerBrowserSignalWatcher(session);
       await entry.ready;
       if (normalizedURL) {
@@ -2389,9 +2448,10 @@ export function createBrowserViewHost(
   const openUserTab = async (
     session: BrowserSessionEntry,
     url?: string,
+    preview = false,
   ): Promise<BrowserTabsState> => {
     if (!options.agentBrowserRuntime) {
-      await openTab(session, url, true);
+      await openTab(session, url, true, "opened", false, preview);
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
@@ -2404,7 +2464,7 @@ export function createBrowserViewHost(
       // CDP identity first (ensureNativeActiveTab), as after a person closes a
       // tab. Creating it directly also keeps a first tab from racing the
       // bootstrap page agent-browser makes when it connects to zero targets.
-      await openTab(session, url, true);
+      await openTab(session, url, true, "opened", false, preview);
       session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
       options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
@@ -2970,6 +3030,7 @@ export function createBrowserViewHost(
   const navigate = async ({
     viewId,
     url,
+    preview,
   }: BrowserNavigateInput): Promise<BrowserNavState> => {
     const session = entries.get(viewId);
     if (!session)
@@ -2980,11 +3041,23 @@ export function createBrowserViewHost(
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) {
-        const entry = await openTab(session, url, true);
+        const entry = await openTab(session, url, true, "opened", false, preview);
         return pushNavState(options, entry);
       }
-      return navigateEntry(activeEntry(session), url);
+      const entry = activeEntry(session);
+      checkedBrowserURL(url);
+      if (preview) session.previewTabId = entry.tabId;
+      else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
+      return navigateEntry(entry, url);
     });
+  };
+
+  const checkedBrowserURL = (url: string): string => {
+    const normalized = normalizeBrowserURL(url);
+    if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
+      throw new Error("Unsupported browser URL");
+    }
+    return normalized.href;
   };
 
   const navigateEntry = async (
@@ -2993,11 +3066,7 @@ export function createBrowserViewHost(
     loadOptions?: Electron.LoadURLOptions,
   ): Promise<BrowserNavState> => {
     await entry.ready;
-    const normalized = normalizeBrowserURL(url);
-    if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
-      throw new Error("Unsupported browser URL");
-    }
-    return entry.driver().navigate(normalized.href, loadOptions);
+    return entry.driver().navigate(checkedBrowserURL(url), loadOptions);
   };
 
   // Loads a checked address into the tab's own view (navigateEntry).
@@ -3014,6 +3083,7 @@ export function createBrowserViewHost(
     const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
+      if (owner?.hostId) await options.routeBrowserPartition?.(owner.profilePartition, owner.hostId);
       if (loadOptions) await entry.view.webContents.loadURL(href, loadOptions);
       else await entry.view.webContents.loadURL(href);
     } catch (err) {
@@ -3058,10 +3128,9 @@ export function createBrowserViewHost(
       const entry =
         active.agentTab === undefined
           ? active
-          : [...session.tabs.values()].find(
-              (tab) => tab.agentTab === undefined && REMOTE_PREVIEW_URL.test(tab.view.webContents.getURL()),
-            );
+          : previewTab(session);
       if (!entry) return pushNavState(options, active);
+      session.previewTabId = undefined;
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
         if (session.devtools) destroyDevTools(session);
@@ -3300,6 +3369,7 @@ export function createBrowserViewHost(
       await entry.ready;
       assertCurrentSession();
       try {
+        if (session.hostId) await options.routeBrowserPartition?.(session.profilePartition, session.hostId);
         await entry.view.webContents.loadURL(saved.url);
       } catch (error) {
         entry.state = {
@@ -3446,9 +3516,7 @@ export function createBrowserViewHost(
       disposeSessionTabs(session);
       didTearDown = true;
       session.profileId = normalizedRequestedProfileId;
-      session.profilePartition = normalizedRequestedProfileId
-        ? browserProfilePartition(normalizedRequestedProfileId)
-        : temporaryBrowserPartition();
+      session.profilePartition = sessionBrowserPartition(normalizedRequestedProfileId, session.hostId);
       await rebuildSessionTabs(
         session,
         savedTabs,
@@ -3876,9 +3944,12 @@ export function createBrowserViewHost(
       }
       const cached = cache.get(origin);
       if (cached) return cached;
-      const pending = fetchFaviconFromSession(
-        tabSession,
-        `${origin}/favicon.ico`,
+      const routed = entry.hostId
+        ? Promise.resolve(options.routeBrowserPartition?.(entry.profilePartition, entry.hostId))
+        : Promise.resolve();
+      const pending = routed.then(
+        () => fetchFaviconFromSession(tabSession, `${origin}/favicon.ico`),
+        () => undefined,
       ).then((favicon) => {
         if (!favicon) cache?.delete(origin);
         return favicon;
@@ -3916,7 +3987,7 @@ export function createBrowserViewHost(
     const session = isRendererOwned(event, viewId) ? entries.get(viewId) : undefined;
     const entry = session?.tabs.size ? activeEntry(session) : undefined;
     const url = entry ? readNavState(entry).url : "";
-    if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { agentTab: entry?.agentTab !== undefined })) {
+    if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { onHost: entry?.agentTab !== undefined || session?.hostId !== undefined })) {
       throw browserError("BROWSER_URL_FORBIDDEN", "This page cannot be opened in another browser");
     }
     return options.openInUserBrowser(url);
@@ -4168,7 +4239,7 @@ export function createBrowserViewHost(
       }
       return listTabs(session);
     }
-    return openUserTab(session, url);
+    return openUserTab(session, url, input.preview);
   });
   handle(
     "browser:annotation:setMode",
@@ -4507,9 +4578,11 @@ export function createBrowserViewHost(
       if (action === "__destroy-session") {
         const viewId = viewIdsBySessionId.get(sessionId);
         await options.agentBrowserRuntime?.closeSession(sessionId);
+        options.credentialFiller?.forget(sessionId);
         if (viewId) destroy(viewId);
         return { destroyed: Boolean(viewId) };
       }
+      if (action === "profile") return agentProfileResult(sessionId);
       const session = await ensureSessionReady(sessionId);
       if (session.profileSwitching) {
         throw browserError(
@@ -4518,6 +4591,22 @@ export function createBrowserViewHost(
         );
       }
       if (!session.tabs.size && action === "tabs") return agentTabsResult(session);
+      // While the shown document holds a filled secret, a selector that tests
+      // a value would leak it one match at a time; refuse it up front.
+      if (
+        options.credentialFiller &&
+        session.tabs.size &&
+        action !== "fill-secret" &&
+        action !== "login" &&
+        action !== "vault-describe"
+      ) {
+        const probed = options.credentialFiller.selectorProbeBlocked(
+          sessionId,
+          vaultDocumentKey(activeEntry(session)),
+          args,
+        );
+        if (probed) throw browserError("BROWSER_SECRET_FIELD_LOCKED", probed);
+      }
       const commandId = randomUUID();
       setAgentBrowserActivity(session, action, true, commandId, "started");
       // Branches return pending work (runNative, network capture setup). The
@@ -4539,6 +4628,9 @@ export function createBrowserViewHost(
           nativeAction: string,
           nativeArgs: Record<string, unknown> = {},
           nativeSignal: AbortSignal | undefined = signal,
+          // Runs in the queued operation right before dispatch, against the
+          // tab the action will reach; throw to refuse it.
+          beforeDispatch?: (target: BrowserEntry) => Promise<void>,
         ): Promise<
           Record<string, unknown> & {
             target: { tabId: string; url: string; origin: string };
@@ -4557,6 +4649,7 @@ export function createBrowserViewHost(
               const targetEntry = activeEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              await beforeDispatch?.(targetEntry);
               // An approved action may only land on the tab, document, and (for
               // act) element the user approved; checked in the same queued
               // operation that dispatches it.
@@ -5016,15 +5109,34 @@ export function createBrowserViewHost(
                 true,
               ),
             });
-          case "press":
-            return runNative(action, {
-              key: stringArg(
-                args,
-                "key",
-                "INVALID_ARGUMENT",
-                "key is required",
-              ),
-            });
+          case "press": {
+            // Backspace or Delete in a filled field would leave a value the
+            // redactor no longer recognises; such keys never reach it.
+            // Checked now as a fast failure, and again in the queue right
+            // before the key goes out: a queued focus can move into the field.
+            const refuseIfFilledFieldFocused = async (pressed: BrowserEntry) => {
+              const locked = await options.credentialFiller?.keyPressBlocked(
+                sessionId,
+                vaultDocumentKey(pressed),
+                vaultCdp(pressed),
+              );
+              if (locked) throw browserError("BROWSER_SECRET_FIELD_LOCKED", locked);
+            };
+            await refuseIfFilledFieldFocused(activeEntry(session));
+            return runNative(
+              action,
+              {
+                key: stringArg(
+                  args,
+                  "key",
+                  "INVALID_ARGUMENT",
+                  "key is required",
+                ),
+              },
+              signal,
+              refuseIfFilledFieldFocused,
+            );
+          }
           case "drag":
             if (args.human === true) assertPanelPainted(session);
             return runNative(action, {
@@ -5152,7 +5264,17 @@ export function createBrowserViewHost(
             ) as BrowserDevToolsInput["operation"];
             return devtoolsAction(session, operation);
           }
-          case "screenshot":
+          case "screenshot": {
+            // A typed 2FA code may be visible in this tab's document. Checked
+            // now as a fast failure, and again for the tab the queued capture
+            // actually reads, since a tab switch can happen while it waits.
+            const refuseIfCodeOnScreen = async (shown: BrowserEntry) => {
+              const filler = options.credentialFiller;
+              if (!filler) return;
+              const blocked = await filler.screenshotBlocked(sessionId, vaultDocumentKey(shown), vaultCdp(shown));
+              if (blocked) throw browserError("BROWSER_SECRET_ON_SCREEN", blocked);
+            };
+            await refuseIfCodeOnScreen(activeEntry(session));
             if (!options.agentBrowserRuntime) {
               throw browserError(
                 "BROWSER_AUTOMATION_UNAVAILABLE",
@@ -5165,6 +5287,7 @@ export function createBrowserViewHost(
                 await ensureNativeActiveTab(session, signal);
                 const targetEntry = activeEntry(session);
                 await targetEntry.ready;
+                await refuseIfCodeOnScreen(targetEntry);
                 try {
                   const result = await options.agentBrowserRuntime!.screenshot(
                     sessionId,
@@ -5195,6 +5318,7 @@ export function createBrowserViewHost(
               },
               signal,
             );
+          }
           case "network-start":
             return startNetworkCapture(
               session,
@@ -5210,6 +5334,69 @@ export function createBrowserViewHost(
             return stopNetworkCapture(networkEntryFor(session), "stopped");
           case "network-clear":
             return clearNetworkCapture(networkEntryFor(session));
+          case "vault-describe":
+          case "fill-secret":
+          case "login": {
+            const filler = options.credentialFiller;
+            if (!filler) {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "The credential vault is unavailable");
+            }
+            // The daemon always stamps the session's project; "" is a
+            // standalone session, which may use only all-projects items.
+            if (typeof args.projectId !== "string") {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "Credential fills need the daemon's project scope");
+            }
+            const projectId = args.projectId;
+            const optional = (key: string) =>
+              typeof args[key] === "string" && args[key] ? (args[key] as string) : undefined;
+            const describedAction = action === "vault-describe" ? optional("action") : action;
+            const field = args.field;
+            if (describedAction === "fill-secret" && field !== "username" && field !== "password" && field !== "totp") {
+              throw browserError("INVALID_ARGUMENT", "field must be username, password, or totp");
+            }
+            if (describedAction === "fill-secret" && !optional("itemId")) {
+              throw browserError("INVALID_ARGUMENT", "item is required");
+            }
+            // fill-secret types into the field at <ref>: focus it first so the
+            // filler checks that exact element (type, visibility, frame origin).
+            if (action === "fill-secret") {
+              await runNative("focus", {
+                ref: stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
+              });
+            }
+            const target = activeEntry(session);
+            await ensureDebugger(target);
+            const fillTarget = {
+              cdp: target.view.webContents.debugger,
+              sessionId,
+              projectId,
+              pageURL: () => target.view.webContents.getURL(),
+              pageTitle: () => target.view.webContents.getTitle(),
+              documentKey: () => `${target.tabId}:${target.documentGeneration}`,
+              signal,
+              approvedOrigin: optional("approvedOrigin"),
+              requestedOrigin: optional("origin"),
+            };
+            // Probe, verify and insert run in the session's operation queue, like
+            // every other agent action: nothing else can move focus between
+            // the verification and the insert.
+            return queueNativeOperation<unknown>(
+              session,
+              () => {
+                if (action === "vault-describe") {
+                  return filler.describe(fillTarget, { action: describedAction ?? "login", itemId: optional("itemId") });
+                }
+                if (action === "fill-secret") {
+                  return filler.fillSecret(fillTarget, {
+                    itemId: optional("itemId")!,
+                    field: field as "username" | "password" | "totp",
+                  });
+                }
+                return filler.login(fillTarget, { itemId: optional("itemId") });
+              },
+              signal,
+            );
+          }
           case "console":
             return normalizeNativeMessages(await runNative(action), action);
           case "errors": {
@@ -5304,7 +5491,15 @@ export function createBrowserViewHost(
         }
       };
       try {
-        return await run();
+        const result = await run();
+        const filler = options.credentialFiller;
+        if (!filler) return result;
+        // Mask by element as well as by string: a filled field's current
+        // value is masked even after it was edited.
+        const shown = session.tabs.size ? activeEntry(session) : undefined;
+        return shown
+          ? filler.scrubLive(sessionId, vaultDocumentKey(shown), vaultCdp(shown), result)
+          : filler.scrub(sessionId, result);
       } finally {
         setAgentBrowserActivity(session, action, false, commandId, "finished");
       }
@@ -6038,12 +6233,14 @@ function listTabs(
   session: BrowserSessionEntry,
   change?: BrowserTabsState["change"],
 ): BrowserTabsState & { untrustedExternalContent: true } {
+  const preview = previewTab(session);
   return {
     viewId: session.viewId,
     activeTabId: session.activeTabId,
-    tabs: [...session.tabs.values()].map((entry) =>
-      tabResult(entry, entry.tabId === session.activeTabId),
-    ),
+    tabs: [...session.tabs.values()].map((entry) => {
+      const tab = tabResult(entry, entry.tabId === session.activeTabId);
+      return entry === preview ? { ...tab, preview: true } : tab;
+    }),
     untrustedExternalContent: true,
     ...(change ? { change } : {}),
   };
@@ -6498,6 +6695,21 @@ function wireAutomationEvents(
       params as Record<string, unknown>,
     );
   });
+}
+
+/** The vault's identity for the document a tab shows: `<tab>:<document>`. */
+function vaultDocumentKey(entry: BrowserEntry): string {
+  return `${entry.tabId}:${entry.documentGeneration}`;
+}
+
+/** CDP for the vault's in-page checks on this tab. */
+function vaultCdp(entry: BrowserEntry): { sendCommand(method: string, params?: Record<string, unknown>): Promise<unknown> } {
+  return {
+    sendCommand: async (method, params) => {
+      await ensureDebugger(entry);
+      return entry.view.webContents.debugger.sendCommand(method, params);
+    },
+  };
 }
 
 async function ensureDebugger(entry: BrowserEntry): Promise<void> {

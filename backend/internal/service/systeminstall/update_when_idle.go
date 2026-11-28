@@ -249,6 +249,7 @@ func (s *Service) finishIdleUpdate(job *Job, run *idleUpdateRun, status Status, 
 	s.mu.Lock()
 	job.Status = status
 	job.Error = message
+	job.FailureCause = classifyFailure(status, message, job.Output)
 	job.WaitingOn = nil
 	job.FinishedAt = &now
 	job.UpdatedAt = &now

@@ -53,6 +53,7 @@ type AgentLimitReading struct {
 	UsedPercent     float64
 	ResetsAtMs      sql.NullInt64
 	ReadAtMs        int64
+	OrgID           string
 }
 
 type AgentModelCatalog struct {
@@ -192,6 +193,7 @@ type AppSetting struct {
 	AccountHandoff       bool
 	LimitHistory         bool
 	CommitAttribution    bool
+	SkillSharing         bool
 }
 
 type Automation struct {
@@ -243,6 +245,17 @@ type ChangeLog struct {
 	EventType cdc.EventType
 	Payload   string
 	CreatedAt time.Time
+}
+
+type ChatAttachmentLease struct {
+	SessionID      string
+	Name           string
+	CreatedAtMs    int64
+	RenewedAtMs    int64
+	ReleasedAtMs   sql.NullInt64
+	ReclaimingAtMs sql.NullInt64
+	ReclaimedAtMs  sql.NullInt64
+	Accepting      int64
 }
 
 type CodexAccountSwitch struct {
@@ -1043,6 +1056,11 @@ type TelemetryEvent struct {
 }
 
 type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
+}
+
+type TelemetryLifetimeWorkSession struct {
 	Singleton int64
 	Count     int64
 }

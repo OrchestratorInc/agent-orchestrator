@@ -72,6 +72,8 @@ vi.mock("expo-router", async () => {
 	});
 	return {
 		Stack: { Toolbar },
+		// Session-open timing only (useSessionContentShown); not exercised here.
+		useFocusEffect: () => {},
 		useLocalSearchParams: () => fixtures.params,
 		useNavigation: () => fixtures.navigation,
 		useRouter: () => fixtures.router,
@@ -376,9 +378,14 @@ describe("opening and leaving the terminal", () => {
 		await act(async () => fixtures.mux!.handlers.onTerminalData("worker-1", new TextEncoder().encode(text)));
 	};
 	const titles = () => find("EmptyState").map((state) => state.props.title);
+	// The WebView's xterm is up: output reaches the screen from here on.
+	const xtermReady = async () => {
+		await act(async () => (find("XtermJsWebView")[0].props as { onInitialized: () => void }).onInitialized());
+	};
 
 	it("holds a loader over the empty grid until the terminal first draws", async () => {
 		await mount();
+		await xtermReady();
 		expect(texts()).toContain("Connecting…");
 		await act(async () => fixtures.mux!.handlers.onStatus("open"));
 		expect(texts()).toContain("Starting terminal…");
@@ -386,6 +393,16 @@ describe("opening and leaving the terminal", () => {
 		await output("\x1bc\x1b[?1049h\x1b[2J\x1b[H");
 		expect(texts()).toContain("Starting terminal…");
 		await output("> ready");
+		expect(texts()).not.toContain("Starting terminal…");
+	});
+
+	// Output can arrive while the WebView is still coming up; it is not on screen until drained.
+	it("keeps the loader until output held for the xterm is drawn", async () => {
+		await mount();
+		await act(async () => fixtures.mux!.handlers.onStatus("open"));
+		await output("> ready");
+		expect(texts()).toContain("Starting terminal…");
+		await xtermReady();
 		expect(texts()).not.toContain("Starting terminal…");
 	});
 
@@ -426,6 +443,7 @@ describe("opening and leaving the terminal", () => {
 	it("holds the loader again for the agent a Restore brings back", async () => {
 		vi.useFakeTimers();
 		await mount();
+		await xtermReady();
 		await act(async () => fixtures.mux!.handlers.onStatus("open"));
 		await output("> ready");
 		expect(texts()).not.toContain("Starting terminal…");

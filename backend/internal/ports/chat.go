@@ -308,6 +308,14 @@ var PermissionModesStrictestFirst = []PermissionMode{
 	PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeAuto, PermissionModeBypassPermissions,
 }
 
+// SkillsOf returns the session whose shared skills a provider gets.
+func SkillsOf(sessionID, skillSessionID domain.SessionID) domain.SessionID {
+	if skillSessionID != "" {
+		return skillSessionID
+	}
+	return sessionID
+}
+
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
@@ -362,6 +370,10 @@ type ChatStartConfig struct {
 	// access alongside WorkspacePath. Workspace projects use this for child repo
 	// worktrees; it is not a replacement for AO's worktree ownership.
 	AdditionalDirectories []string
+	// SkillSessionID is the session whose shared skills the provider gets, when
+	// that is not SessionID: a side conversation runs in a provider host of its
+	// own but uses its session's skills. Empty means SessionID.
+	SkillSessionID domain.SessionID
 	// MCPServers are client-supplied tool servers for this provider conversation.
 	// User/provider configuration still loads normally; these are additive.
 	MCPServers []ChatMCPServerConfig
@@ -402,7 +414,9 @@ type ChatResumeConfig struct {
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string
 	AdditionalDirectories []string
-	MCPServers            []ChatMCPServerConfig
+	// See ChatStartConfig.SkillSessionID.
+	SkillSessionID domain.SessionID
+	MCPServers     []ChatMCPServerConfig
 }
 
 // ChatMCPServerConfig is the provider-neutral session-setup shape for a tool

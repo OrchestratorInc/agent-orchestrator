@@ -789,6 +789,23 @@ describe("BrowserPanel", () => {
 		writeText.mockRestore();
 	});
 
+	it("keeps a remote session's localhost page in the Browser and copies its address as shown", async () => {
+		const url = "http://localhost:5173/app";
+		hookState.navState = { ...hookState.navState, url };
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		const writeText = vi.spyOn(window.ao!.clipboard, "writeText").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		const open = screen.getByRole("button", { name: /open in system browser/i });
+		expect(open).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(open);
+		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
+		expect(writeText).toHaveBeenCalledExactlyOnceWith(url);
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+		writeText.mockRestore();
+	});
+
 	it.each([
 		["a page on the host's own localhost", "http://localhost:3000/settings", "R1"],
 		["its viewer, before the first report", "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:41000/v/cdp?embed=1", ""],

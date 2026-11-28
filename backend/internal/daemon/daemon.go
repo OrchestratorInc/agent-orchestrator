@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -50,6 +51,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -491,6 +493,7 @@ func Run(buildVersion string) (retErr error) {
 		Sessions:            store,
 		Renders:             attachmentstore.New(cfg.DataDir),
 		DataDir:             cfg.DataDir,
+		SkillSharingEnabled: settingsSvc.SkillSharingEnabled,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
 		VersionRefresh: func() (time.Duration, bool) {
@@ -884,6 +887,7 @@ func Run(buildVersion string) (retErr error) {
 	// commits and PRs. Wired before tracker intake starts, so a session its
 	// first poll spawns already sees the setting.
 	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
+	sessMgr.SetSkillSharingEnabled(settingsSvc.SkillSharingEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -1449,6 +1453,7 @@ func Run(buildVersion string) (retErr error) {
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
 		LifetimeSessions:   store.LifetimeSessions,
+		LifetimeWork:       store.LifetimeWorkSessions,
 		DaemonVersion:      cfg.Telemetry.AppVersion,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
@@ -1536,6 +1541,9 @@ func Run(buildVersion string) (retErr error) {
 	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
 	lan.UseDeviceCredentials(accessDevices, pairingCodes)
+	if tcp, ok := srv.Addr().(*net.TCPAddr); ok {
+		lan.SetDaemonPort(tcp.Port)
+	}
 	bs.LAN = lan
 
 	// Restore Connect Mobile across a daemon restart: if the bridge was left
@@ -1612,15 +1620,19 @@ func Run(buildVersion string) (retErr error) {
 			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
 			// Recover them only after the listener is ready and the gate is closed, or
 			// startup can deadlock before the daemon binds its port.
-			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
-				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
-			}
-			restore.done(stepReviewerRecovery)
-			close(reviewerChatsRecovered)
+			go func() {
+				defer sentryobs.RecoverBackground()
+				defer close(reviewerChatsRecovered)
+				if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
+					log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
+				}
+			}()
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}
 			restore.done(stepSessions)
+			<-reviewerChatsRecovered
+			restore.done(stepReviewerRecovery)
 			if reconcileErr := lcStack.ReconcileRuntime(ctx); reconcileErr != nil {
 				log.Error("background agent-process reconciliation on boot failed", "err", reconcileErr)
 				sentryobs.CaptureBackground(ctx, reconcileErr, "lifecycle", "reconcile", map[string]string{"reason": "runtime"})
@@ -2157,6 +2169,16 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	// A harness on a custom endpoint sends its key, not an account's sign-in.
+	accounts.SetCustomEndpoint(func(p domain.AgentAccountProvider) bool {
+		for _, agentID := range harnessendpoint.AgentIDs() {
+			if provider, ok := domain.AgentAccountProviderFor(domain.AgentHarness(agentID)); ok && provider == p {
+				configured, err := harnessendpoint.ForDataDir(cfg.DataDir).Configured(agentID)
+				return err == nil && configured
+			}
+		}
+		return false
+	})
 	// An account's API key is checked with its provider before it is saved.
 	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
 		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]

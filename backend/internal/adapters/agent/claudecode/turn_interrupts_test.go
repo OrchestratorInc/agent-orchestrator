@@ -107,3 +107,40 @@ func TestLastTurnFailureReadsOnlyTranscripts(t *testing.T) {
 		}
 	}
 }
+
+func TestTypedPromptOnlyStripsCommandRecords(t *testing.T) {
+	for input, want := range map[string]string{
+		"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>PR 12</command-args>": "/review PR 12",
+		"<command-message>review</command-message>\n<command-name>/review</command-name>":                                     "/review",
+	} {
+		if got, command := TypedPrompt(input); got != want || !command {
+			t.Errorf("TypedPrompt(%q) = %q, %v", input, got, command)
+		}
+	}
+	for _, quoted := range []string{
+		"why does my log show <command-name>/model</command-name> here?",
+		"<command-name>/model</command-name> why is this in my log?",
+		"<local-command-stdout>ok</local-command-stdout> what did that print?",
+	} {
+		if got, command := TypedPrompt(quoted); got != quoted || command {
+			t.Errorf("a prompt quoting command tags became %q, %v", got, command)
+		}
+	}
+}
+
+func TestIsLocalCommandMetadata(t *testing.T) {
+	for text, want := range map[string]bool{
+		"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>": true,
+		"<local-command-stdout>Compacted </local-command-stdout>":                                                          true,
+		"<local-command-stderr>failed</local-command-stderr>":                                                              true,
+		"<command-name>/review</command-name> please look at auth":                                                         false,
+		"<command-name>unclosed":         false,
+		"what does <command-name> mean?": false,
+		"plain prompt":                   false,
+		"":                               false,
+	} {
+		if got := IsLocalCommandMetadata(text); got != want {
+			t.Errorf("IsLocalCommandMetadata(%q) = %v", text, got)
+		}
+	}
+}

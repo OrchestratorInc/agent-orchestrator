@@ -294,12 +294,17 @@ var shippedMigrations = map[int64]string{
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261125084210509: "20261125084210509_skill_sharing.sql",
 	20261126154409684: "20261126154409684_session_role_agent.sql",
 	20261126171748993: "20261126171748993_add_session_moved_to.sql",
 	20261126171749183: "20261126171749183_add_session_move_conversation_placed.sql",
 	20261126171749354: "20261126171749354_add_session_move_started.sql",
 	20261127085740884: "20261127085740884_session_version_moves.sql",
 	20261127183058106: "20261127183058106_repair_open_usage_harness_checks.sql",
+	20261128055914527: "20261128055914527_lifetime_work_session_count.sql",
+	20261128072745042: "20261128072745042_conversation_turn_lineage_indexes.sql",
+	20261128100000000: "20261128100000000_chat_attachment_leases.sql",
+	20261128110000000: "20261128110000000_agent_limit_reading_org.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -333,7 +338,11 @@ func burnedVersion(v int64) bool {
 		v == 20261125063907001 || v == 20261125063907002 || v == 20261125063907003 ||
 		// 20261127064704491 was the usage CHECK repair's number before main's
 		// 20261127085740884 landed below it.
-		v == 20261127064704491
+		v == 20261127064704491 ||
+		// 20261101115405806 was the turn lineage indexes' draft number, and
+		// 20261126084920915 its number before main's 20261126154409684 landed
+		// below it.
+		v == 20261101115405806 || v == 20261126084920915
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

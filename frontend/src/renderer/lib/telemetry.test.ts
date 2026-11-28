@@ -853,6 +853,7 @@ describe("telemetry sanitizers", () => {
 		});
 		expect(props).toEqual({ daemon_state: "error", code: "spawn_failed", exit_code: 1, signal: "SIGKILL" });
 		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_reason: "store_open_failed" })).toEqual({ code: "exited", exit_reason: "store_open_failed" });
+		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_code: 3221225477, exit_reason: "crashed" })).toEqual({ code: "exited", exit_code: 3221225477, exit_reason: "crashed" });
 		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_reason: "open store: /Users/alice/.ao/ao.db" })).toEqual({ code: "exited" });
 	});
 

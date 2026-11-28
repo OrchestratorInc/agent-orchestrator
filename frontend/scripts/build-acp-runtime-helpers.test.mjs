@@ -384,6 +384,92 @@ describe("patchClaudeBackgroundTasks output", () => {
 		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: `${"x".repeat(1020)}end\n`, truncated: true });
 	});
 
+	/** What Claude Code sends when a Monitor starts (2.1.330): a task id, and no file. */
+	function monitor(h, { taskId, toolUseId, command, name = "Monitor" }) {
+		h.session.toolUseCache[toolUseId] = { name, input: { description: "Watch CI", command, timeout_ms: 600000, persistent: false } };
+		h.emit({
+			type: "user",
+			tool_use_result: { taskId, timeoutMs: 600000, persistent: false },
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Monitor started (task ${taskId}, expires in 600s unless the source ends first).` }] },
+		});
+		delete h.session.toolUseCache[toolUseId];
+	}
+
+	it("reports a Monitor's command and reads its output from the session's tasks folder", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "session", "tasks");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "server.output"), "ready\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [
+			{ task_id: "server", task_type: "local_bash", description: "Start the dev server" },
+			{ task_id: "ci", task_type: "local_bash", description: "CI on PR #9027" },
+		] });
+		// The shell's launch names the folder the Monitor writes to.
+		launch(h, { taskId: "server", toolUseId: "toolu_s", command: "npm run dev", file: join(dir, "server.output") });
+		monitor(h, { taskId: "ci", toolUseId: "toolu_m", command: "gh pr checks 9027 --watch" });
+		expect(h.read().tasks).toMatchObject([
+			{ id: "server", command: "npm run dev" },
+			{ id: "ci", description: "CI on PR #9027", command: "gh pr checks 9027 --watch" },
+		]);
+		writeFileSync(join(dir, "ci.output"), "check 1: macos pending\n");
+		await expect(h.output("ci")).resolves.toEqual({ output: "check 1: macos pending\n", truncated: false });
+	});
+
+	it("reads a Monitor's output once its end notice names the file", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "tasks");
+		mkdirSync(dir, { recursive: true });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ci", task_type: "local_bash", description: "CI on PR #9027" }] });
+		monitor(h, { taskId: "ci", toolUseId: "toolu_m", command: "gh pr checks 9027 --watch" });
+		// No file named yet for this session: the command shows, the output can't.
+		expect(h.read().tasks).toMatchObject([{ id: "ci", command: "gh pr checks 9027 --watch" }]);
+		await expect(h.output("ci")).rejects.toThrow("no output file");
+
+		writeFileSync(join(dir, "ci.output"), "check 1: passed\n\n[exited with code 0]\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		h.emit({ subtype: "task_notification", task_id: "ci", status: "completed", output_file: join(dir, "ci.output"), summary: "stream ended" });
+		await expect(h.output("ci")).resolves.toEqual({ output: "check 1: passed\n\n[exited with code 0]\n", truncated: false });
+		expect(h.read().tasks).toMatchObject([{ id: "ci", state: "completed", command: "gh pr checks 9027 --watch" }]);
+
+		// The notice named the folder, so a later Monitor reads while it runs.
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "logs", task_type: "local_bash", description: "Tail the log" }] });
+		monitor(h, { taskId: "logs", toolUseId: "toolu_l", command: "tail -f app.log" });
+		writeFileSync(join(dir, "logs.output"), "GET / 200\n");
+		await expect(h.output("logs")).resolves.toEqual({ output: "GET / 200\n", truncated: false });
+	});
+
+	it("keeps the file of a Monitor that ended before its launch result", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "tasks");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "wait.output"), "main fix landed\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "wait", task_type: "local_bash", description: "Wait for the fix" }] });
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		h.emit({ subtype: "task_notification", task_id: "wait", status: "completed", output_file: join(dir, "wait.output"), summary: "stream ended" });
+		monitor(h, { taskId: "wait", toolUseId: "toolu_w", command: "until true; do sleep 30; done" });
+		expect(h.read().tasks).toMatchObject([{ id: "wait", state: "completed", command: "until true; do sleep 30; done" }]);
+		await expect(h.output("wait")).resolves.toEqual({ output: "main fix landed\n", truncated: false });
+	});
+
+	it("never reads a file a notice names for another task, or for another tool's task", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "tasks");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "other.output"), "not this task\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [
+			{ task_id: "ci", task_type: "local_bash", description: "CI" },
+			{ task_id: "agent", task_type: "local_agent", description: "Research" },
+		] });
+		monitor(h, { taskId: "ci", toolUseId: "toolu_m", command: "gh pr checks 9027 --watch" });
+		h.emit({ subtype: "task_notification", task_id: "ci", status: "completed", output_file: join(dir, "other.output"), summary: "" });
+		await expect(h.output("ci")).rejects.toThrow("no output file");
+		// An agent's notice keeps no file, and a non-Monitor taskId is no launch.
+		h.emit({ subtype: "task_notification", task_id: "agent", status: "completed", output_file: join(dir, "agent.output"), summary: "" });
+		monitor(h, { taskId: "stopper", toolUseId: "toolu_x", command: "kill 1", name: "TaskStop" });
+		for (const id of ["agent", "stopper"]) await expect(h.output(id)).rejects.toThrow("no output file");
+		expect(h.session.aoBackgroundTaskDir).toBeUndefined();
+	});
+
 	it("reads only the file Claude Code named for that task", async () => {
 		const h = harness();
 		const file = join(temporaryDirectory(), "watch.output");

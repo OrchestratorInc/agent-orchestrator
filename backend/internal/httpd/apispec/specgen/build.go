@@ -18,6 +18,7 @@ import (
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
@@ -228,6 +229,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
+	"ControllersUpdateSkillSharingRequest":                 "UpdateSkillSharingRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
@@ -468,6 +470,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAttachmentUploadResponse":                 "AttachmentUploadResponse",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
+	"ControllersUpdateSessionAttachmentLeasesRequest":     "UpdateSessionAttachmentLeasesRequest",
+	"ControllersUpdateSessionAttachmentLeasesResponse":    "UpdateSessionAttachmentLeasesResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
 	"ControllersListWorkspaceFilesResponse":               "ListWorkspaceFilesResponse",
 	"ControllersWorkspaceManifestResponse":                "WorkspaceManifestResponse",
@@ -607,6 +611,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"AgentauthPlan":                               "AgentAuthPlan",
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
+	"ControllersAgentEndpointResponse":            "AgentEndpointResponse",
+	"HarnessendpointStatus":                       "AgentEndpointStatus",
+	"HarnessendpointInput":                        "SetAgentEndpointRequest",
+	"HarnessendpointAuthStyle":                    "AgentEndpointAuthStyle",
 	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
 	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
 	"AgentauthLoginMethod":                        "AgentLoginMethod",
@@ -1752,6 +1760,17 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPatch, path: "/api/v1/settings/skill-sharing", id: "updateSkillSharing", tag: "settings",
+			summary: "Turn sharing the user's skills with every agent on or off",
+			reqBody: controllers.UpdateSkillSharingRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPatch, path: "/api/v1/settings/version-refresh", id: "updateVersionRefresh", tag: "settings",
 			summary: "Choose whether idle open sessions move to newly installed harness releases",
 			reqBody: controllers.UpdateVersionRefreshRequest{},
@@ -2720,6 +2739,29 @@ func agentOperations() []operation {
 			pathParams: []any{controllers.AgentIDParam{}},
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.PrewarmChatAgentResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/{agent}/endpoint", id: "setAgentEndpoint", tag: "agents",
+			summary:    "Store a custom API base URL and key for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    harnessendpoint.Input{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentEndpointResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/{agent}/endpoint", id: "clearAgentEndpoint", tag: "agents",
+			summary:    "Remove the custom API endpoint for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentEndpointResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -4086,6 +4128,19 @@ func sessionOperations() []operation {
 			reqBody:    controllers.StageSessionAttachmentsRequest{},
 			resps: []respUnit{
 				{http.StatusCreated, controllers.StageSessionAttachmentsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments/leases", id: "updateSessionAttachmentLeases", tag: "sessions",
+			summary:    "Release or renew files staged for an unsent chat draft",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.UpdateSessionAttachmentLeasesRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UpdateSessionAttachmentLeasesResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

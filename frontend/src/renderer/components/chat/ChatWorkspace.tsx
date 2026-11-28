@@ -2,6 +2,8 @@ import { useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
+import { readRenderSelection } from "../../lib/render-frame";
+import type { ChatSelectionFrame } from "../../hooks/useChatSelectionPosition";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
@@ -120,7 +122,7 @@ import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
 import { labelForHost } from "../../lib/host-clients";
 import type { ApprovalMode } from "../../types/conversation";
-import type { ConversationLocalEcho } from "../../hooks/useConversation";
+import type { ConversationLocalEcho, UpdateAttachmentLeases } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
@@ -180,15 +182,21 @@ import {
 	piggybackedUpdates,
 	senderOf,
 	FromAgent,
+	indexWorkerUpdates,
 	isTaskTitleUpdate,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	relayedVia,
 	renamedTitle,
+	EndedSpawnsContext,
 	SpawnedAgents,
+	spawnedBy,
 	spawnedSessionIds,
+	spawnedWorker,
 	TaskNamedLine,
+	terminatedBy,
+	useEndedSpawns,
 	useWorkerUpdateIndex,
+	waitingSpawns,
 	WorkerUpdateIndexContext,
 	BatchedReportsContext,
 	type BatchedReports,
@@ -220,7 +228,7 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { aoActionName, isOrdinaryActivity } from "./activity-action";
+import { aoActionName, isFailedSpawn, isOrdinaryActivity, mergeFailedSpawns } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -458,6 +466,8 @@ export interface ChatWorkspaceProps {
 	sessionRole?: SessionKind;
 	/** Host-specific proxy origin for images and staged attachments. */
 	assetBaseUrl?: string;
+	/** Session ID used to load staged attachment previews when different from snapshot.sessionId (e.g. a prepared worktree). */
+	assetSessionId?: string;
 	/** Selected remote host, even while its connection has no proxy origin. */
 	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
@@ -563,6 +573,7 @@ export interface ChatWorkspaceProps {
 	shellError?: string;
 	/** Open an HTTP(S) link in this session's AO Browser panel. */
 	onLinkOpen?: (url: string) => void;
+	hostLocalLinks?: boolean;
 	onSessionLinkOpen?: (url: string) => void;
 	/** A send or decision is in flight. */
 	busy?: boolean;
@@ -698,6 +709,8 @@ export interface ChatWorkspaceProps {
 	 * no worktree to write into.
 	 */
 	onStageAttachments?: (attachments: OutgoingAttachment[], signal?: AbortSignal) => Promise<string[]>;
+	/** Releases or renews the leases of files staged for the draft; see ChatComposer. */
+	onUpdateAttachmentLeases?: UpdateAttachmentLeases;
 	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
 	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
@@ -874,6 +887,7 @@ function ChatWorkspaceContent({
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
+	assetSessionId,
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
@@ -937,6 +951,7 @@ function ChatWorkspaceContent({
 	openingShell,
 	shellError,
 	onLinkOpen,
+	hostLocalLinks,
 	onSessionLinkOpen,
 	busy,
 	models,
@@ -990,6 +1005,7 @@ function ChatWorkspaceContent({
 	localEchos,
 	sendAwaitingTurn = false,
 	onStageAttachments,
+	onUpdateAttachmentLeases,
 	cloudAttachments,
 	nativeImages,
 	onSteer,
@@ -2007,11 +2023,22 @@ function ChatWorkspaceContent({
 		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
 		[queuedSteerErrors, steerErrors],
 	);
+	// The composer sits outside the timeline's image source, so its dock is told
+	// where staged files are read from, the same way the timeline resolves them.
+	const queuedLocalBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const queuedAttachmentSource = useMemo(
+		() => ({
+			sessionId: snapshot.sessionId,
+			apiBaseUrl: activeRemoteHostId ? assetBaseUrl ?? null : assetBaseUrl ?? queuedLocalBaseUrl,
+		}),
+		[activeRemoteHostId, assetBaseUrl, queuedLocalBaseUrl, snapshot.sessionId],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
 				<QueuedMessageDock
 					messages={visibleQueuedMessages}
+					attachmentSource={queuedAttachmentSource}
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
@@ -2049,6 +2076,7 @@ function ChatWorkspaceContent({
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
+			queuedAttachmentSource,
 			queuedSteerFailures,
 			steeringTurnIds,
 			visibleQueuedMessages,
@@ -2381,11 +2409,12 @@ function ChatWorkspaceContent({
 							onFileOpen={onOpenFile}
 							onSessionLinkOpen={onSessionLinkOpen}
 							remoteHost={Boolean(activeRemoteHostId)}
+							hostLocalLinks={hostLocalLinks}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={assetSessionId ?? snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -2626,6 +2655,7 @@ function ChatWorkspaceContent({
 										filePathsLoading={filePathsLoading}
 										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										onUpdateAttachmentLeases={onUpdateAttachmentLeases}
 										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
@@ -2650,7 +2680,7 @@ function ChatWorkspaceContent({
 										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
 										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
-										assetSessionId={snapshot.sessionId}
+										assetSessionId={assetSessionId ?? snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
@@ -3719,6 +3749,7 @@ export function Timeline({
 	const [selectionAction, setSelectionAction] = useState<{
 		excerpt: ChatDraftExcerptReference;
 		range: Range;
+		frame?: ChatSelectionFrame;
 	} | null>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
 	const selectionComment = useRef("");
@@ -3880,6 +3911,36 @@ export function Timeline({
 			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
 			? previous : next);
 	}, [excerptsEnabled, snapshot]);
+	const captureFrameSelection = useCallback((event: MessageEvent) => {
+		const posted = readRenderSelection(event.data);
+		const text = posted?.text;
+		if (!posted || text === undefined) return;
+		const frame = Array.from(scrollContent.current?.querySelectorAll("iframe") ?? []).find((each) => each.contentWindow === event.source);
+		if (!frame) return;
+		if (!text.trim() || !("first" in posted)) {
+			if (selectionActionRef.current?.frame?.element === frame && !selectionComment.current.trim()) setSelectionAction(null);
+			return;
+		}
+		const activityId = frame.closest<HTMLElement>("[data-chat-activity-id]")?.dataset.chatActivityId;
+		const activity = snapshot.items.find((item) => item.kind === "activity" && item.id === activityId);
+		if (!activity || document.activeElement !== frame) return;
+		const range = document.createRange();
+		range.selectNode(frame);
+		setEditingAnnotation(null);
+		setSelectionAction((previous) => previous?.frame?.element === frame && previous.excerpt.text === text ? previous : {
+			excerpt: {
+				id: crypto.randomUUID(),
+				conversationId: snapshot.conversationId,
+				messageId: activity.id,
+				revision: activity.revision,
+				text,
+				role: "assistant",
+				snapshot: { version: 1, rawText: "", captureMode: "legacy" },
+			},
+			range,
+			frame: { element: frame, first: posted.first, extent: posted.extent },
+		});
+	}, [snapshot]);
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
@@ -3913,7 +3974,9 @@ export function Timeline({
 		document.addEventListener("pointerup", capture);
 		document.addEventListener("keyup", capture);
 		document.addEventListener("keydown", escape, true);
+		window.addEventListener("message", captureFrameSelection);
 		return () => {
+			window.removeEventListener("message", captureFrameSelection);
 			document.removeEventListener("pointerup", capture);
 			document.removeEventListener("keyup", capture);
 			document.removeEventListener("keydown", escape, true);
@@ -3921,7 +3984,7 @@ export function Timeline({
 			document.removeEventListener("keyup", release);
 			window.removeEventListener("blur", blur);
 		};
-	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
+	}, [captureFrameSelection, captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
 	const addSelectionToChat = useCallback(async (comment: string) => {
 		if (!selectionAction) return;
@@ -4589,6 +4652,7 @@ export function Timeline({
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	const endedSpawns = useEndedSpawns(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
 	const developerMode = useUiStore((state) => state.developerMode);
 	const grouped = useMemo(() => {
@@ -4612,14 +4676,26 @@ export function Timeline({
 				: group);
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
-		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
-		const cleaned = spawnedIds.size === 0 ? placed : placed
-			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+		// A worker this chat spawned is drawn by its spawn tree row and then by its reports,
+		// so the daemon's records of it would only repeat them: its termination while the row
+		// is still up, and its spawn once it has answered and the row is gone. Dropped here,
+		// before they can leave an empty group behind. One that ended without answering loses
+		// its row at the next turn, and both records then stand for it.
+		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
+		const answered = (workerUpdateIndex ?? indexWorkerUpdates(snapshot.items)).latest;
+		const repeats = (item: ConversationItem) => {
+			const started = spawnedBy(item);
+			if (started) return answered.has(started);
+			const ended = terminatedBy(item);
+			return ended !== undefined && spawned.has(ended) && !answered.has(ended) && !endedSpawns.has(ended);
+		};
+		const cleaned = spawned.size === 0 || !placed.some((group) => group.items.some(repeats)) ? placed : placed
+			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.live || group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
+		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence, queued);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, developerMode, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, queued, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -4893,8 +4969,8 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 			return;
 		}
-		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
-			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
+		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id], [data-chat-activity-id]") ?? [])
+			.find((element) => (element.dataset.chatMessageId ?? element.dataset.chatActivityId) === annotationTarget.messageId);
 		if (!source) {
 			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
 			if (keys.some((key) => !activityDisclosureOverrides[key])) {
@@ -6001,6 +6077,7 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<EndedSpawnsContext.Provider value={endedSpawns}>
 								<BatchedReportsContext.Provider value={batchedReports}>
 								<LatestForkTurnContext.Provider value={latestForkTurnId}>
 								{group.folded ? (
@@ -6013,6 +6090,7 @@ export function Timeline({
 								) : renderTurn(group)}
 								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
+								</EndedSpawnsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -6411,13 +6489,19 @@ const TurnGroup = memo(function TurnGroup({
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
 	const updateIndex = useContext(WorkerUpdateIndexContext);
+	const endedSpawns = useContext(EndedSpawnsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
-		() => runsOf(turnFlowItems(group)),
+		() =>
+			runsOf(
+				// A worker the turn spawned draws under the turn as its own row, not as a step,
+				// until it has ended without answering and the row is gone.
+				workerUpdates ? turnFlowItems(group).filter((item) => endedSpawns.has(spawnedBy(item) ?? "") || !spawnedBy(item)) : turnFlowItems(group),
+			),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
-		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error, workerUpdates, endedSpawns],
 	);
 	// A review round arrives as one message per comment; it draws as one event, or in
 	// Developer Mode, a PR's comments and failing CI draw as one line.
@@ -6571,7 +6655,7 @@ const TurnGroup = memo(function TurnGroup({
 			/>
 		);
 	};
-	const renderSingleRun = (run: TimelineRun) => (
+	const renderSingleRun = (run: TimelineRun, beforeActions?: ReactNode) => (
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
@@ -6615,6 +6699,7 @@ const TurnGroup = memo(function TurnGroup({
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
 				: undefined}
+			beforeActions={beforeActions}
 		/>
 	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -6653,7 +6738,38 @@ const TurnGroup = memo(function TurnGroup({
 		if (waiting.length === 0) return renderRun(run);
 		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
-	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
+	const sentUpdates = (run: TimelineRun) => {
+		const item = run.kind === "single" ? run.items[0] : undefined;
+		const updates = workerUpdates && item && !isUserQueuePrompt(item) ? workerUpdatesOf(item) : [];
+		return updates.length > 0 && updates[0]?.state === undefined && !batched?.under.get(item!.id)?.length ? updates : undefined;
+	};
+	const renderWorkerRuns = (list: readonly TimelineRun[]): ReactNode[] => {
+		const out: ReactNode[] = [];
+		for (let start = 0; start < list.length;) {
+			let end = start;
+			while (end < list.length && sentUpdates(list[end]!)) end += 1;
+			if (end - start < 2) {
+				out.push(...[renderWorkerRun(list[start]!)].flat());
+				start += 1;
+				continue;
+			}
+			const sent = list.slice(start, end);
+			const keys = sent.map((run) => `${group.key}:sent:${run.key}`);
+			out.push(
+				<BackgroundUpdates
+					key={keys[0]}
+					turns={sent.map((run) => ({ at: run.items[0]!.createdAt, updates: sentUpdates(run)! }))}
+					open={keys.some((key) => activityDisclosureOverrides[key])}
+					onOpenChange={(open) => keys.forEach((key) => onActivityDisclosureChange(key, open))}
+				>
+					<WorkerUpdateRows updates={sent.flatMap((run) => sentUpdates(run)!)} />
+				</BackgroundUpdates>,
+			);
+			start = end;
+		}
+		return out;
+	};
+	const body: ReactNode[] = renderWorkerRuns(humanRuns);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
 	// The live row sits at the end of the turn, under what the agent has written so
@@ -6689,11 +6805,17 @@ const TurnGroup = memo(function TurnGroup({
 	// settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
-	// Agents the turn spawned are part of its work, so they fold with its steps.
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
-	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
-	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
+	// Each worker the turn spawned is a row in the spawn tree under it, from the moment
+	// the daemon records the spawn until the worker answers, so it stays out of the fold.
+	// One that ended without answering keeps its row only until the next turn.
+	// `ao spawn` output still names the workers a daemon too old to record the spawn started.
+	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedWorker(item) ?? []) : [];
+	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	// The tree goes with its last waiting worker, so the reply keeps no empty space for it.
+	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex, endedSpawns);
+	const spawnTree = waitingWorkers.length > 0 ? <SpawnedAgents key="spawned" spawns={waitingWorkers} /> : null;
+	const hasFoldedWork = foldedRuns.length > 0;
+	const foldedWork = (): ReactNode[] => renderWorkerRuns(foldedRuns);
 	const showsWorked = Boolean(
 		// A message refused for its login did no work, so it gets no "Worked for".
 		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
@@ -6725,10 +6847,14 @@ const TurnGroup = memo(function TurnGroup({
 	// with no scroll box of their own. They go straight into the turn's flat list, so
 	// a step keeps its element as later ones land under it and an image the reader
 	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
-	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
+	if (!outcome) body.push(...renderWorkerRuns(workedRuns));
 	// Settled steers still carry the reports they delivered.
-	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
-	if (finalRun) body.push(renderRun(finalRun));
+	if (outcome) body.push(...renderWorkerRuns(noticeRuns));
+	// Under the reply, so the reply streams in above the tree, and above the reply's
+	// copy and undo row, which belongs to the whole turn.
+	const finalReply = finalRun?.kind === "single" && finalRun.items[0]?.kind === "message" && finalRun.items[0].role === "assistant";
+	if (finalRun) body.push(finalReply && spawnTree ? renderSingleRun(finalRun, spawnTree) : renderRun(finalRun));
+	if (spawnTree && !finalReply) body.push(spawnTree);
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
@@ -6850,6 +6976,7 @@ function TimelineItem({
 	retry,
 	onSelectAnnotation,
 	status,
+	beforeActions,
 	pullRequestBurst,
 }: {
 	item: ConversationItem;
@@ -6895,6 +7022,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
+	/** What an answer introduced, between its prose and its action row. */
+	beforeActions?: ReactNode;
 	/** This message's PR feedback burst (see `pullRequestBursts` and `reviewBursts`): the messages it draws for, or null when another draws it. */
 	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
@@ -6907,6 +7036,7 @@ function TimelineItem({
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
+					beforeActions={beforeActions}
 					retry={retry}
 				/>
 			);
@@ -7167,7 +7297,8 @@ const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members
 function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
 	const turn = member ?? group;
-	const inside = [`${turn.key}:worked`];
+	const target = turn.items.find(holds);
+	const inside = [`${turn.key}:worked`, ...(target ? [`${turn.key}:sent:${itemKey(target)}`] : [])];
 	if (!member) return inside;
 	const { kind } = group.folded!;
 	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;
@@ -7195,11 +7326,11 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	return last && isAccountFailure(last) ? last : undefined;
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, endedSpawns: ReadonlySet<string>, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number, queued?: ReadonlySet<string>): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	const held: TimelineGroup[] = [];
-	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
+	let run: { kind: "background" | "waiting" | "failed"; key: string; members: TimelineGroup[] } | undefined;
 	const close = () => {
 		if (!run) return;
 		const { kind, members } = run;
@@ -7224,12 +7355,18 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			continue;
 		}
 		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
-			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
+			? group.outcome ?? (queued?.has(group.turnId) || !known.has(group.turnId) ? { state: "completed" as const } : undefined)
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
-		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome, index, carried) : "yours";
-		if (standing !== "background" && standing !== "failed") {
+		// A turn stays in view while a worker it spawned has not answered, as one does while
+		// a subagent it launched works: the worker's line is under the reply until then. One
+		// that ended before it answered keeps it until the next turn, since that line is where
+		// the chat says so, and then lets the turn go.
+		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index, endedSpawns).length > 0;
+		const judged = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
+		const standing = !group.turnId || !queued?.has(group.turnId) ? judged : judged === "background" ? "waiting" : "yours";
+		if (standing !== "background" && standing !== "waiting" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
 				? { key: `replaced:${group.key}`, anchor: group.anchor, items: group.items, folded: { kind: "replaced", members: [group] } }
@@ -7324,12 +7461,13 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 			{member === banner ? null : body(member)}
 		</BackgroundTurnRow>
 	);
-	const { rows, tally } = kind === "background" ? backgroundRows(listed, updates) : { rows: undefined, tally: undefined };
+	const { rows, tally } = kind !== "failed" ? backgroundRows(listed, updates) : { rows: undefined, tally: undefined };
 	const line = (
 		<BackgroundUpdates
 			turns={listed.filter((member) => !isLooseNotices(member)).map((member) => ({ at: member.items[0]!.createdAt, updates: updates.get(member)! }))}
 			tally={tally}
 			failed={kind === "failed"}
+			waiting={kind === "waiting"}
 			{...toggleAll("line", listed)}
 		>
 			{rows ? rows.map((row) => {
@@ -7485,7 +7623,7 @@ type TimelineGroup = {
 	accountSwitched?: boolean;
 	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
 	subagents?: GroupSubagents;
-	folded?: { kind: "background" | "failed" | "replaced"; members: TimelineGroup[] };
+	folded?: { kind: "background" | "waiting" | "failed" | "replaced"; members: TimelineGroup[] };
 	leadless?: boolean;
 };
 
@@ -8313,14 +8451,19 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.items.some(isNoticeItem);
+	// Read as the run draws them: a failed spawn's call carries the daemon's reason once merged.
+	const items: readonly ConversationItem[] = run.items;
+	return mergeFailedSpawns(items.filter((item) => item.kind === "activity")).some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
-	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
+	// A spawn that failed folds into Worked for with the rest of the work: its step
+	// says why there, and the reply above the fold already tells the reader. One the
+	// daemon gave no reason for stays out like any failed call.
+	if (isOrdinaryActivity(item) && isFailedCall(item) && !isFailedSpawn(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	// A compaction stays too: it is where the agent's earlier history was summarized.
 	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";

@@ -129,6 +129,26 @@ func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	}
 }
 
+// A download still running when the install deadline passes is a timeout,
+// though its own error only wraps the expired context.
+func TestCloudflaredDownloadPastTheDeadlineIsATimeout(t *testing.T) {
+	s := newTestService("linux", "apt-get")
+	s.goarch = "amd64"
+	s.installTimeout = 50 * time.Millisecond
+	s.managedBinaries = managedBinaryInstallerFunc(func(ctx context.Context, _ ports.ManagedBinaryDownload) (string, error) {
+		<-ctx.Done()
+		return "", fmt.Errorf("download cloudflared: %w", ctx.Err())
+	})
+	if _, err := s.Start(context.Background(), TargetCloudflared); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	job, _ := s.Status(context.Background(), TargetCloudflared)
+	if job.FailureCause != FailureTimeout {
+		t.Fatalf("FailureCause = %q, want %q (job %+v)", job.FailureCause, FailureTimeout, job)
+	}
+}
+
 // The wrong bytes would be the same on every try, so they are not fetched
 // again.
 func TestCloudflaredDownloadDoesNotRetryWrongBytes(t *testing.T) {

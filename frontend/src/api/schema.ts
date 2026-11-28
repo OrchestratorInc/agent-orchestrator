@@ -175,6 +175,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/endpoint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Store a custom API base URL and key for one agent */
+        put: operations["setAgentEndpoint"];
+        post?: never;
+        /** Remove the custom API endpoint for one agent */
+        delete: operations["clearAgentEndpoint"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/install": {
         parameters: {
             query?: never;
@@ -3266,6 +3284,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/attachments/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release or renew files staged for an unsent chat draft */
+        post: operations["updateSessionAttachmentLeases"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/auto-inject-ci": {
         parameters: {
             query?: never;
@@ -5494,6 +5529,23 @@ export interface paths {
         patch: operations["updateSessionRetention"];
         trace?: never;
     };
+    "/api/v1/settings/skill-sharing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Turn sharing the user's skills with every agent on or off */
+        patch: operations["updateSkillSharing"];
+        trace?: never;
+    };
     "/api/v1/settings/version-refresh": {
         parameters: {
             query?: never;
@@ -6021,6 +6073,7 @@ export interface components {
             action: string;
             agentId: string;
             available: boolean;
+            customEndpoint?: components["schemas"]["AgentEndpointStatus"];
             displayCommand?: string;
             documentationUrl: string;
             guidance?: string;
@@ -6050,6 +6103,22 @@ export interface components {
             model?: string;
             permissions?: string;
             terminateOnPrMerge?: null | boolean;
+        };
+        AgentEndpointResponse: {
+            endpoint: components["schemas"]["AgentEndpointStatus"];
+        };
+        AgentEndpointStatus: {
+            /** @enum {string} */
+            authStyle?: "bearer" | "api-key";
+            authStyles: string[];
+            baseUrl?: string;
+            configured: boolean;
+            /** @enum {string} */
+            defaultAuthStyle: "bearer" | "api-key";
+            error?: string;
+            hasApiKey: boolean;
+            model?: string;
+            supportsModel: boolean;
         };
         AgentInfo: {
             /**
@@ -8317,6 +8386,11 @@ export interface components {
             /** @description Expected or adapter-resolved executable destination. */
             expectedDestination?: string;
             /**
+             * @description Set only when status is failed: why, from a closed list read from the error and output.
+             * @enum {string}
+             */
+            failureCause?: "timeout" | "not_found_after_install" | "verify_failed" | "node_missing" | "npm_missing" | "brew_missing" | "tool_missing" | "xcode_tools_missing" | "disk_full" | "permission_denied" | "network" | "locked" | "exit_nonzero" | "other";
+            /**
              * Format: date-time
              * @description Absent until the job finishes.
              */
@@ -9891,6 +9965,19 @@ export interface components {
             sessionId: string;
             state: string;
         };
+        SetAgentEndpointRequest: {
+            /** @description API key; omit to keep the stored key. */
+            apiKey?: string;
+            /**
+             * @description Credential form; defaults per harness.
+             * @enum {string}
+             */
+            authStyle?: "bearer" | "api-key";
+            /** @description Absolute http(s) provider endpoint URL. */
+            baseUrl: string;
+            /** @description Default model. Omit it to keep the saved model or use the first model the endpoint lists. */
+            model?: string;
+        };
         SetBrowserRemoteAccessRequest: {
             enabled: boolean;
         };
@@ -9998,6 +10085,8 @@ export interface components {
             localEnabled: boolean;
             /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
             sessionRetentionDays: number;
+            /** @description Sessions get the user's skills from ~/.agents, ~/.claude and ~/.codex that their agent does not load itself, inside Orchestrator only. A running session follows at its next resume. */
+            skillSharing: boolean;
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
@@ -10250,6 +10339,7 @@ export interface components {
         };
         StageSessionAttachmentsRequest: {
             attachments: components["schemas"]["AttachmentInput"][];
+            draft?: boolean;
         };
         StageSessionAttachmentsResponse: {
             paths: string[];
@@ -10434,6 +10524,7 @@ export interface components {
             installId?: string;
             isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;
+            lifetimeWorkSessions?: null | number;
             optedOut: boolean;
         };
         TerminalShellCheckResponse: {
@@ -10550,6 +10641,13 @@ export interface components {
             config: components["schemas"]["ProjectConfig"];
             displayName: string;
         };
+        UpdateSessionAttachmentLeasesRequest: {
+            release?: string[];
+            renew?: string[];
+        };
+        UpdateSessionAttachmentLeasesResponse: {
+            missing: string[];
+        };
         UpdateSessionInterfaceRequest: {
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
@@ -10561,6 +10659,9 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateSkillSharingRequest: {
+            enabled: null | boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -10589,6 +10690,9 @@ export interface components {
         UsageLimitLogin: {
             accountId: string;
             email?: string;
+            loginId?: string;
+            organizationName?: string;
+            organizationUnknown?: boolean;
             plan?: string;
             /** @enum {string} */
             provider: "claude" | "codex";
@@ -11587,6 +11691,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrewarmChatAgentResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAgentEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAgentEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentEndpointResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearAgentEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentEndpointResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */
@@ -22444,6 +22652,69 @@ export interface operations {
             };
         };
     };
+    updateSessionAttachmentLeases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionAttachmentLeasesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSessionAttachmentLeasesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     setSessionAutoInjectCI: {
         parameters: {
             query?: never;
@@ -31291,6 +31562,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateSessionRetentionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSkillSharing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkillSharingRequest"];
             };
         };
         responses: {

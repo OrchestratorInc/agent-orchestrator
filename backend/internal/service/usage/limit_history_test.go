@@ -121,6 +121,216 @@ func TestLimitHistoryHidesASignedOutLoginUntilItIsBack(t *testing.T) {
 	}
 }
 
+// Two logins that share an email address in different organizations, a
+// personal plan and a team seat, keep separate windows (#8891).
+func TestLimitHistoryKeepsLoginsThatShareAnEmailApart(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	maxReset, teamReset := now.Add(2*time.Hour), now.Add(4*time.Hour)
+	read := func(account, org, plan string, used float64, reset, readAt time.Time) domain.AgentLimitReading {
+		return domain.AgentLimitReading{
+			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: "same@example.com", OrgID: org, Plan: plan,
+			WindowID: "five_hour", DurationMinutes: 300, UsedPercent: used, ResetsAt: &reset, ReadAt: readAt,
+		}
+	}
+	claude := domain.AgentAccountProviderClaude
+	store := fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			read("acct-max", "org-personal", "max", 10, maxReset, now.Add(-3*time.Hour)),
+			read("acct-max", "org-personal", "max", 20, maxReset, now.Add(-2*time.Hour)),
+			// The computer's own login is the same team seat as acct-team.
+			read("device-claude", "org-team", "team", 30, teamReset, now.Add(-90*time.Minute)),
+			read("acct-team", "org-team", "team", 40, teamReset, now.Add(-time.Hour)),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-max", Provider: claude}, {ID: "acct-team", Provider: claude}},
+	}
+	reader := NewLimitHistoryReader(store, nil)
+	reader.now = func() time.Time { return now }
+
+	// Each read lists both logins, in the same order.
+	var teamLoginID string
+	for range 3 {
+		history, err := reader.History(context.Background(), 7)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(history.Logins) != 2 {
+			t.Fatalf("logins = %+v, want the Max and the Team login", history.Logins)
+		}
+		personal, team := history.Logins[0], history.Logins[1]
+		if personal.LoginID == "" || team.LoginID == "" || personal.LoginID == team.LoginID {
+			t.Fatalf("expected distinct login IDs, got %q and %q", personal.LoginID, team.LoginID)
+		}
+		if teamLoginID != "" && team.LoginID != teamLoginID {
+			t.Fatalf("team login ID changed from %q to %q", teamLoginID, team.LoginID)
+		}
+		teamLoginID = team.LoginID
+		if personal.AccountID != "acct-max" || personal.Plan != "max" || team.AccountID != "acct-team" || team.Plan != "team" {
+			t.Fatalf("logins = %+v, want acct-max on max, then acct-team on team", history.Logins)
+		}
+		if len(personal.Windows) != 1 || personal.Windows[0].Readings != 2 || personal.Windows[0].PeakUsedPercent != 20 || !personal.Windows[0].ResetsAt.Equal(maxReset) {
+			t.Fatalf("max windows = %+v, want one window with both its readings", personal.Windows)
+		}
+		if len(team.Windows) != 1 || team.Windows[0].Readings != 2 || team.Windows[0].PeakUsedPercent != 40 || !team.Windows[0].ResetsAt.Equal(teamReset) {
+			t.Fatalf("team windows = %+v, want one window read by both accounts", team.Windows)
+		}
+	}
+
+	// Signing out Max hides only its windows. The Team history keeps its
+	// identity even when a different account represents it.
+	reader = NewLimitHistoryReader(store, fakeConfirmedLogins{
+		"acct-max":      {},
+		"acct-team":     {},
+		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-team", OrgName: "Acme"},
+	})
+	reader.now = func() time.Time { return now }
+	history, err := reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history.Logins) != 1 || history.Logins[0].Plan != "team" ||
+		history.Logins[0].AccountID != "device-claude" || history.Logins[0].LoginID != teamLoginID {
+		t.Fatalf("logins = %+v, want only the signed-in team seat", history.Logins)
+	}
+	if history.Logins[0].OrganizationName != "Acme" {
+		t.Fatalf("organization name = %q, want the confirmed organization's name", history.Logins[0].OrganizationName)
+	}
+
+	// An account confirmed in another organization does not name this one.
+	reader = NewLimitHistoryReader(store, fakeConfirmedLogins{
+		"acct-team":     {SignedIn: true, Email: "same@example.com", OrgID: "org-team"},
+		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-personal", OrgName: "Personal"},
+	})
+	reader.now = func() time.Time { return now }
+	history, err = reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	for _, login := range history.Logins {
+		if login.LoginID == teamLoginID && login.OrganizationName != "" {
+			t.Fatalf("team login named %q by an account in another organization", login.OrganizationName)
+		}
+	}
+}
+
+func TestLimitHistoryKeepsUntaggedClaudeReadingsWithTheirRecordingAccount(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	claude := domain.AgentAccountProviderClaude
+	read := func(account, org string, used float64, ago time.Duration) domain.AgentLimitReading {
+		return domain.AgentLimitReading{
+			AccountID: account, Provider: claude, Email: "same@example.com", OrgID: org,
+			WindowID: "seven_day", DurationMinutes: 10080, UsedPercent: used, ResetsAt: &reset, ReadAt: now.Add(-ago),
+		}
+	}
+	store := fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			read("device-claude", "", 90, 3*time.Hour),
+			read("acct-team", "", 60, 2*time.Hour),
+			read("acct-team", "org-team", 25, time.Hour),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-team", Provider: claude}},
+	}
+	// Team refreshes first after the upgrade. Its older readings and the
+	// device's readings both lack an org, even though the email is shared.
+	confirmed := fakeConfirmedLogins{
+		"acct-team": {SignedIn: true, Email: "same@example.com", OrgID: "org-team"},
+	}
+	reader := NewLimitHistoryReader(store, confirmed)
+	reader.now = func() time.Time { return now }
+	history, err := reader.History(t.Context(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[float64]string{90: "device-claude", 60: "acct-team", 25: "acct-team"}
+	ids := map[string]bool{}
+	if len(history.Logins) != len(want) {
+		t.Fatalf("logins = %+v, want three separate history groups", history.Logins)
+	}
+	for _, login := range history.Logins {
+		if login.LoginID == "" || ids[login.LoginID] || len(login.Windows) != 1 {
+			t.Fatalf("expected a unique history ID and one window: %+v", login)
+		}
+		ids[login.LoginID] = true
+		window := login.Windows[0]
+		if window.Readings != 1 || want[window.PeakUsedPercent] != login.AccountID ||
+			login.OrganizationUnknown != (window.PeakUsedPercent != 25) {
+			t.Fatalf("usage was assigned to the wrong group: %+v", login)
+		}
+		delete(want, window.PeakUsedPercent)
+	}
+
+	confirmed["device-claude"] = domain.AgentAccountIdentityCheck{}
+	history, err = reader.History(t.Context(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Logins) != 2 || history.Logins[0].AccountID != "acct-team" || history.Logins[1].AccountID != "acct-team" {
+		t.Fatalf("signed-out device's legacy history should be hidden: %+v", history.Logins)
+	}
+}
+
+// An account that read a login and then moved to another organization no
+// longer stands for the login it left.
+func TestLimitHistoryShowsALoginAsAnAccountThatStillHoldsIt(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	aReset, bReset := now.Add(2*time.Hour), now.Add(4*time.Hour)
+	read := func(account, org string, reset, readAt time.Time) domain.AgentLimitReading {
+		return domain.AgentLimitReading{
+			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: "same@example.com", OrgID: org,
+			WindowID: "five_hour", DurationMinutes: 300, UsedPercent: 10, ResetsAt: &reset, ReadAt: readAt,
+		}
+	}
+	reader := NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			read("acct-a", "org-a", aReset, now.Add(-3*time.Hour)),
+			read("device-claude", "org-a", aReset, now.Add(-2*time.Hour)),
+			read("device-claude", "org-b", bReset, now.Add(-time.Hour)),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-a", Provider: domain.AgentAccountProviderClaude}},
+	}, nil)
+	reader.now = func() time.Time { return now }
+
+	history, err := reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	got := map[string]string{}
+	for _, login := range history.Logins {
+		if len(login.Windows) != 1 {
+			t.Fatalf("login %s windows = %+v, want one", login.AccountID, login.Windows)
+		}
+		got[login.AccountID] = login.Windows[0].ResetsAt.Format(time.RFC3339)
+	}
+	want := map[string]string{"acct-a": aReset.Format(time.RFC3339), "device-claude": bReset.Format(time.RFC3339)}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("logins = %v, want org A as acct-a and org B as the device", got)
+	}
+	if a := history.Logins[0]; a.AccountID != "acct-a" || a.Windows[0].Readings != 2 {
+		t.Fatalf("org A login = %+v, want both its readings shown as acct-a", a)
+	}
+
+	// A holder that has not read the login yet still stands for it.
+	reader = NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			read("device-claude", "org-a", aReset, now.Add(-2*time.Hour)),
+			read("device-claude", "org-b", bReset, now.Add(-time.Hour)),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-a", Provider: domain.AgentAccountProviderClaude}},
+	}, fakeConfirmedLogins{
+		"acct-a":        {SignedIn: true, Email: "same@example.com", OrgID: "org-a"},
+		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-b"},
+	})
+	reader.now = func() time.Time { return now }
+	history, err = reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history.Logins) != 2 || history.Logins[0].AccountID != "acct-a" || !history.Logins[0].Windows[0].ResetsAt.Equal(aReset) ||
+		history.Logins[1].AccountID != "device-claude" || !history.Logins[1].Windows[0].ResetsAt.Equal(bReset) {
+		t.Fatalf("logins = %+v, want org A as acct-a and org B as the device", history.Logins)
+	}
+}
+
 func TestLimitHistoryWindows(t *testing.T) {
 	now := time.Date(2026, 10, 28, 20, 0, 0, 0, time.UTC)
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 28, h, m, 0, 0, time.UTC) }
@@ -131,7 +341,7 @@ func TestLimitHistoryWindows(t *testing.T) {
 			plan = "team"
 		}
 		return domain.AgentLimitReading{
-			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: email, Plan: plan, WindowID: window,
+			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: email, OrgID: plan, Plan: plan, WindowID: window,
 			Label: window, DurationMinutes: minutes, UsedPercent: used, ResetsAt: reset, ReadAt: readAt,
 		}
 	}

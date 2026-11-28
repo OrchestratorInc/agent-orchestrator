@@ -332,7 +332,8 @@ func (c *Controller) PromoteQueuedTurn(
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
 	}
-	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
+	providerMessage := c.withSharedSkillInstructions(ctx, msg)
+	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(providerMessage))
 	if err != nil {
 		classified := classify(err)
 		switch {
@@ -359,7 +360,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	activityID := c.newID()
 	activity, err := makeSteerActivity(activityID, msg, turnID, steerProviderInput{
-		Text: msg.Text, Content: msg.Content, SourceTurnIDs: []string{turnID},
+		Text: providerMessage.Text, Content: providerMessage.Content, SourceTurnIDs: []string{turnID},
 	})
 	if err != nil {
 		return PromoteQueuedTurnResult{}, settleUncertain(err)
@@ -494,7 +495,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	} else if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: claim pending messages: %w", ErrSteerDeliveryUncertain, err)
 	}
-	providerMessage := msg
+	providerMessage := c.withSharedSkillInstructions(ctx, msg)
 	if len(batch) > 0 {
 		providerMessage, err = c.queuedBatchInput(ctx, batch, &msg)
 		if err != nil {

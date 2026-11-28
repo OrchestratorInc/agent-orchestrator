@@ -26,6 +26,15 @@ type browserStatusDTO struct {
 	ConnectedAt time.Time `json:"connectedAt,omitempty"`
 	Transport   string    `json:"transport"`
 	Target      string    `json:"target,omitempty"`
+	// Profile is the browser profile this session's browser uses; nil when the
+	// desktop app could not report it.
+	Profile *browserProfileDTO `json:"profile,omitempty"`
+}
+
+type browserProfileDTO struct {
+	ProfileID   *string `json:"profileId"`
+	ProfileName string  `json:"profileName"`
+	Persistent  bool    `json:"persistent"`
 }
 
 type browserCommandRequestDTO struct {
@@ -74,12 +83,15 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
-		Short: "Show whether the desktop browser runtime is connected",
+		Short: "Show whether the desktop browser runtime is connected and which profile it uses",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			status, err := ctx.browserStatus(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if status.Connected {
+				status.Profile = ctx.browserProfile(cmd.Context())
 			}
 			if jsonOutput {
 				return writeJSON(cmd.OutOrStdout(), status)
@@ -93,6 +105,9 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 				target = ", target: your Chrome"
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Browser runtime: %s (%s%s)\n", state, status.Transport, target)
+			if err == nil && status.Profile != nil {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), browserProfileLine(*status.Profile))
+			}
 			return err
 		},
 	})
@@ -260,6 +275,63 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 			return ctx.runBrowserAction(cmd, "fill", map[string]any{"ref": args[0], "text": args[1]}, jsonOutput)
 		},
 	})
+
+	var secretItem, secretField string
+	var secretTOTP bool
+	fillSecret := &cobra.Command{
+		Use:   "fill-secret <ref>",
+		Short: "Type a saved credential into a field without revealing it",
+		Long: "Type a saved credential's username, password, or current TOTP code into\n" +
+			"the field at <ref>. Orchestrator types it into the page itself after checking\n" +
+			"the page origin; you only ever see ••••. The user approves the first use per site.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(secretItem) == "" {
+				return usageError{errors.New("--item is required; run `ao browser login` to list matching credentials")}
+			}
+			field := strings.ToLower(strings.TrimSpace(secretField))
+			if secretTOTP {
+				if cmd.Flags().Changed("field") && field != "totp" {
+					return usageError{errors.New("--totp cannot be combined with --field " + field)}
+				}
+				field = "totp"
+			}
+			if field != "username" && field != "password" && field != "totp" {
+				return usageError{errors.New("--field must be username, password, or totp")}
+			}
+			return ctx.runBrowserAction(cmd, "fill-secret", map[string]any{
+				"ref": args[0], "itemId": strings.TrimSpace(secretItem), "field": field,
+			}, jsonOutput)
+		},
+	}
+	fillSecret.Flags().StringVar(&secretItem, "item", "", "saved credential id")
+	fillSecret.Flags().StringVar(&secretField, "field", "password", "username, password, or totp")
+	fillSecret.Flags().BoolVar(&secretTOTP, "totp", false, "type the current TOTP code (same as --field totp)")
+	cmd.AddCommand(fillSecret)
+
+	var loginItem string
+	login := &cobra.Command{
+		Use:   "login [origin]",
+		Short: "Sign in to the current page with a saved credential",
+		Long: "Find the sign-in fields on the current page and type the saved credential\n" +
+			"for its exact origin: username and password, or the TOTP code on a\n" +
+			"second-factor page. Secrets never reach the agent. Submit the form yourself.\n\n" +
+			"With [origin], refuse unless the page is exactly on it (a redirect to another\n" +
+			"site is refused). The first use per site waits for the user's approval.",
+		Args: rangeArgs(0, 1),
+		RunE: func(cmd *cobra.Command, positional []string) error {
+			args := map[string]any{}
+			if len(positional) == 1 {
+				args["origin"] = strings.TrimSpace(positional[0])
+			}
+			if item := strings.TrimSpace(loginItem); item != "" {
+				args["itemId"] = item
+			}
+			return ctx.runBrowserAction(cmd, "login", args, jsonOutput)
+		},
+	}
+	login.Flags().StringVar(&loginItem, "item", "", "saved credential id when several match")
+	cmd.AddCommand(login)
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "type <ref> <text>",
@@ -690,6 +762,32 @@ func (c *commandContext) browserStatus(ctx context.Context) (browserStatusDTO, e
 	return out, err
 }
 
+// browserProfile asks the browser which profile it uses. Older desktop apps do
+// not answer, so a failure leaves the profile unreported instead of failing status.
+func (c *commandContext) browserProfile(ctx context.Context) *browserProfileDTO {
+	resp, err := c.browserAction(ctx, "profile", nil)
+	if err != nil {
+		return nil
+	}
+	name, _ := resp.Result["profileName"].(string)
+	if name == "" {
+		return nil
+	}
+	persistent, _ := resp.Result["persistent"].(bool)
+	profile := &browserProfileDTO{ProfileName: name, Persistent: persistent}
+	if id, ok := resp.Result["profileId"].(string); ok && id != "" {
+		profile.ProfileID = &id
+	}
+	return profile
+}
+
+func browserProfileLine(profile browserProfileDTO) string {
+	if profile.Persistent {
+		return "Browser profile: " + profile.ProfileName + " (persistent: sign-ins carry over to other sessions)"
+	}
+	return "Browser profile: " + profile.ProfileName + " (not persistent: signed out, cleared when this session ends)"
+}
+
 func (c *commandContext) browserAction(ctx context.Context, action string, args map[string]any) (browserCommandResponseDTO, error) {
 	sessionID, capability, err := currentBrowserIdentity()
 	if err != nil {
@@ -764,6 +862,9 @@ func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, arg
 }
 
 func writeBrowserResult(cmd *cobra.Command, action string, result map[string]any) error {
+	if action == "fill-secret" || action == "login" {
+		return writeBrowserCredentialResult(cmd, action, result)
+	}
 	if action == "act" {
 		return writeBrowserActResult(cmd, result)
 	}
@@ -1148,4 +1249,46 @@ func numberString(v any) string {
 	default:
 		return ""
 	}
+}
+
+// writeBrowserCredentialResult never prints a value: the daemon only ever
+// returns a mask, and this writer prints field names and origins.
+func writeBrowserCredentialResult(cmd *cobra.Command, action string, result map[string]any) error {
+	origin, _ := result["origin"].(string)
+	if candidates, ok := result["candidates"].([]any); ok && len(candidates) > 0 {
+		var output strings.Builder
+		fmt.Fprintf(&output, "Several saved credentials match %s:\n", origin)
+		for _, raw := range candidates {
+			candidate, _ := raw.(map[string]any)
+			id, _ := candidate["id"].(string)
+			label, _ := candidate["label"].(string)
+			username, _ := candidate["username"].(string)
+			fmt.Fprintf(&output, "  %s\t%s\t%s\n", id, label, username)
+		}
+		output.WriteString("Run `ao browser login --item <id>`.")
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), browserUntrustedText(output.String()))
+		return err
+	}
+	if action == "fill-secret" {
+		field, _ := result["field"].(string)
+		ref := ""
+		if args := cmd.Flags().Args(); len(args) > 0 {
+			ref = args[0]
+		}
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "Filled %s into %s (••••).\n", field, ref)
+		return err
+	}
+	var fields []string
+	for _, raw := range anySlice(result["filled"]) {
+		if field, ok := raw.(string); ok {
+			fields = append(fields, field)
+		}
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "Signed in fields %s on %s (••••). Submit the form to continue.\n", strings.Join(fields, ", "), origin)
+	return err
+}
+
+func anySlice(value any) []any {
+	items, _ := value.([]any)
+	return items
 }

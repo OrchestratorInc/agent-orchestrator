@@ -137,9 +137,12 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 		AfterInitialize:     afterInitialize(newAuthBootstrap(agy.GeminiHome, cliSignedIn(resolve.agyCLI))),
 		SessionMode:         sessionMode,
 		SessionModeForAgent: sessionModeForAgent,
-		SessionOptions:      sessionOptions,
-		SplitModelVariant:   splitModelVariant,
-		SessionPreamble:     sessionPreamble,
+		OptionalDirectories: func(cfg acpdriver.LaunchConfig) []string {
+			return agy.SkillDirectories(cfg.DataDir, string(ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID)))
+		},
+		SessionOptions:    sessionOptions,
+		SplitModelVariant: splitModelVariant,
+		SessionPreamble:   sessionPreamble,
 		// Every request Antigravity raises is answered by the user, except under
 		// `agy acp` in AO's auto modes (see permissionPolicy). AO never selects
 		// allow_always, which would let a cached grant survive a later switch to

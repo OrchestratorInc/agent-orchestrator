@@ -118,7 +118,7 @@ describe("PerformanceAccumulator", () => {
 		await accumulator.flush();
 
 		expect(flushed()).toMatchObject({
-			measurement_schema_version: 3,
+			measurement_schema_version: 4,
 			long_frame_count: 1,
 			long_frame_blocking_ms: 70,
 			long_frame_ms: 120,
@@ -168,9 +168,11 @@ describe("PerformanceAccumulator", () => {
 	it("keeps URLs and element details out of entry point and bundle names", async () => {
 		const accumulator = create();
 		accumulator.activity();
+		// No drawing, but a click waited on it.
 		accumulator.recordLongFrame({
 			startTime: 0,
 			duration: 100,
+			firstUIEventTimestamp: 30,
 			scripts: [
 				{ invokerType: "classic-script", invoker: "https://example.com/app.js", sourceURL: "https://example.com/app.js", duration: 50 },
 				{ invokerType: "event-listener", invoker: "IMG[src=https://example.com/a.png].onload", sourceURL: "blob:app://renderer/1234", duration: 20 },
@@ -182,6 +184,41 @@ describe("PerformanceAccumulator", () => {
 
 		expect(flushed()).toMatchObject({ long_frame_classic_script_ms: 50, long_frame_event_listener_ms: 20, long_frame_unlisted_ms: 30, long_frame_top_invoker: "IMG.onload" });
 		expect(flushed()).not.toHaveProperty("long_frame_top_bundle");
+	});
+
+	it("counts only frames that drew while the user was active or that an input waited on", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		// Drew nothing and no input waited: nothing on screen was held up.
+		accumulator.recordLongFrame({ startTime: 0, duration: 400 });
+		// Drew, but more than five minutes after the last input.
+		accumulator.recordLongFrame({ startTime: 500, duration: 300, renderStart: 700, styleAndLayoutStart: 750 }, now + 5 * 60_000 + 1);
+		// Drew while the user was active.
+		accumulator.recordLongFrame({ startTime: 1_000, duration: 60, renderStart: 1_040, styleAndLayoutStart: 1_050 });
+		// Drew nothing, but a key press arrived during it.
+		accumulator.recordLongFrame({ startTime: 2_000, duration: 80, firstUIEventTimestamp: 2_030 });
+		now += 10_000;
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({
+			long_frame_count: 2,
+			long_frame_ms: 140,
+			long_frame_max_ms: 80,
+			long_frame_unnoticed_count: 2,
+			long_frame_unnoticed_ms: 700,
+		});
+	});
+
+	it("leaves out a frame that drew while the window was hidden, unless an input waited on it", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		now += 10_000;
+		accumulator.pause();
+		accumulator.recordLongFrame({ startTime: 0, duration: 90, renderStart: 40, styleAndLayoutStart: 60 });
+		accumulator.recordLongFrame({ startTime: 200, duration: 70, renderStart: 240, styleAndLayoutStart: 250, firstUIEventTimestamp: 210 });
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({ long_frame_count: 1, long_frame_ms: 70, long_frame_unnoticed_count: 1, long_frame_unnoticed_ms: 90 });
 	});
 
 	it("never reports a window shorter than its active time after the clock is set back", async () => {
@@ -202,7 +239,7 @@ describe("PerformanceAccumulator", () => {
 		now += 60_000;
 		first.pause();
 		const saved = JSON.parse(localStorage.getItem("ao.telemetry.performance.v1") ?? "{}");
-		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ ...saved, version: 2 }));
+		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ ...saved, version: 3 }));
 
 		now += 61 * 60_000;
 		const second = create();

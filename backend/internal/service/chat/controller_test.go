@@ -3192,6 +3192,8 @@ type harness struct {
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
+	// skillSharingOff switches the skill sharing setting off; it is on.
+	skillSharingOff atomic.Bool
 	// workspace is the directory the controller was started in.
 	workspace string
 	// reconciled lists the sessions whose output type a save asked to update;
@@ -3320,9 +3322,10 @@ func newHarnessInWorkspace(
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now:     h.now,
-		Renders: h.renders,
-		DataDir: h.rendersDir,
+		Now:                 h.now,
+		Renders:             h.renders,
+		DataDir:             h.rendersDir,
+		SkillSharingEnabled: func(context.Context) bool { return !h.skillSharingOff.Load() },
 		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
 			h.reconciled = append(h.reconciled, id)
 			return h.reconcileErr

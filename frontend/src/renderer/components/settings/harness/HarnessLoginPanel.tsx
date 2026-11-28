@@ -12,7 +12,9 @@ import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
+import type { AgentEndpointStatus } from "../../../hooks/useAgentEndpoint";
 import { CatalogProviderPickerSkeleton } from "./CatalogProviderPicker";
+import { CustomEndpointMethod } from "./CustomEndpointMethod";
 import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyWarning, providerKeyNeedsModel, REMOVE_CONFIRM_MS, savedKeySummary } from "../providerKeyUi";
 import { cn } from "../../../lib/utils";
 
@@ -36,8 +38,19 @@ export type AccountLoginMode = {
 	named: boolean;
 };
 
-export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account }: {
+/** The harness's custom base URL, offered as one more option beside its API keys. */
+export type EndpointLoginOption = {
+	status: AgentEndpointStatus;
+	/** Opens with the base URL row expanded, as Edit on a saved endpoint does. */
+	initiallyOpen?: boolean;
+	/** Runs after the endpoint was saved or removed. */
+	onChanged: () => void | Promise<void>;
+};
+
+export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account, endpoint }: {
 	agentId: AgentId;
+	/** Offers a custom base URL beside the API keys. */
+	endpoint?: EndpointLoginOption;
 	/** Signs an account in instead of the computer's own login. */
 	account?: AccountLoginMode;
 	methods: components["schemas"]["AgentLoginMethod"][];
@@ -59,7 +72,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const panelRef = useRef<HTMLElement>(null);
 	const remote = Boolean(hostId && hostId !== LOCAL_HOST);
 	const availableMethods = remote && agentId === "codex" ? methods.filter((item) => item.id !== "browser") : methods;
-	const [methodId, setMethodId] = useState(availableMethods[0]?.id ?? "browser");
+	const [methodId, setMethodId] = useState(endpoint?.initiallyOpen ? "" : availableMethods[0]?.id ?? "browser");
+	// The base URL row is not one of the harness's methods, so it opens on its
+	// own; opening it or a method closes the other.
+	const [endpointOpen, setEndpointOpen] = useState(Boolean(endpoint?.initiallyOpen));
 	const [secret, setSecret] = useState("");
 	// The label of a new account added with a key or token.
 	const [accountName, setAccountName] = useState("");
@@ -374,8 +390,17 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		return () => window.clearTimeout(timer);
 	}, [operation?.id, operation?.status, operation?.method, operation?.nativePrompt]);
 	const needsTerminal = running && (operation?.nativePrompt === "terminal_required" || stalled);
+	const toggleEndpoint = () => {
+		if (locked) return;
+		setEndpointOpen((wasOpen) => !wasOpen);
+		setMethodId("");
+		setSecret("");
+		setError("");
+		updateOperation(undefined);
+	};
 	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
 		if (locked) return;
+		setEndpointOpen(false);
 		// Clicking an open credential row again collapses it.
 		setMethodId(item.secret && selectedMethodId === item.id ? "" : item.id);
 		setSecret("");
@@ -513,7 +538,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	// sign-in, the API keys come first. A real account sign-in (Claude,
 	// ChatGPT, GitHub, Kimi) keeps its place at the top.
 	const nativeOnlySignIn = signInGroup.items.length > 0 && signInGroup.items.every((item) => item.id === "native");
-	const methodGroups = (nativeOnlySignIn ? [keysGroup, signInGroup] : [signInGroup, keysGroup]).filter((group) => group.items.length > 0);
+	const methodGroups = (nativeOnlySignIn ? [keysGroup, signInGroup] : [signInGroup, keysGroup]).filter((group) => group.items.length > 0 || (group.id === "keys" && endpoint));
+	const offersMethods = availableMethods.length > 0 || Boolean(endpoint);
 	// Beside other methods, native sign-in takes a lighter, compact row.
 	const secondaryMethod = (id: string) => id === "native" && availableMethods.length > 1;
 	const methodKey = (id: string) => id !== "browser" || agentId === "codex" ? id : agentId === "claude-code" ? "claude" : agentId === "cline" ? "cline" : `${agentId}_browser`;
@@ -547,12 +573,12 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 
 	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 space-y-3 px-3 py-3" data-settings-inline-edit="">
 		{/* While the method list shows, the Account heading and group captions already say what this is. */}
-		<div className={availableMethods.length > 0 && !connected && !running && !verifying && !remote ? "sr-only" : "space-y-1"}>
+		<div className={offersMethods && !connected && !running && !verifying && !remote ? "sr-only" : "space-y-1"}>
 			<h4 id={titleId} className="text-sm leading-5 font-medium text-settings-label">{t("settings.harness.loginUi.title", { agent: agentLabel(agentId) })}</h4>
-			{!connected && !locked && (availableMethods.length === 0 || methodGroups.length < 2) && <p className="text-xs leading-4 text-settings-muted">{availableMethods.length ? t("settings.harness.loginUi.method") : t("settings.harness.loginUi.nativeInteractive")}</p>}
+			{!connected && !locked && (!offersMethods || methodGroups.length < 2) && <p className="text-xs leading-4 text-settings-muted">{offersMethods ? t("settings.harness.loginUi.method") : t("settings.harness.loginUi.nativeInteractive")}</p>}
 			{remote && !connected && <p className="max-w-prose text-xs leading-4 text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
-		{availableMethods.length > 0 && !connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-3" onSubmit={(event) => { event.preventDefault(); void start(); }}>
+		{offersMethods && !connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-3" onSubmit={(event) => { event.preventDefault(); void start(); }}>
 			<fieldset disabled={locked} className="space-y-3">
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
 				{methodGroups.map((group) => <div key={group.id} className="space-y-1.5">
@@ -639,6 +665,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 					</div>}
 					</div>;
 				})}
+				{group.id === "keys" && endpoint ? <CustomEndpointMethod agentId={agentId} endpoint={endpoint.status} hostId={hostId} open={endpointOpen} disabled={locked} onToggle={toggleEndpoint} onChanged={endpoint.onChanged} /> : null}
 				</div>
 				{group.note && <p className="text-xs leading-4 text-settings-muted">{group.note}</p>}
 				</div>)}

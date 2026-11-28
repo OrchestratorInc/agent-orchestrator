@@ -43,7 +43,7 @@ import type {
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { noPRDetails } from "../lib/pr-display";
 
-const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.hoisted(
+const { cloudCpMock, getMock, sessionHostMock, navigateMock, patchMock, putMock, postMock } = vi.hoisted(
   () => ({
     cloudCpMock: {
       cancelSessionReviews: vi.fn(),
@@ -61,6 +61,7 @@ const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.
       updateSessionPreferences: vi.fn(),
     },
     getMock: vi.fn(),
+    sessionHostMock: vi.fn(),
     navigateMock: vi.fn(),
     patchMock: vi.fn(),
     putMock: vi.fn(),
@@ -116,7 +117,15 @@ vi.mock("../hooks/useCloudCp", async (importOriginal) => {
 
 vi.mock("../lib/host-clients", async (importOriginal) => ({
   ...await importOriginal<typeof import("../lib/host-clients")>(),
-  clientForSessionHost: () => ({ GET: getMock, POST: postMock, PATCH: patchMock, PUT: putMock }),
+  clientForSessionHost: (hostId?: string) => ({
+    GET: (path: string, ...rest: unknown[]) => {
+      sessionHostMock(hostId, path);
+      return getMock(path, ...rest);
+    },
+    POST: postMock,
+    PATCH: patchMock,
+    PUT: putMock,
+  }),
   clientForHost: () => ({ GET: getMock, POST: postMock, PATCH: patchMock, PUT: putMock }),
 }));
 
@@ -444,11 +453,14 @@ describe("SessionInspector tabs", () => {
       expect(await screen.findByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
     });
 
-    it("never polls this daemon for a session on another host", async () => {
+    it("reads a remote chat's tasks from its own host", async () => {
       respondWithTask();
+      sessionHostMock.mockClear();
       renderWithQuery(<SessionInspector hostId="box-a" session={session([], { mode: "chat" })} />);
-      await screen.findByRole("tab", { name: "Summary" });
-      expect(getMock.mock.calls.some(([path]) => String(path).includes("/background-tasks"))).toBe(false);
+      expect(await screen.findByRole("tab", { name: "Background tasks" })).toBeVisible();
+      const tasksPath = "/api/v1/sessions/{sessionId}/background-tasks";
+      expect(sessionHostMock).toHaveBeenCalledWith("box-a", tasksPath);
+      expect(sessionHostMock).not.toHaveBeenCalledWith(undefined, tasksPath);
     });
   });
 

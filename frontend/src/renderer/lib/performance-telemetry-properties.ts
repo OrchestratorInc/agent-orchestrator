@@ -91,6 +91,8 @@ export const PERFORMANCE_SUMMARY_COUNTS = [
 	"long_frame_ms",
 	"long_frame_max_ms",
 	"long_frame_no_script_count",
+	"long_frame_unnoticed_count",
+	"long_frame_unnoticed_ms",
 	...LONG_FRAME_CAUSES.map(longFrameCauseProperty),
 	"chat_open_count",
 	"chat_open_p75_ms",
@@ -126,7 +128,7 @@ export function sanitizePerformanceProperties(event: string, properties?: Proper
 			candidates.server_reused = typeof properties?.server_reused === "boolean" ? properties.server_reused : undefined;
 		}
 	} else if (event === "ao.usage.ui_performance") {
-		candidates.measurement_schema_version = properties?.measurement_schema_version === 3 ? 3 : undefined;
+		candidates.measurement_schema_version = properties?.measurement_schema_version === 4 ? 4 : undefined;
 		candidates.flush_reason = oneOf(properties?.flush_reason, FLUSH_REASONS);
 		for (const key of PERFORMANCE_SUMMARY_COUNTS) candidates[key] = wholeNumber(properties?.[key]);
 		candidates.long_frame_top_cause = oneOf(properties?.long_frame_top_cause, LONG_FRAME_CAUSES);

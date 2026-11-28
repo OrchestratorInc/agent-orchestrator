@@ -56,6 +56,9 @@ export const aoBridge: AoBridge =
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
 			resolveQuitConfirm: () => undefined,
+			onExitFeedbackRequest: () => () => undefined,
+			onExitFeedbackSecondClose: () => () => undefined,
+			reportExitFeedback: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -241,12 +244,14 @@ export const aoBridge: AoBridge =
 			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
+			setPlan: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,
 			takeResourceSummary: async () => null,
 			launchSteps: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
+			sendExitFeedbackEvent: () => undefined,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
@@ -392,6 +397,15 @@ export const aoBridge: AoBridge =
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
 		},
+		vault: {
+			list: async () => ({ available: false, items: [] }),
+			save: async () => {
+				throw new AoError("VAULT_DESKTOP_REQUIRED", "Saved passwords need the desktop app");
+			},
+			delete: async () => undefined,
+			audit: async () => [],
+			reset: async () => undefined,
+		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
@@ -490,6 +504,7 @@ export const aoBridge: AoBridge =
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 			agentBrowserUrl: async () => "",
 			externalUrl: async (_hostId: string, url: string) => url,
+			loopbackReach: async () => false,
 		},
 		cloud: {
 			getSession: async () => null,

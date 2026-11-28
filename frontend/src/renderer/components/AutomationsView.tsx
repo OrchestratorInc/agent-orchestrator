@@ -610,7 +610,7 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 			</div>
 			</div>
 			{/* Outside the scroller so it spans the panel's full height; a narrow window has nothing beside it to resize against. */}
-			<ResizeHandle side="left" className="hidden @3xl/automations:block" data-testid="automation-details-resize-handle" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} />
+			<ResizeHandle side="left" edge={() => asideRef.current} className="hidden @3xl/automations:block" data-testid="automation-details-resize-handle" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} />
 		</aside>
 	);
 }
