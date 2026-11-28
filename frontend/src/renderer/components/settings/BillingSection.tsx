@@ -429,6 +429,7 @@ function usePrefersReducedMotion(): boolean {
 function PlanGlow() {
 	const resolvedTheme = useResolvedTheme();
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const customThemes = useUiStore((state) => state.customThemes.themes);
 	const [color, setColor] = useState(saturatedBrand);
 	useEffect(() => {
 		// The theme class lands on the document after the store updates, so re-read a frame later.
@@ -437,7 +438,7 @@ function PlanGlow() {
 			setColor((current) => next ?? current);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, themeStyle]);
+	}, [resolvedTheme, themeStyle, customThemes]);
 	const reducedMotion = usePrefersReducedMotion();
 	if (!color) return null;
 	return (

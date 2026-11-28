@@ -100,6 +100,11 @@ export const aoBridge: AoBridge =
 			setWindowTranslucent: async () => undefined,
 			setInterfaceV2: async () => undefined,
 		},
+		themes: {
+			list: async () => ({ directory: "", themes: [], errors: [] }),
+			onChanged: () => () => undefined,
+			openFolder: async () => undefined,
+		},
 		menu: {
 			action: async () => undefined,
 			notifyShellFocus: () => undefined,

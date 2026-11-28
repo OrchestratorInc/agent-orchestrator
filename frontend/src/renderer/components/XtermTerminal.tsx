@@ -556,6 +556,8 @@ export function sessionLinkProvider(
 export function XtermTerminal(props: XtermTerminalProps) {
 	const { t } = useTranslation();
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	// An edited theme file changes the palette without changing themeStyle.
+	const customThemes = useUiStore((state) => state.customThemes.themes);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const macPlatform = isMacPlatform();
 	const translucent = macPlatform && windowTranslucency;
@@ -792,7 +794,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			colorSchemeReporterRef.current?.(props.theme, themeStyle);
 		}
 		return previewing ? onThemeStylePreviewEnd(syncPalette) : undefined;
-	}, [props.theme, themeStyle, translucent]);
+	}, [props.theme, themeStyle, customThemes, translucent]);
 
 	useEffect(() => {
 		if (!termRef.current || !props.supportsCursorColorScheme) return;

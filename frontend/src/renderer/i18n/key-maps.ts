@@ -1,4 +1,5 @@
 import type { AppShortcutId, ShortcutCategory } from "../../shared/shortcuts";
+import type { CustomThemeProblem } from "../../shared/custom-themes";
 import type { MessageKey } from "./messages";
 
 /** Exhaustive mappings keep dynamic domain identifiers inside the typed catalog. */
@@ -42,4 +43,13 @@ export const shortcutCategoryLabelKeys: Record<ShortcutCategory, MessageKey> = {
 	Navigation: "shortcut.category.navigation",
 	Session: "shortcut.category.session",
 	Panels: "shortcut.category.panels",
+};
+
+export const customThemeProblemKeys: Record<CustomThemeProblem["code"], MessageKey> = {
+	read: "settings.customThemes.error.read",
+	fileName: "settings.customThemes.error.fileName",
+	duplicate: "settings.customThemes.error.duplicate",
+	json: "settings.customThemes.error.json",
+	name: "settings.customThemes.error.name",
+	color: "settings.customThemes.error.color",
 };
