@@ -25,7 +25,8 @@ type AgentAccountService interface {
 	StartSignInAgain(context.Context, string, agentaccounts.LoginRequest) (agentaccounts.LoginStart, error)
 	VerifyLogin(context.Context, string) (agentaccounts.LoginStatus, *agentaccounts.AccountView, error)
 	CancelLogin(context.Context, string) error
-	AddAPIKeyAccount(context.Context, domain.AgentAccountProvider, string, string) (agentaccounts.AccountView, error)
+	AddAPIKeyAccount(context.Context, domain.AgentAccountProvider, string, string, string) (agentaccounts.AccountView, error)
+	UpdateIdentity(context.Context, string, *string, *string) (agentaccounts.AccountView, error)
 	ReplaceAPIKey(context.Context, string, string) (agentaccounts.AccountView, error)
 	SetDefault(context.Context, string) error
 	Remove(context.Context, string) error
@@ -47,7 +48,7 @@ type AgentAccountsController struct {
 }
 
 // Register adds the account routes.
-func (c *AgentAccountsController) Register(r chi.Router) {
+func (c *AgentAccountsController) Register(r chi.Router) { //nolint:dupl // route tables share one shape by design; each line is a distinct route
 	r.Get("/agents/accounts", c.list)
 	r.Get("/agents/accounts/usage", c.usage)
 	r.Post("/agents/accounts/login", c.startLogin)
@@ -60,6 +61,7 @@ func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Post("/agents/accounts/{accountId}/login", c.signInAgain)
 	r.Post("/agents/accounts/{accountId}/default", c.setDefault)
 	r.Post("/agents/accounts/{accountId}/reset-credit", c.consumeResetCredit)
+	r.Patch("/agents/accounts/{accountId}", c.updateIdentity)
 	r.Delete("/agents/accounts/{accountId}", c.remove)
 }
 
@@ -90,7 +92,7 @@ func agentAccountResponse(view agentaccounts.AccountView) AgentAccountResponse {
 		kind = domain.AgentAccountKindSubscription
 	}
 	out := AgentAccountResponse{
-		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(), Kind: kind, Name: view.Account.Name, KeyHint: view.Account.KeyHint,
+		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(), Kind: kind, Name: view.Account.Name, KeyHint: view.Account.KeyHint, Color: view.Account.Color,
 		Email: view.Account.Email, Plan: view.Account.Plan, Default: view.Default, SignedIn: view.SignedIn, LoggedIn: view.LoggedIn,
 		Problem: view.IdentityErr, ProblemKind: view.IdentityProblem, Limits: view.Limits, SameLoginAs: view.SameLoginAs, OrgID: view.OrgID, OrgName: view.OrgName,
 	}
@@ -195,6 +197,24 @@ func (c *AgentAccountsController) setDefault(w http.ResponseWriter, r *http.Requ
 	c.writeAccounts(w, r, false)
 }
 
+func (c *AgentAccountsController) updateIdentity(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/agents/accounts/{accountId}")
+		return
+	}
+	var in UpdateAgentAccountRequest
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	view, err := c.Svc.UpdateIdentity(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")), in.Name, in.Color)
+	if err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, agentAccountResponse(view))
+}
+
 func (c *AgentAccountsController) remove(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "DELETE", "/api/v1/agents/accounts/{accountId}")
@@ -217,7 +237,7 @@ func (c *AgentAccountsController) addAPIKey(w http.ResponseWriter, r *http.Reque
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "API_KEY_REQUIRED", "An API key is required", nil)
 		return
 	}
-	if _, err := c.Svc.AddAPIKeyAccount(r.Context(), in.Provider, in.Name, in.APIKey); err != nil {
+	if _, err := c.Svc.AddAPIKeyAccount(r.Context(), in.Provider, in.Name, in.APIKey, in.Color); err != nil {
 		writeAgentAccountError(w, r, err)
 		return
 	}
@@ -339,6 +359,10 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "AGENT_ACCOUNT_LOGIN_NOT_FOUND", "Unknown or finished sign-in", nil)
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
+	case errors.Is(err, ports.ErrAgentAccountColorInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_COLOR_INVALID", "The color is not one of the account palette ids", nil)
+	case errors.Is(err, ports.ErrAgentAccountColorTaken):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_COLOR_TAKEN", "Another account already uses this color", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyRejected):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "The provider did not accept this key or token. Check it and try again.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyUnchecked):

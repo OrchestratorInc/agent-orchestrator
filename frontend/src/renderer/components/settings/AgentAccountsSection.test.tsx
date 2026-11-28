@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
@@ -47,6 +47,7 @@ const findCliLoginRow = () => waitFor(() => {
 });
 
 beforeEach(() => {
+	patchMock.mockReset();
 	useUiStore.setState({ accountLogin: null });
 	getMock.mockReset().mockImplementation((path: string) => Promise.resolve({
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
@@ -653,4 +654,116 @@ it("waits for the sign-in methods before replacing a key", async () => {
 	// Without the panel's methods, a key has no terminal sign-in to fall back to.
 	expect(within(row).getByRole("button", { name: "Replace key" })).toBeDisabled();
 	expect(postMock).not.toHaveBeenCalled();
+});
+
+function renderForEdit(accounts: unknown[]) {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts },
+	}));
+	renderPanel();
+}
+const rowOf = async (id: string) => {
+	await waitFor(() => expect(document.querySelector(`[data-agent-account="${id}"]`)).not.toBeNull());
+	return document.querySelector<HTMLElement>(`[data-agent-account="${id}"]`)!;
+};
+
+it("offers Edit on every account, this computer's login included", async () => {
+	renderForEdit([device, saved]);
+	expect(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+	expect(within(await rowOf("device-claude")).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+});
+
+it("gives two accounts whose emails start alike different letters", async () => {
+	renderForEdit([
+		{ ...device, email: "ronish.rohan@gmail.com", color: "blue" },
+		{ ...saved, email: "ronish@untrivial.ai", color: "violet" },
+	]);
+	// The computer's own login picks last, so the saved account keeps its letters as it signs in and out.
+	expect(within(await rowOf("acct-b")).getByRole("img", { name: "ronish@untrivial.ai" })).toHaveTextContent("RO");
+	expect(within(await rowOf("device-claude")).getByRole("img", { name: "ronish.rohan@gmail.com" })).toHaveTextContent("RR");
+});
+
+it("shows an account's name before its email, with a badge once there are two accounts", async () => {
+	renderForEdit([device, { ...saved, name: "Cristian Account", color: "teal" }]);
+	const row = await rowOf("acct-b");
+	expect(row).toHaveTextContent("Cristian Account · b@example.com");
+	expect(within(row).getByRole("img", { name: "Cristian Account" })).toHaveTextContent("CA");
+});
+
+it("saves a new name and color with PATCH and refreshes the accounts", async () => {
+	const user = userEvent.setup();
+	renderForEdit([device, saved]);
+	patchMock.mockResolvedValue({ data: { ...saved, name: "Work", color: "blue" } });
+	await user.click(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	await user.type(within(dialog).getByLabelText("Name"), "Work");
+	await user.click(within(dialog).getByRole("radio", { name: "Blue" }));
+	expect(within(dialog).getByRole("radio", { name: "Blue" })).toBeChecked();
+	getMock.mockClear();
+	await user.click(within(dialog).getByRole("button", { name: "Save" }));
+	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "acct-b" } }, body: { name: "Work", color: "blue" } }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(getMock).toHaveBeenCalled();
+});
+
+it("disables a color another account uses, names that account, and offers no None", async () => {
+	const user = userEvent.setup();
+	renderForEdit([{ ...device, color: "blue" }, { ...saved, name: "Work", color: "teal" }]);
+	await user.click(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	expect(within(dialog).getByRole("radio", { name: "Teal" })).toBeChecked();
+	expect(within(dialog).getByRole("radio", { name: "Blue, used by A · a@example.com" })).toBeDisabled();
+	expect(within(dialog).queryByRole("radio", { name: "None" })).not.toBeInTheDocument();
+	expect(within(dialog).getAllByRole("radio")).toHaveLength(8);
+});
+
+it("renames this computer's own login", async () => {
+	const user = userEvent.setup();
+	renderForEdit([{ ...device, color: "blue" }, { ...saved, color: "violet" }]);
+	patchMock.mockResolvedValue({ data: { ...device, name: "Personal", color: "blue" } });
+	await user.click(within(await rowOf("device-claude")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	await user.type(within(dialog).getByLabelText("Name"), "Personal");
+	await user.click(within(dialog).getByRole("button", { name: "Save" }));
+	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "device-claude" } }, body: { name: "Personal", color: "blue" } }));
+});
+
+it("does not save on the Enter that confirms an IME composition", async () => {
+	const user = userEvent.setup();
+	renderForEdit([device, saved]);
+	patchMock.mockResolvedValue({ data: { ...saved, name: "仕事" } });
+	await user.click(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	const input = within(dialog).getByLabelText("Name");
+	fireEvent.change(input, { target: { value: "仕事" } });
+	fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+	fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+	expect(patchMock).not.toHaveBeenCalled();
+	fireEvent.keyDown(input, { key: "Enter" });
+	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "acct-b" } }, body: { name: "仕事", color: "" } }));
+});
+
+it("shows the API error inside the edit dialog and keeps it open", async () => {
+	const user = userEvent.setup();
+	renderForEdit([device, saved]);
+	patchMock.mockResolvedValue({ error: { code: "AGENT_ACCOUNT_NOT_FOUND", message: "That account is gone" } });
+	await user.click(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	await user.type(within(dialog).getByLabelText("Name"), "Work");
+	await user.click(within(dialog).getByRole("button", { name: "Save" }));
+	expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+	expect(screen.getByRole("dialog")).toBeInTheDocument();
+});
+
+it("sends the chosen color when adding an API key account", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/api/v1/agents/accounts/api-keys" ? { accounts: [device, saved, keyAccount] } : {} }));
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Anthropic API key" }));
+	await user.type(screen.getByLabelText("Name"), "Work");
+	await user.click(screen.getByRole("radio", { name: "Violet" }));
+	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-secret");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/api-keys", { body: { provider: "claude", name: "Work", apiKey: "sk-ant-api03-secret", color: "violet" } }));
 });

@@ -50,6 +50,8 @@ import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { AccountChip, ProviderMarkWithAccount } from "../AccountBadge";
+import type { AccountColor } from "../../lib/account-identity";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
 export interface PendingAgentSwitch {
@@ -124,7 +126,9 @@ export interface AgentSwitchProps {
 }
 
 export interface AccountChoice {
-	options: Array<{ id: string; label: string; disabled?: boolean }>;
+	/** `name`, `email`, `color` and `letters` feed the account's badge, shown when there are 2 or more
+	 * accounts. `letters` comes from accountLetters, so no two accounts show the same ones. */
+	options: Array<{ id: string; label: string; disabled?: boolean; name?: string; email?: string; color?: AccountColor; letters?: string }>;
 	value?: string;
 	onPick: (id: string) => void;
 	disabled?: boolean;
@@ -460,18 +464,20 @@ export function AgentModelPicker({
 	const pendingCompactKind = autoCompactKind(pending?.harness, pending?.model, terminal);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
-	// The account row is off for now: the settings gear covers which account a session uses. Kept to bring back.
-	// const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// Two or more accounts for this agent: the bottom row gets the account switcher.
+	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// With two or more accounts the chip's logo carries a dot in the color of the account in use.
+	const chipAccount = showAccount && !terminal ? agentSwitch.account?.options.find((option) => option.id === agentSwitch.account?.value) : undefined;
 	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
 	// It is not a model change.
 	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
 		markModelPick();
 		toggle(next);
 	});
-	// const pickAccount = (id: string) => {
-	// 	markModelPick();
-	// 	agentSwitch.account?.onPick(id);
-	// };
+	const pickAccount = (id: string) => {
+		markModelPick();
+		agentSwitch.account?.onPick(id);
+	};
 
 	// The chosen agent's settings, under its models and kept in view while they scroll.
 	const settingsRows = [
@@ -524,8 +530,6 @@ export function AgentModelPicker({
 				<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
 			</OptionMenuSub>
 		) : null,
-		// One account has nothing to switch to, so the row is only for two or more.
-		// showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
 	// The pending agent's auto-compact, else the running one's; a pending switch hides the running agent's extras.
 	const shownCompact: (AutoCompactControl & { title?: string }) | undefined = pending
@@ -549,12 +553,16 @@ export function AgentModelPicker({
 	// Fast mode and auto-compact share one row. Fast mode shows only where the model offers it; auto-compact is always there, shown off and disabled where the agent lacks it.
 	const showToggles = settable && !waiting && (!modelsProblem || source.fast !== undefined || source.thinking !== undefined);
 	const notOffered = t("agentSwitch.notOffered");
+	// The account sits at the start of the bottom row, after fast mode; one account has nothing to switch to.
+	const accountSwitch = showAccount && !terminal && agentSwitch.account
+		? <AccountSwitcher provider={shownHarness} account={{ ...agentSwitch.account, onPick: pickAccount }} />
+		: null;
 	const settingsGroups = [
 		// As much room under the effort row as over it, so its hover shade sits evenly between the lines.
 		settingsRows.length > 0 ? <div className="pb-1">{settingsRows}</div> : null,
-		showToggles ? (
+		showToggles || accountSwitch ? (
 			<>
-				<div className="flex items-center gap-1">
+				<div className="flex min-w-0 items-center gap-1">
 					{source.fast !== undefined ? (
 						<IconToggle
 							icon={Zap}
@@ -564,7 +572,8 @@ export function AgentModelPicker({
 							hint={t("agentSwitch.fastModeHint")}
 						/>
 					) : null}
-					<AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto" />
+					{accountSwitch}
+					{showToggles ? <AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto" /> : null}
 				</div>
 				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
@@ -592,7 +601,8 @@ export function AgentModelPicker({
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 				data-telemetry-id={terminal ? undefined : "composer.model_picker"}
 			>
-				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
+				{chipAccount ? <ProviderMarkWithAccount provider={shownHarness} name={chipAccount.name} email={chipAccount.email} color={chipAccount.color} letters={chipAccount.letters} />
+					: <ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />}
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
 						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
@@ -861,34 +871,49 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 	);
 }
 
-/** An on/off setting the agent has, as a menu row. The row owns the switch, so a click or Enter fires once. */
-// The account row, off for now: the settings gear covers which account a session uses. Kept to bring back.
-// function AccountRows({ account }: { account: AccountChoice }) {
-// 	const { t } = useTranslation();
-// 	const chosen = account.options.find((option) => option.id === account.value);
-// 	return (
-// 		<OptionMenuSub closeOnSelect>
-// 			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
-// 			<OptionMenuSubContent scrollable className={SUB_CLASS}>
-// 				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
-// 					{account.options.map((option) => (
-// 						<OptionMenuItem
-// 							key={option.id}
-// 							active={option.id === account.value}
-// 							radio
-// 							disabled={option.disabled}
-// 							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
-// 							className="text-xs text-foreground"
-// 						>
-// 							<span className="min-w-0 truncate">{option.label}</span>
-// 						</OptionMenuItem>
-// 					))}
-// 				</div>
-// 			</OptionMenuSubContent>
-// 		</OptionMenuSub>
-// 	);
-// }
+/** The account the next message runs on, as its chip in the menu's bottom row; the others open beside it. */
+function AccountSwitcher({ account, provider }: { account: AccountChoice; provider: string }) {
+	const { t } = useTranslation();
+	const chosen = account.options.find((option) => option.id === account.value);
+	// The label already reads "Name · email" when the account has both, so the email is added only where it is missing.
+	const extraEmail = (option: AccountChoice["options"][number]) => (option.email && !option.label.includes(option.email) ? option.email : undefined);
+	const chosenEmail = chosen ? extraEmail(chosen) : undefined;
+	return (
+		<OptionMenuSub closeOnSelect>
+			<OptionMenuSubTrigger
+				disabled={account.disabled}
+				aria-label={chosen ? `${t("settings.agentAccounts.sessionAccount")}: ${chosen.label}` : t("settings.agentAccounts.sessionAccount")}
+				title={chosenEmail ? `${chosen?.label} · ${chosenEmail}` : chosen?.label}
+				className={cn("h-7 w-auto shrink-0 justify-start gap-0.5 py-0 pr-1 pl-0.5", account.disabled && "opacity-50")}
+			>
+				{/* Letters only: the row also holds fast mode and auto-compact. The name is in the tooltip and the side menu. */}
+				{chosen ? <AccountChip compact provider={provider} name={chosen.name} email={chosen.email} color={chosen.color} letters={chosen.letters} label={chosen.label} /> : null}
+				<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+			</OptionMenuSubTrigger>
+			<OptionMenuSubContent scrollable className={SUB_CLASS}>
+				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+					{account.options.map((option) => (
+						<OptionMenuItem
+							key={option.id}
+							active={option.id === account.value}
+							radio
+							disabled={option.disabled}
+							// Typeahead matches the account's name, not the badge letters before it.
+							textValue={option.label}
+							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
+							className="text-xs text-foreground"
+						>
+							<AccountChip provider={provider} name={option.name} email={option.email} color={option.color} letters={option.letters} label={option.label} className="max-w-44" />
+							{extraEmail(option) ? <span className="min-w-0 truncate text-muted-foreground">{extraEmail(option)}</span> : null}
+						</OptionMenuItem>
+					))}
+				</div>
+			</OptionMenuSubContent>
+		</OptionMenuSub>
+	);
+}
 
+/** An on/off setting the agent has, as a menu row. The row owns the switch, so a click or Enter fires once. */
 export function ToggleRow({ label, checked, onChange, title, className }: { label: string; checked?: boolean; onChange?: (next: boolean) => void; title?: string; className?: string }) {
 	if (checked === undefined) return null;
 	return (

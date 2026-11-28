@@ -22,6 +22,7 @@ type AgentAccount struct {
 	Kind      string
 	Name      string
 	KeyHint   string
+	Color     sql.NullString
 }
 
 type AgentAccountDefault struct {
@@ -468,6 +469,12 @@ type DeletedSessionAccountUsage struct {
 	CachedInputTokens  int64
 	OutputTokens       int64
 	EstimatedCostNanos int64
+}
+
+type DeviceAgentAccountIdentity struct {
+	AccountID string
+	Name      string
+	Color     sql.NullString
 }
 
 type KeptArtifact struct {

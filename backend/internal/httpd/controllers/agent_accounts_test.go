@@ -96,8 +96,8 @@ type apiKeyAgentAccounts struct {
 	err             error
 }
 
-func (s *apiKeyAgentAccounts) AddAPIKeyAccount(_ context.Context, p domain.AgentAccountProvider, name, key string) (agentaccounts.AccountView, error) {
-	s.added = append(s.added, string(p)+"|"+name+"|"+key)
+func (s *apiKeyAgentAccounts) AddAPIKeyAccount(_ context.Context, p domain.AgentAccountProvider, name, key, color string) (agentaccounts.AccountView, error) {
+	s.added = append(s.added, string(p)+"|"+name+"|"+key+"|"+color)
 	return agentaccounts.AccountView{}, s.err
 }
 
@@ -123,7 +123,7 @@ func TestAgentAccountsAPIKeyRoutes(t *testing.T) {
 	}
 
 	rec := send(http.MethodPost, "/agents/accounts/api-keys", `{"provider":"claude","name":"Work","apiKey":"`+key+`"}`)
-	if rec.Code != http.StatusOK || len(svc.added) != 1 || svc.added[0] != "claude|Work|"+key {
+	if rec.Code != http.StatusOK || len(svc.added) != 1 || svc.added[0] != "claude|Work|"+key+"|" {
 		t.Fatalf("add: status %d, calls %v, body %s", rec.Code, svc.added, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "secret") {
@@ -152,5 +152,76 @@ func TestAgentAccountsAPIKeyRoutes(t *testing.T) {
 	svc.err = fmt.Errorf("%w: dial tcp: timeout", ports.ErrAgentAccountKeyUnchecked)
 	if rec := send(http.MethodPut, "/agents/accounts/acct-key/api-key", `{"apiKey":"`+key+`"}`); rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_KEY_UNCHECKED") {
 		t.Fatalf("unchecked key: status %d body %s", rec.Code, rec.Body)
+	}
+}
+
+type identityAgentAccounts struct {
+	controllers.AgentAccountService
+	id          string
+	name, color *string
+	err         error
+}
+
+func (s *identityAgentAccounts) UpdateIdentity(_ context.Context, id string, name, color *string) (agentaccounts.AccountView, error) {
+	s.id, s.name, s.color = id, name, color
+	if s.err != nil {
+		return agentaccounts.AccountView{}, s.err
+	}
+	account := domain.AgentAccount{ID: id, Provider: domain.AgentAccountProviderClaude, Home: "/ao/claude/" + id, Email: "a@example.com", Name: "Work"}
+	if color != nil {
+		account.Color = *color
+	}
+	return agentaccounts.AccountView{Account: account, SignedIn: true}, nil
+}
+
+// PATCH answers with the one updated account, color included; a bad color or
+// body is a 400 and an unknown account a 404, all in the standard envelope.
+func TestAgentAccountsUpdateIdentity(t *testing.T) {
+	svc := &identityAgentAccounts{}
+	r := chi.NewRouter()
+	(&controllers.AgentAccountsController{Svc: svc}).Register(r)
+	send := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body)))
+		return rec
+	}
+
+	rec := send("/agents/accounts/acct-a", `{"name":"Work","color":"teal"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["id"] != "acct-a" || out["color"] != "teal" || out["name"] != "Work" {
+		t.Fatalf("response = %v", out)
+	}
+	if svc.id != "acct-a" || svc.name == nil || *svc.name != "Work" || svc.color == nil || *svc.color != "teal" {
+		t.Fatalf("service got %q %v %v", svc.id, svc.name, svc.color)
+	}
+
+	if rec := send("/agents/accounts/acct-a", `{"color":""}`); rec.Code != http.StatusOK || svc.name != nil || svc.color == nil || *svc.color != "" {
+		t.Fatalf("clear color: status %d name %v color %v", rec.Code, svc.name, svc.color)
+	}
+
+	svc.err = ports.ErrAgentAccountColorInvalid
+	rec = send("/agents/accounts/acct-a", `{"color":"mauve"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_COLOR_INVALID") || !strings.Contains(rec.Body.String(), `"validation"`) {
+		t.Fatalf("invalid color: status %d body %s", rec.Code, rec.Body)
+	}
+	svc.err = ports.ErrAgentAccountColorTaken
+	if rec := send("/agents/accounts/acct-a", `{"color":"red"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_COLOR_TAKEN") {
+		t.Fatalf("taken color: status %d body %s", rec.Code, rec.Body)
+	}
+	svc.err = ports.ErrAgentAccountUnknown
+	if rec := send("/agents/accounts/nope", `{"name":"x"}`); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_NOT_FOUND") {
+		t.Fatalf("unknown id: status %d body %s", rec.Code, rec.Body)
+	}
+	svc.err = nil
+	for _, body := range []string{`{`, `{"name":5}`, `{"colour":"red"}`, ``} {
+		if rec := send("/agents/accounts/acct-a", body); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "INVALID_JSON") {
+			t.Fatalf("body %q: status %d body %s", body, rec.Code, rec.Body)
+		}
 	}
 }

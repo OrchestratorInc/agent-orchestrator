@@ -25,7 +25,7 @@ func (s *Store) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, e
 		out = append(out, domain.AgentAccount{
 			ID: row.ID, Provider: domain.AgentAccountProvider(row.Provider), Home: row.Home,
 			Email: row.Email, Plan: row.Plan, Kind: domain.AgentAccountKind(row.Kind), Name: row.Name, KeyHint: row.KeyHint,
-			CreatedAt: row.CreatedAt,
+			Color: row.Color.String, CreatedAt: row.CreatedAt,
 		})
 	}
 	return out, nil
@@ -41,9 +41,53 @@ func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) e
 	defer s.writeMu.Unlock()
 	if err := s.qw.CreateAgentAccount(ctx, gen.CreateAgentAccountParams{
 		ID: a.ID, Provider: string(a.Provider), Home: a.Home, Email: a.Email, Plan: a.Plan,
-		Kind: string(kind), Name: a.Name, KeyHint: a.KeyHint, CreatedAt: a.CreatedAt.UTC(),
+		Kind: string(kind), Name: a.Name, KeyHint: a.KeyHint, Color: nullColor(a.Color), CreatedAt: a.CreatedAt.UTC(),
 	}); err != nil {
 		return fmt.Errorf("create agent account %s: %w", a.ID, err)
+	}
+	return nil
+}
+
+func nullColor(color string) sql.NullString {
+	return sql.NullString{String: color, Valid: color != ""}
+}
+
+// UpdateAgentAccountIdentity sets an account's name and color; an empty color
+// stores NULL.
+func (s *Store) UpdateAgentAccountIdentity(ctx context.Context, id, name, color string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.UpdateAgentAccountIdentity(ctx, gen.UpdateAgentAccountIdentityParams{Name: name, Color: nullColor(color), ID: id})
+	if err != nil {
+		return fmt.Errorf("update agent account %s identity: %w", id, err)
+	}
+	if n == 0 {
+		return ports.ErrAgentAccountUnknown
+	}
+	return nil
+}
+
+// ListDeviceAgentAccountIdentities returns the saved name and color of each
+// "This computer" account, by account id.
+func (s *Store) ListDeviceAgentAccountIdentities(ctx context.Context) (map[string]domain.AgentAccountLabel, error) {
+	rows, err := s.qr.ListDeviceAgentAccountIdentities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list device agent account identities: %w", err)
+	}
+	out := make(map[string]domain.AgentAccountLabel, len(rows))
+	for _, row := range rows {
+		out[row.AccountID] = domain.AgentAccountLabel{Name: row.Name, Color: row.Color.String}
+	}
+	return out, nil
+}
+
+// SetDeviceAgentAccountIdentity saves a "This computer" account's name and
+// color; an empty color stores NULL.
+func (s *Store) SetDeviceAgentAccountIdentity(ctx context.Context, id, name, color string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetDeviceAgentAccountIdentity(ctx, gen.SetDeviceAgentAccountIdentityParams{AccountID: id, Name: name, Color: nullColor(color)}); err != nil {
+		return fmt.Errorf("set device agent account %s identity: %w", id, err)
 	}
 	return nil
 }

@@ -80,6 +80,15 @@ type Service struct {
 	// keyMu serializes changes to an API key account's key with each other and
 	// with removing an account, apart from mu so a key check never holds it.
 	keyMu sync.Mutex
+
+	// identityMu serializes UpdateIdentity's read and write, so two partial
+	// updates never write back a field the other just changed.
+	identityMu sync.Mutex
+
+	// deviceLabels caches the "This computer" accounts' names and colors, read
+	// once: every account lookup needs them, and only saveIdentity changes them.
+	deviceLabelsMu sync.Mutex
+	deviceLabels   map[string]domain.AgentAccountLabel
 }
 
 // reading is the last identity and limits read for one account.
@@ -269,7 +278,7 @@ type seenOrg struct{ id, name string }
 // List returns every account, the computer's own first per provider. refresh
 // reads identity and limits again even when the last reading is fresh.
 func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error) {
-	accounts, err := s.accounts(ctx)
+	accounts, err := s.coloredAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -518,12 +527,18 @@ func (s *Service) accounts(ctx context.Context) ([]domain.AgentAccount, error) {
 	if err != nil {
 		return nil, err
 	}
+	devices, err := s.deviceAccountLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]domain.AgentAccount, 0, len(saved)+len(domain.AgentAccountProviders))
 	for _, p := range domain.AgentAccountProviders {
 		if s.providers[p] == nil {
 			continue
 		}
-		out = append(out, domain.AgentAccount{ID: domain.DeviceAgentAccountID(p), Provider: p})
+		id := domain.DeviceAgentAccountID(p)
+		device := devices[id]
+		out = append(out, domain.AgentAccount{ID: id, Provider: p, Name: device.Name, Color: device.Color})
 		for _, account := range saved {
 			if account.Provider == p {
 				out = append(out, account)
@@ -971,7 +986,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return s.finishSignInAgain(ctx, op, identity, views)
 	}
 	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, Kind: kind, Name: op.name, CreatedAt: s.now()}
-	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
+	if err := s.createColored(ctx, &account, ""); err != nil {
 		s.releaseLogin(op) // still pending: a later check can save it
 		return "", nil, err
 	}

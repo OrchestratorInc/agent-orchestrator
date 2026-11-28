@@ -294,6 +294,7 @@ var shippedMigrations = map[int64]string{
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261125055918805: "20261125055918805_agent_account_color.sql",
 	20261125084210509: "20261125084210509_skill_sharing.sql",
 	20261126154409684: "20261126154409684_session_role_agent.sql",
 	20261126171748993: "20261126171748993_add_session_moved_to.sql",
@@ -301,6 +302,7 @@ var shippedMigrations = map[int64]string{
 	20261126171749354: "20261126171749354_add_session_move_started.sql",
 	20261127085740884: "20261127085740884_session_version_moves.sql",
 	20261127183058106: "20261127183058106_repair_open_usage_harness_checks.sql",
+	20261127190513090: "20261127190513090_device_agent_account_identity.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

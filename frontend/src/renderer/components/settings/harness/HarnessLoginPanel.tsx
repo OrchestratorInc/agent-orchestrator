@@ -10,6 +10,8 @@ import { disposeAgentLogin, retainAgentLoginDisposal, runAgentLoginTask } from "
 import { aoBridge } from "../../../lib/bridge";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
+import type { AgentAccountColor } from "../../../hooks/useAgentAccounts";
+import { AccountColorPicker } from "../AccountColorPicker";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { CatalogProviderPickerSkeleton } from "./CatalogProviderPicker";
@@ -31,9 +33,13 @@ type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" |
 export type AccountLoginMode = {
 	/** Runs method for the account and returns its sign-in. One that finished
 	 * at once (an API key or setup token) has no id: nothing is left to follow. */
-	start: (method: string, secret: string, name: string) => Promise<AgentLoginSnapshot>;
+	start: (method: string, secret: string, name: string, color?: AgentAccountColor) => Promise<AgentLoginSnapshot>;
 	/** A new account takes a name for a key or token; a saved one keeps its own. */
 	named: boolean;
+	/** The method that saves a key account, which can also be given a color. */
+	colorMethod?: string;
+	/** The colors the provider's accounts already use, which a new one cannot take. */
+	takenColors?: ReadonlyMap<AgentAccountColor, string>;
 };
 
 export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account }: {
@@ -63,6 +69,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const [secret, setSecret] = useState("");
 	// The label of a new account added with a key or token.
 	const [accountName, setAccountName] = useState("");
+	const [accountColor, setAccountColor] = useState<AgentAccountColor | undefined>();
 	const [model, setModel] = useState("");
 	const [device, setDevice] = useState(false);
 	const [models, setModels] = useState<string[]>([]);
@@ -265,7 +272,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				// The device choice is sent only where it is shown; otherwise the
 				// key keeps its current setting.
 				const next = account
-					? await account.start(target.id, credential, accountName.trim())
+					? await account.start(target.id, credential, accountName.trim(), account.colorMethod === target.id ? accountColor : undefined)
 					: targetCatalog
 					? await startCatalogKeyLogin(agentId, catalogProvider, credential, hostId)
 					: targetKey?.deviceAvailable
@@ -596,6 +603,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 						{account?.named && <>
 							<label htmlFor={titleId + "-name"} className={fieldLabelClass}>{t("settings.agentAccounts.apiKeyName")}</label>
 							<Input id={titleId + "-name"} className={cn(KEY_FIELD_CLASS, "font-sans placeholder:font-sans")} value={accountName} disabled={locked} autoComplete="off" maxLength={80} placeholder={t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setAccountName(event.target.value)} />
+						</>}
+						{account?.named && account.colorMethod === item.id && <>
+							<span id={titleId + "-color"} className={fieldLabelClass}>{t("settings.agentAccounts.colorLabel")}</span>
+							<AccountColorPicker value={accountColor} onChange={setAccountColor} taken={account.takenColors} disabled={locked} labelledBy={titleId + "-color"} />
 						</>}
 						<>
 							<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>

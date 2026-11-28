@@ -141,6 +141,18 @@
 	--agent-tone-lightness: 0.65;
 	--agent-tone-chroma: 0.15;
 
+	/* Account badge palette: the agent-tone lightness and chroma with a fixed hue, so each
+	   color holds >= 4.5:1 against the fixed dark badge foreground in both themes. */
+	--account-color-red: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 25);
+	--account-color-orange: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 55);
+	--account-color-amber: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 85);
+	--account-color-green: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 145);
+	--account-color-teal: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 185);
+	--account-color-blue: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 250);
+	--account-color-violet: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 295);
+	--account-color-pink: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 350);
+	--account-badge-foreground: oklch(0.12 0.02 270);
+
 	/* Interactive overlays */
 	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
 	--color-interactive-active: color-mix(in oklch, var(--foreground) 7%, transparent);
@@ -781,6 +793,18 @@
 
 	--agent-tone-lightness: 0.6;
 	--agent-tone-chroma: 0.15;
+
+	/* Account badge palette: the agent-tone lightness and chroma with a fixed hue, so each
+	   color holds >= 4.5:1 against the fixed dark badge foreground in both themes. */
+	--account-color-red: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 25);
+	--account-color-orange: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 55);
+	--account-color-amber: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 85);
+	--account-color-green: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 145);
+	--account-color-teal: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 185);
+	--account-color-blue: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 250);
+	--account-color-violet: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 295);
+	--account-color-pink: oklch(var(--agent-tone-lightness) var(--agent-tone-chroma) 350);
+	--account-badge-foreground: oklch(0.12 0.02 270);
 	--color-status-idle: var(--muted-foreground);
 	--color-status-exited: var(--destructive);
 	--color-status-terminated: var(--color-text-passive);

@@ -220,7 +220,7 @@ func (s *Service) saveSetupToken(ctx context.Context, p domain.AgentAccountProvi
 		ID: id, Provider: p, Home: home, Kind: domain.AgentAccountKindSetupToken,
 		Name: cleanAPIKeyName(req.Name), KeyHint: apiKeyHint(req.Secret), CreatedAt: s.now(),
 	}
-	if err := s.store.CreateAgentAccount(ctx, created); err != nil {
+	if err := s.createColored(ctx, &created, ""); err != nil {
 		return LoginStart{}, err
 	}
 	keep = true

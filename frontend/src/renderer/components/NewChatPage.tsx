@@ -38,8 +38,9 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
-import { agentAccountLabel, agentAccountUsable, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountChoiceOption, agentAccountUsable, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
 import type { AccountChoice } from "./chat/AgentSwitchPicker";
+import { accountLetters } from "../lib/account-identity";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
@@ -61,8 +62,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
 	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
+	const providerLetters = accountLetters(providerRows);
 	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
-		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !agentAccountUsable(row) })),
+		options: accountRows.map((row) => agentAccountChoiceOption(row, accountRows, t, providerLetters)),
 		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
 		onPick: task.account.choose,
 		disabled: accountRows.length < 2,

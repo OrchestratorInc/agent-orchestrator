@@ -167,8 +167,8 @@ func (q *Queries) CancelSessionTurnAutoResume(ctx context.Context, arg CancelSes
 }
 
 const createAgentAccount = `-- name: CreateAgentAccount :exec
-INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, color, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateAgentAccountParams struct {
@@ -180,6 +180,7 @@ type CreateAgentAccountParams struct {
 	Kind      string
 	Name      string
 	KeyHint   string
+	Color     sql.NullString
 	CreatedAt time.Time
 }
 
@@ -193,6 +194,7 @@ func (q *Queries) CreateAgentAccount(ctx context.Context, arg CreateAgentAccount
 		arg.Kind,
 		arg.Name,
 		arg.KeyHint,
+		arg.Color,
 		arg.CreatedAt,
 	)
 	return err
@@ -286,7 +288,7 @@ func (q *Queries) GetSessionAgentAccount(ctx context.Context, arg GetSessionAgen
 
 const listAgentAccounts = `-- name: ListAgentAccounts :many
 
-SELECT id, provider, home, email, "plan", created_at, kind, name, key_hint FROM agent_accounts ORDER BY provider, created_at, id
+SELECT id, provider, home, email, "plan", created_at, kind, name, key_hint, color FROM agent_accounts ORDER BY provider, created_at, id
 `
 
 // Subscription and API key accounts AO launches Claude Code and Codex with.
@@ -309,7 +311,37 @@ func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error)
 			&i.Kind,
 			&i.Name,
 			&i.KeyHint,
+			&i.Color,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeviceAgentAccountIdentities = `-- name: ListDeviceAgentAccountIdentities :many
+SELECT account_id, name, color FROM device_agent_account_identities ORDER BY account_id
+`
+
+// The "This computer" accounts have no agent_accounts row; their name and
+// color live here, keyed by account id.
+func (q *Queries) ListDeviceAgentAccountIdentities(ctx context.Context) ([]DeviceAgentAccountIdentity, error) {
+	rows, err := q.db.QueryContext(ctx, listDeviceAgentAccountIdentities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceAgentAccountIdentity{}
+	for rows.Next() {
+		var i DeviceAgentAccountIdentity
+		if err := rows.Scan(&i.AccountID, &i.Name, &i.Color); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -448,6 +480,40 @@ type SetAgentAccountDefaultParams struct {
 func (q *Queries) SetAgentAccountDefault(ctx context.Context, arg SetAgentAccountDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setAgentAccountDefault, arg.Provider, arg.AccountID)
 	return err
+}
+
+const setDeviceAgentAccountIdentity = `-- name: SetDeviceAgentAccountIdentity :exec
+INSERT INTO device_agent_account_identities (account_id, name, color) VALUES (?, ?, ?)
+ON CONFLICT (account_id) DO UPDATE SET name = excluded.name, color = excluded.color
+`
+
+type SetDeviceAgentAccountIdentityParams struct {
+	AccountID string
+	Name      string
+	Color     sql.NullString
+}
+
+func (q *Queries) SetDeviceAgentAccountIdentity(ctx context.Context, arg SetDeviceAgentAccountIdentityParams) error {
+	_, err := q.db.ExecContext(ctx, setDeviceAgentAccountIdentity, arg.AccountID, arg.Name, arg.Color)
+	return err
+}
+
+const updateAgentAccountIdentity = `-- name: UpdateAgentAccountIdentity :execrows
+UPDATE agent_accounts SET name = ?, color = ? WHERE id = ?
+`
+
+type UpdateAgentAccountIdentityParams struct {
+	Name  string
+	Color sql.NullString
+	ID    string
+}
+
+func (q *Queries) UpdateAgentAccountIdentity(ctx context.Context, arg UpdateAgentAccountIdentityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateAgentAccountIdentity, arg.Name, arg.Color, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateAgentAccountKeyHint = `-- name: UpdateAgentAccountKeyHint :execrows

@@ -21,6 +21,8 @@ var (
 	ErrAgentAccountUnshared         = errors.New("the account's folder cannot link to this computer's history")
 	ErrAgentAccountInUse            = errors.New("an agent that uses the account could not be stopped")
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
+	ErrAgentAccountColorInvalid     = errors.New("the account color is not in the palette")
+	ErrAgentAccountColorTaken       = errors.New("another account of the provider already uses that color")
 )
 
 // ErrAgentAccountRenewalPending skips a check of a stored login whose access
@@ -71,6 +73,15 @@ type AgentAccountStore interface {
 	// UpdateAgentAccountKeyHint records the last characters of an API key or
 	// setup token account's new credential; ErrAgentAccountUnknown otherwise.
 	UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error
+	// UpdateAgentAccountIdentity sets the account's name and color (empty color
+	// clears it); ErrAgentAccountUnknown when no account has the id.
+	UpdateAgentAccountIdentity(ctx context.Context, id, name, color string) error
+	// ListDeviceAgentAccountIdentities returns the saved name and color of each
+	// "This computer" account, which has no saved account row, by account id.
+	ListDeviceAgentAccountIdentities(ctx context.Context) (map[string]domain.AgentAccountLabel, error)
+	// SetDeviceAgentAccountIdentity saves a "This computer" account's name and
+	// color (empty color clears it).
+	SetDeviceAgentAccountIdentity(ctx context.Context, id, name, color string) error
 	DeleteAgentAccount(ctx context.Context, id string) error
 	GetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider) (string, bool, error)
 	SetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider, accountID string) error

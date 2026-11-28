@@ -10,6 +10,7 @@ import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransit
 
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
 export type AgentAccountProvider = AgentAccount["provider"];
+export type AgentAccountColor = NonNullable<AgentAccount["color"]>;
 /** How an account signs in: a method, its credential, and a new account's name. */
 export type AgentAccountLoginRequest = Omit<components["schemas"]["StartAgentAccountLoginRequest"], "provider">;
 /** The providers whose CLI can run on an API key account. */
@@ -76,12 +77,28 @@ export function agentAccountUsable(account: Pick<AgentAccount, "signedIn" | "log
  * reports no identity. */
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean; kind?: AgentAccount["kind"]; name?: string }, t: AccountNameT): string {
 	if (account.kind === "api_key") return account.name || t("settings.agentAccounts.apiKeyDefaultName");
-	if (account.email) return account.email;
+	// A name the user gave leads, so two logins of one provider tell apart at a glance.
+	if (account.email) return account.name && account.name !== account.email ? `${account.name} · ${account.email}` : account.email;
 	// A setup token or a metered sign-in can report no email; its label stands in.
 	if (account.name) return account.name;
 	return account.provider === "claude" && account.signedIn
 		? t("settings.agentAccounts.oauthToken")
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
+}
+
+/** An account as the session and new-task pickers list it: its label plus what its badge shows.
+ * `letters` is accountLetters over every account of the provider, not only the listed ones, so a
+ * badge shows the same letters here as in Settings. */
+export function agentAccountChoiceOption(account: AgentAccount, peers: readonly AgentAccount[], t: AccountNameT, letters: ReadonlyMap<string, string>) {
+	return {
+		id: account.id,
+		label: agentAccountLabel(account, peers, t),
+		disabled: !agentAccountUsable(account),
+		name: account.name || undefined,
+		email: account.email || undefined,
+		color: account.color,
+		letters: letters.get(account.id),
+	};
 }
 
 export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
@@ -183,8 +200,14 @@ export function useAgentAccountActions(hostId?: HostId) {
 			if (error) throw apiErrorException(error);
 		},
 		/** Adds an account that runs the CLI on an API key; the daemon checks the key with the provider first. */
-		addApiKey: async (provider: AgentAccountApiKeyProvider, name: string, apiKey: string) =>
-			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/api-keys", { body: { provider, name, apiKey } })).accounts),
+		addApiKey: async (provider: AgentAccountApiKeyProvider, name: string, apiKey: string, color?: AgentAccountColor) =>
+			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/api-keys", { body: { provider, name, apiKey, ...(color ? { color } : {}) } })).accounts),
+		/** Renames a saved account and sets its color; an empty color clears it. */
+		update: async (accountId: string, change: { name?: string; color?: AgentAccountColor | "" }) => {
+			const updated = unwrap(await client(hostId).PATCH("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } }, body: change }));
+			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
+			return updated;
+		},
 		replaceApiKey: async (accountId: string, apiKey: string) =>
 			setAccounts(unwrap(await client(hostId).PUT("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId } }, body: { apiKey } })).accounts),
 		makeDefault: async (accountId: string) =>
