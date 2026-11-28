@@ -10,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 )
 
 // serverPathEnvVar points AO at an exact agy_acp_server executable, like
@@ -77,7 +78,7 @@ func (r resolver) target(ctx context.Context) (launchTarget, error) {
 	if strings.TrimSpace(r.getenv(serverPathEnvVar)) == "" && r.agyCLI != nil && r.cliVersion != nil {
 		if cli, err := r.agyCLI(ctx); err == nil && cli != "" {
 			if raw, err := r.cliVersion(ctx, cli); err == nil {
-				if installed, ok := parseVersion(raw); ok && !installed.less(mustVersion(minimumCLIACPVersion)) {
+				if installed, ok := agentversion.ParsePrefix(raw); ok && !installed.Less(agentversion.MustParse(minimumCLIACPVersion)) {
 					return launchTarget{path: cli, cli: true}, nil
 				}
 			}

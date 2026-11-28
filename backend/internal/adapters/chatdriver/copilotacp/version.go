@@ -2,10 +2,10 @@ package copilotacp
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 )
 
 // Copilot CLI identifies itself as "Copilot" in the ACP handshake. 1.0.93 is
@@ -26,47 +26,15 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	if init.AgentInfo.Name != copilotAgentName {
 		return fmt.Errorf("ACP agent %q is not GitHub Copilot CLI", init.AgentInfo.Name)
 	}
-	installed, ok := parseVersion(init.AgentInfo.Version)
+	installed, ok := agentversion.Parse(init.AgentInfo.Version)
 	if !ok {
 		return fmt.Errorf("unrecognized GitHub Copilot CLI version %q (Orchestrator requires %s or newer)",
 			init.AgentInfo.Version, minimumCopilotVersion)
 	}
-	minimum, _ := parseVersion(minimumCopilotVersion)
-	if installed.less(minimum) {
+	minimum := agentversion.MustParse(minimumCopilotVersion)
+	if installed.Less(minimum) {
 		return fmt.Errorf("GitHub Copilot CLI %s is older than Orchestrator's tested minimum %s",
 			init.AgentInfo.Version, minimumCopilotVersion)
 	}
 	return nil
-}
-
-type version [3]int
-
-// parseVersion reads major.minor.patch, ignoring a pre-release or build suffix.
-func parseVersion(value string) (version, bool) {
-	core := strings.TrimPrefix(strings.TrimSpace(value), "v")
-	if i := strings.IndexAny(core, "-+ "); i >= 0 {
-		core = core[:i]
-	}
-	parts := strings.Split(core, ".")
-	if len(parts) != 3 {
-		return version{}, false
-	}
-	var out version
-	for i, part := range parts {
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 0 {
-			return version{}, false
-		}
-		out[i] = n
-	}
-	return out, true
-}
-
-func (v version) less(other version) bool {
-	for i := range v {
-		if v[i] != other[i] {
-			return v[i] < other[i]
-		}
-	}
-	return false
 }

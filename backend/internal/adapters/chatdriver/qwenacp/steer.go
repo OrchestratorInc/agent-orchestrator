@@ -4,6 +4,8 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 )
 
 // Qwen Code takes mid-turn guidance by asking the client for it. At its step
@@ -33,12 +35,12 @@ func steeringSupported(init acpsdk.InitializeResponse) bool {
 	if init.AgentInfo == nil {
 		return false
 	}
-	installed, ok := parseVersion(init.AgentInfo.Version)
+	installed, ok := agentversion.Find(init.AgentInfo.Version)
 	if !ok {
 		return false
 	}
-	minimum, _ := parseVersion(minimumSteeringVersion)
-	return !installed.less(minimum)
+	minimum := agentversion.MustParse(minimumSteeringVersion)
+	return !installed.Less(minimum)
 }
 
 // drainResponse uses the plain-text messages shape, the only one Qwen 0.18
