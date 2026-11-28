@@ -1170,7 +1170,9 @@ func (c *ConversationsController) stagedImages(ctx context.Context, sessionID st
 			return nil, err
 		}
 		budget -= len(data)
-		out[i] = ConversationImageContentRequest{MIMEType: image.MIMEType, Data: base64.StdEncoding.EncodeToString(data), staged: image.Path}
+		// Recorded in its canonical spelling, the one the lease triggers match.
+		staged := attachmentstore.WorkspaceDir + "/" + name
+		out[i] = ConversationImageContentRequest{MIMEType: image.MIMEType, Data: base64.StdEncoding.EncodeToString(data), staged: staged}
 	}
 	return out, nil
 }

@@ -113,6 +113,22 @@ func TestSendConversationLoadsStagedImagePath(t *testing.T) {
 	wantStagedImageContent(t, stub.sent.Content)
 }
 
+// Any spelling the daemon reads (a leading slash, backslashes) is recorded the
+// one way the lease triggers match.
+func TestStagedImagePathIsRecordedCanonically(t *testing.T) {
+	for _, path := range []string{"/.ao/attachments/" + stagedImageName, `.ao\attachments\` + stagedImageName} {
+		stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
+		server := stagedImagesServer(t, stub)
+		status, body := postStagedImageJSON(t, server, "/api/v1/sessions/p1-1/conversation/messages", map[string]any{
+			"text": "look", "attachments": []map[string]string{stagedImage(path)},
+		})
+		if status != http.StatusAccepted {
+			t.Fatalf("%q: status = %d, body = %s", path, status, body)
+		}
+		wantStagedImageContent(t, stub.sent.Content)
+	}
+}
+
 func TestSteerAndQueuedEditLoadStagedImagePath(t *testing.T) {
 	stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
 	server := stagedImagesServer(t, stub)
