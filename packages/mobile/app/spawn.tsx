@@ -1101,7 +1101,7 @@ function SpawnPage() {
 	// The sheet follows the accounts while it is up, so the reload it starts
 	// (fresh usage, an account signed out) reaches the rows it shows.
 	const accountPicker = useMemo<AccountPickerState>(() => ({
-		options: agentAccountOptions(spawnAccounts.accounts, (account) => <AccountUsageAvatar account={account} size={28} />),
+		options: agentAccountOptions(spawnAccounts.accounts, shownAccountId, (account) => <AccountUsageAvatar account={account} size={28} />),
 		selected: shownAccountId ?? "",
 	}), [shownAccountId, spawnAccounts.accounts]);
 	const subscribeAccountPicker = useValueFeed(accountPicker);

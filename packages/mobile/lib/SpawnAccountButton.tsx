@@ -5,7 +5,7 @@ import { Stack } from "expo-router";
 import { useMemo } from "react";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AccountUsageAvatar } from "./AccountUsageAvatar";
-import { accountUsageAccessibilityLabel, agentAccountLabel, type AgentAccount } from "./agentAccounts";
+import { accountUsageAccessibilityLabel, agentAccountLabel, oneRowPerLogin, type AgentAccount } from "./agentAccounts";
 import { glassCircle } from "./glass";
 import { haptics } from "./haptics";
 import { HEADER_PILL_SIZE, HeaderPillButton, PillHeaderRight } from "./headerPill";
@@ -23,7 +23,7 @@ const GLASS_CIRCLE_SIZE = touchTarget;
  * no signed-in account (cloud, other agents, older machines).
  */
 export function SpawnAccountButton({ account, accounts, onPress }: { account?: AgentAccount; accounts: readonly AgentAccount[]; onPress(): void }) {
-	const label = accountUsageAccessibilityLabel(account ? agentAccountLabel(account, accounts) : undefined, account);
+	const label = accountUsageAccessibilityLabel(account ? agentAccountLabel(account, oneRowPerLogin(accounts, account.id)) : undefined, account);
 	// Offered whenever a signed-in account can be picked, even while the one
 	// picked (a restored draft's, since removed) or a default is missing: the
 	// sheet is the only way to replace it. Not for a signed-out default alone,
