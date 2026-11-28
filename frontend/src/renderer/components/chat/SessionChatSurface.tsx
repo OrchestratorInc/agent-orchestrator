@@ -1,4 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { SessionChatApprovalCard } from "../approvals/ApprovalHost";
 import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
@@ -804,7 +805,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
 					if (startupHold && sideEnabled && /^\/btw(?:\s+|$)/i.test(text)) {
-						throw Object.assign(new Error("Side chats aren't ready yet. Try /btw again in a moment."), { code: "CHAT_SIDE_NOT_READY" });
+						throw new AoError("CHAT_SIDE_NOT_READY", "Side chats aren't ready yet. Try /btw again in a moment.");
 					}
 					const btw = sideCreationEnabled ? /^\/btw(?:\s+|$)/i.exec(text) : null;
      if (btw && fileReferences?.length) {
@@ -1005,11 +1006,11 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 		const hostError = hostId ? queryClient.getQueryState(workspacesKey)?.error : undefined;
 		const hostCode = apiErrorCode(hostError);
 		if (hostCode === "BAD_PASSWORD" || hostCode === "HOST_API_INCOMPATIBLE") {
-			return Object.assign(new Error(apiErrorMessage(hostError, "The host no longer accepts this computer, so the message was not sent.")), { code: "CHAT_CONTROLLER_NOT_READY" });
+			return new AoError("CHAT_CONTROLLER_NOT_READY", apiErrorMessage(hostError, "The host no longer accepts this computer, so the message was not sent."));
 		}
 		const session = cached();
 		return session && session.createdAt !== held.createdAt
-			? Object.assign(new Error("This chat was replaced, so the message was not sent."), { code: "SESSION_NOT_FOUND" })
+			? new AoError("SESSION_NOT_FOUND", "This chat was replaced, so the message was not sent.")
 			: undefined;
 	};
 	const recovered = () => {
