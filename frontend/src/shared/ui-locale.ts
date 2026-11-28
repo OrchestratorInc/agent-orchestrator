@@ -20,17 +20,34 @@ export interface TerminalShellPreference {
 
 export interface UiSettings {
 	locale: AppLocale;
+	/** Whether AO notifies at all: the bell, its badge, OS alerts and sounds. */
+	notificationsEnabled: boolean;
 	/** Whether attention-worthy notifications (needs input, ready to merge) also play a sound. */
 	soundNotificationsEnabled: boolean;
+	/** Which notifications are ignored, when notifications are on. */
+	notificationFilters: NotificationFilters;
 	/** Shell used for newly opened standalone terminal panes. */
 	terminalShell: TerminalShellPreference;
+}
+
+/**
+ * What the person turned off in Manage notifications. Stored as what is muted,
+ * so a kind or machine added later notifies until they turn it off.
+ */
+export interface NotificationFilters {
+	/** Notification kind ids (see renderer/lib/notification-preferences.ts). */
+	mutedKinds: string[];
+	/** Where notifications come from: "local", "cloud", or "remote:<hostId>". */
+	mutedSources: string[];
 }
 
 export const DEFAULT_TERMINAL_SHELL: TerminalShellPreference = { kind: "auto" };
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
 	locale: DEFAULT_LOCALE,
+	notificationsEnabled: true,
 	soundNotificationsEnabled: true,
+	notificationFilters: { mutedKinds: [], mutedSources: [] },
 	terminalShell: DEFAULT_TERMINAL_SHELL,
 };
 
@@ -54,6 +71,17 @@ export function coerceTerminalShell(raw: unknown): TerminalShellPreference {
 	return customPath ? { kind, path: customPath } : { kind };
 }
 
+function coerceStringList(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	return [...new Set(raw.filter((item): item is string => typeof item === "string" && item.length > 0))];
+}
+
+export function coerceNotificationFilters(raw: unknown): NotificationFilters {
+	if (typeof raw !== "object" || raw === null) return { mutedKinds: [], mutedSources: [] };
+	const record = raw as Record<string, unknown>;
+	return { mutedKinds: coerceStringList(record.mutedKinds), mutedSources: coerceStringList(record.mutedSources) };
+}
+
 /** Normalize unknown persisted or IPC data to the supported UI-settings schema. */
 export function coerceUiSettings(raw: unknown): UiSettings {
 	if (typeof raw !== "object" || raw === null) return { ...DEFAULT_UI_SETTINGS };
@@ -64,7 +92,12 @@ export function coerceUiSettings(raw: unknown): UiSettings {
 			: DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
 	return {
 		locale: coerceLocale(record.locale),
+		notificationsEnabled:
+			typeof record.notificationsEnabled === "boolean"
+				? record.notificationsEnabled
+				: DEFAULT_UI_SETTINGS.notificationsEnabled,
 		soundNotificationsEnabled,
+		notificationFilters: coerceNotificationFilters(record.notificationFilters),
 		terminalShell: coerceTerminalShell(record.terminalShell),
 	};
 }

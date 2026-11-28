@@ -5,7 +5,6 @@ import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
-import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
@@ -18,6 +17,7 @@ import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
 import { DataRetentionSection } from "./DataRetentionSection";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
+import { ManageNotificationsPage, NotificationsSettingsSection } from "./NotificationSettings";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -371,10 +371,8 @@ export function GeneralSettingsSection({
 	const setLocale = useLocaleStore((state) => state.setLocale);
 	const localeSaving = useLocaleStore((state) => state.saving);
 	const localeSaveError = useLocaleStore((state) => state.saveError);
-	const soundNotificationsEnabled = useSoundNotificationsStore((state) => state.enabled);
-	const setSoundNotificationsEnabled = useSoundNotificationsStore((state) => state.setEnabled);
-	const soundNotificationsSaving = useSoundNotificationsStore((state) => state.saving);
-	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
+	// Manage notifications opens in place of the page; back returns to its row.
+	const [notificationsPage, setNotificationsPage] = useState<"closed" | "open" | "returned">("closed");
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
 	const navigationGestures = useUiStore((state) => state.navigationGestures);
@@ -425,6 +423,10 @@ export function GeneralSettingsSection({
 		{ value: "ru", label: t("settings.language.ru") },
 		{ value: "tr", label: t("settings.language.tr") },
 	] satisfies SettingsOption<AppLocale>[];
+
+	if (notificationsPage === "open") {
+		return <ManageNotificationsPage onBack={() => setNotificationsPage("returned")} />;
+	}
 
 	return (
 		<>
@@ -517,20 +519,12 @@ export function GeneralSettingsSection({
 						onChange={setTerminalClickMode}
 					/>
 				</SettingsRow>
-				<SettingsRow
-					label={t("settings.soundNotifications")}
-					description={soundNotificationsSaveError ? <span role="alert" className="text-error">{t("settings.soundNotifications.saveFailed")}</span> : undefined}
-				>
-					<Switch
-						aria-label={t("settings.soundNotifications")}
-						checked={soundNotificationsEnabled}
-						disabled={soundNotificationsSaving}
-						onCheckedChange={(next) => {
-							void setSoundNotificationsEnabled(next);
-						}}
-					/>
-				</SettingsRow>
 			</SettingsSection>
+
+			<NotificationsSettingsSection
+				onManage={() => setNotificationsPage("open")}
+				focusManage={notificationsPage === "returned"}
+			/>
 
 			<DefaultCloudSandboxSection />
 
