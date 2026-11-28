@@ -1609,6 +1609,11 @@ func (s *Store) AppendImportedUserMessage(
 			ConversationID: conversationID,
 			ProviderTurnID: providerTurnID,
 		})
+	if errors.Is(err, sql.ErrNoRows) {
+		// Nothing was written yet, so a caller may skip this message inside a
+		// shared projection transaction.
+		return fmt.Errorf("lookup imported provider turn %s: %w", providerTurnID, domain.ErrNoConversationTurn)
+	}
 	if err != nil {
 		return fmt.Errorf("lookup imported provider turn %s: %w", providerTurnID, err)
 	}
@@ -2131,9 +2136,9 @@ func (s *Store) SetConversationSettings(
 	settings domain.ConversationSettings,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.qw.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
 		Model:           nullableString(settings.Model),
 		ReasoningEffort: nullableString(settings.ReasoningEffort),
 		ApprovalMode:    nullableString(string(settings.ApprovalMode)),

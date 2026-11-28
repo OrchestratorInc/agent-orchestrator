@@ -14,7 +14,7 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
@@ -27,12 +27,12 @@ import {
 	isFailedCall,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { aoActionName, summarizeAOActions } from "./activity-action";
+import { aoActionName, isFailedSpawn, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
 import { activityCommandStep, activityToolStep, isExploratoryTool, type CommandStep } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
-	activities,
+	activities: recorded,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -42,6 +42,8 @@ export function ActivityRun({
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
+	// A failed spawn is one step: its call, with the daemon's record folded in.
+	const activities = useMemo(() => mergeFailedSpawns(recorded), [recorded]);
 	const [localOpen, setLocalOpen] = useState(false);
 	const open = disclosureKey && disclosureOverrides
 		? disclosureOverrides[disclosureKey] ?? false
@@ -112,7 +114,7 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{failed > 0 ? (
-					<span className="text-xs text-destructive">
+					<span className="text-xs text-muted-foreground">
 						{failed} failed
 					</span>
 				) : null}
@@ -177,10 +179,14 @@ export function ActivityRun({
 	);
 }
 
-/** The calls that failed, kept on screen while the disclosure holding them is folded. */
+/**
+ * The calls that failed, kept on screen while the disclosure holding them is folded.
+ * A failed spawn that says why stays inside: its run sits in Worked for, the run's
+ * count says one failed, and the reply above says so.
+ */
 function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
 	const reducedMotion = useReducedMotion();
-	const failed = activities.filter(isFailedCall);
+	const failed = activities.filter((activity) => isFailedCall(activity) && !isFailedSpawn(activity));
 	return (
 		<AnimatePresence initial={false}>
 			{folded && failed.length > 0 ? (

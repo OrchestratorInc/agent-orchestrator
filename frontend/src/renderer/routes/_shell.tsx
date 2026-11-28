@@ -28,16 +28,20 @@ import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding"
 import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
+import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
+import { ExitFeedbackPrompt } from "../components/ExitFeedbackPrompt";
 import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
 import { SessionImportDialog } from "../components/SessionImportDialog";
+import { MoveSessionDialog } from "../components/MoveSessionDialog";
+import { useFinishUnfinishedMoves } from "../lib/move-finish";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
@@ -185,6 +189,8 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so an open prompt survives the startup readiness swap. */}
+			<ExitFeedbackPrompt />
 			{/* Outside ShellLayout, so links it holds survive every route and the
 			    startup loader that replaces the shell while the daemon restarts. */}
 			<SharedArtifactLinkHost />
@@ -1712,8 +1718,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
+				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
+				<MoveSessionDialog />
+				<UnfinishedMoves />
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
@@ -1887,4 +1896,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			</AppBrowserLinkContext.Provider>
 		</ShellProvider>
 	);
+}
+
+/** Retries the last step of moves that failed after their session started elsewhere. */
+function UnfinishedMoves() {
+	useFinishUnfinishedMoves();
+	return null;
 }

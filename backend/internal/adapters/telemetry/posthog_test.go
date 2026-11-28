@@ -604,7 +604,7 @@ func TestDaemonStartupPayloadAllowlistCoversEveryStep(t *testing.T) {
 			"prepare_ms", "lock_wait_ms", "store_open_ms", "lifecycle_setup_ms", "chat_setup_ms", "session_setup_ms",
 			"install_recovery_ms", "services_setup_ms", "codex_recovery_ms", "startup_reconcile_ms", "listen_ms", "startup_ms",
 		},
-		"ao.daemon.startup_reconciled": {"chat_hosts_ms", "reviewer_recovery_ms", "sessions_ms", "runtime_ms", "reconcile_ms"},
+		"ao.daemon.startup_reconciled": {"chat_hosts_ms", "sessions_ms", "reviewer_recovery_ms", "runtime_ms", "reconcile_ms"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]

@@ -223,6 +223,12 @@ func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
 	if second.Model != "current-model" || second.Effort != "high" || driver.configs[1].Model != second.Model || driver.configs[1].Effort != second.Effort {
 		t.Fatalf("side/provider settings = %+v / %+v", second, driver.configs[1])
 	}
+	// Each side runs in a host of its own but gets its session's shared skills.
+	for i, cfg := range driver.configs {
+		if cfg.SessionID == testSession || cfg.SkillSessionID != testSession {
+			t.Fatalf("side %d host %q takes skills from %q, want a host of its own with %q's skills", i, cfg.SessionID, cfg.SkillSessionID, testSession)
+		}
+	}
 	for _, source := range driver.sources {
 		if source != main.ProviderConversationID() {
 			t.Fatalf("fork source = %q", source)

@@ -13,6 +13,7 @@ import type {
 	MessageFile,
 	PlanStep,
 } from "../chat/types";
+import { sameSentence, usageLimitSentence } from "../chat/providerError";
 import { cloudLifecycleStage } from "./lifecycle";
 import type { CloudClientEvent, CloudSession } from "./types";
 
@@ -272,6 +273,7 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			turn.startedAt = event.createdAt;
 			turn.completedAt = undefined;
 			turn.errorMessage = undefined;
+			turn.usageLimit = undefined;
 			continue;
 		}
 		if (turn && event.type === "chat.turn_capabilities") {
@@ -282,6 +284,14 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			turn.state = event.type === "chat.turn_completed" ? "completed" : event.type === "chat.turn_interrupted" ? "interrupted" : "failed";
 			turn.completedAt = event.createdAt;
 			turn.errorMessage = str(payload.error);
+			// The cloud sends a quota refusal as its raw failure and never marks
+			// it, so the turn is marked here: it then reads as a usage limit, with
+			// the provider's sentence instead of the transport dump.
+			const limit = turn.state === "failed" && turn.errorMessage ? usageLimitSentence(turn.errorMessage) : undefined;
+			if (limit) {
+				turn.errorMessage = limit;
+				turn.usageLimit = { autoResume: false };
+			}
 			continue;
 		}
 		if (event.type === "chat.approval_requested") {
@@ -522,6 +532,14 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 		}
 	}
 	const active = ordered.find((turn) => turn.state === "running");
+	// A cloud Claude worker also sends its quota refusal as the turn's reply. A
+	// local turn has no reply there, only the usage-limit notice carrying the
+	// sentence, so the echo is dropped and the two read the same.
+	const echoesLimit = (item: ConversationItem) => {
+		if (item.kind !== "message" || item.role !== "assistant" || !item.turnId) return false;
+		const turn = turns.get(item.turnId);
+		return Boolean(turn?.usageLimit && turn.errorMessage && sameSentence(item.text, turn.errorMessage));
+	};
 	return {
 		conversationId: `cloud:${session.id}`,
 		sessionId: session.id,
@@ -535,7 +553,7 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 							: "ready",
 		},
 		turns: ordered,
-		items,
+		items: items.filter((item) => !echoesLimit(item)),
 		latestSequence: events.at(-1)?.sequence ?? 0,
 		oldestSequence: events[0]?.sequence ?? 1,
 		hasMoreBefore: partial,

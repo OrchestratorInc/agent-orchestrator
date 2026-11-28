@@ -270,12 +270,11 @@ describe("host update flow", () => {
 		expect(start).toHaveBeenCalledTimes(2);
 	});
 
-	it("leaves desktop-app hosts to a person, since updating relaunches the app there", () => {
-		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+	it("auto-updates desktop-app hosts to whatever their own channel installs", () => {
+		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue({ ...view("0.14.10", "updating"), method: "app" });
 		useHostUpdateStore.setState({ localVersion: "0.15.0", hostIds: { [URL]: "host-a" }, byUrl: { [URL]: { view: { ...view("0.14.10"), method: "app" } } } });
 		autoUpdateHosts();
-		expect(start).not.toHaveBeenCalled();
-		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "update", version: "0.14.10" });
+		expect(start).toHaveBeenCalledExactlyOnceWith(URL);
 	});
 
 	it("drops a version read that lands after the host was disconnected and never auto-starts it", async () => {

@@ -3,6 +3,7 @@ export * from "./GithubAvatar";
 export * from "./UserAvatar";
 export * from "./agent-capabilities";
 export * from "./agents";
+export * from "./comment-text";
 export * from "./external-link";
 export * from "./ExecutionContextView";
 export * from "./formatting";

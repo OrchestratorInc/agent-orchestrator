@@ -61,6 +61,26 @@ describe("connectHost", () => {
 		...over,
 	});
 
+	it("hands back the connection without waiting long for the endpoint refresh, which still lands", async () => {
+		vi.useFakeTimers();
+		try {
+			let answer!: (endpoints: Endpoint[]) => void;
+			const d = deps({ refreshEndpoints: vi.fn(() => new Promise<Endpoint[]>((resolve) => { answer = resolve; })) });
+			let settled = false;
+			const connecting = connectHost("h_paired", { ...d, refreshWaitMs: 1_000 }).then((result) => { settled = true; return result; });
+			await vi.advanceTimersByTimeAsync(999);
+			expect(settled).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect((await connecting).ok).toBe(true);
+			expect(d.saveEndpoints).not.toHaveBeenCalled();
+			answer([lan]);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(d.saveEndpoints).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("returns a usable config for the endpoint that won", async () => {
 		const d = deps();
 		const got = await connectHost("h_paired", d);
@@ -246,6 +266,57 @@ describe("connectHost with device tokens", () => {
 			expect(d.saveToken).not.toHaveBeenCalled();
 			expect(got.ok && got.config.password).toBe(token);
 		}
+	});
+
+	it("reports a fallback to the kept password that lands after the connection was handed back", async () => {
+		vi.useFakeTimers();
+		try {
+			const d = deps(host({ token, fallbackToken: "pw" }), {
+				refreshEndpoints: vi.fn(async (config: { password: string }) => {
+					await new Promise((resolve) => setTimeout(resolve, 1_500));
+					if (config.password === token) throw refused("BAD_PASSWORD");
+					return [lan, tunnel];
+				}),
+				pair: vi.fn(async () => ({ kind: "unsupported" as const })),
+			});
+			const connecting = connectHost("h_paired", { ...d, refreshWaitMs: 1_000 });
+			await vi.advanceTimersByTimeAsync(1_000);
+			const got = await connecting;
+			expect(got.ok && got.config.password).toBe(token);
+			const repair = got.ok ? got.credentialRepair : undefined;
+			expect(repair).toBeDefined();
+			await vi.advanceTimersByTimeAsync(3_000);
+			await expect(repair).resolves.toBe(true);
+			expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", "pw");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reports no repair when a late refresh simply succeeds", async () => {
+		vi.useFakeTimers();
+		try {
+			const d = deps(host({ token, fallbackToken: "pw" }), {
+				refreshEndpoints: vi.fn(() => new Promise<Endpoint[]>((resolve) => setTimeout(() => resolve([lan]), 1_500))),
+			});
+			const connecting = connectHost("h_paired", { ...d, refreshWaitMs: 1_000 });
+			await vi.advanceTimersByTimeAsync(1_000);
+			const got = await connecting;
+			await vi.advanceTimersByTimeAsync(1_000);
+			await expect(got.ok ? got.credentialRepair : undefined).resolves.toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("saves the refresh only against the endpoint revision it merged into", async () => {
+		let revision = 0;
+		const d = deps(host({ token, fallbackToken: "pw" }), {
+			endpointRevision: () => revision,
+			refreshEndpoints: vi.fn(async () => { revision += 1; return [lan]; }),
+		});
+		await connectHost("h_paired", d);
+		expect(d.saveEndpoints).toHaveBeenCalledExactlyOnceWith("h_paired", [lan, tunnel], 0);
 	});
 
 	it("makes no extra request for a working token with a kept password", async () => {

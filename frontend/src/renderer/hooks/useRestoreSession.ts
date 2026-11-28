@@ -90,6 +90,12 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 						useContentExpiredSessionsStore.getState().mark(sessionId);
 						return { status: "error", message: t("restoreUnavailable.contentExpired") };
 					}
+					// It moved to another computer and continues there: the listing's
+					// next read marks it moved away, which stops offering Restore.
+					if (err instanceof CloudCpError && err.code === "SESSION_MOVED_AWAY") {
+						await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+						return { status: "error", message: t("restoreUnavailable.movedAway"), code: err.code };
+					}
 					return {
 						status: "error",
 						message: err instanceof Error ? err.message : "Unable to restore session",

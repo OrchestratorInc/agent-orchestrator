@@ -22,6 +22,13 @@ import { CloudShareError, resolveShareFile, type ResolvedShareFile } from "./clo
 /** The most files a link serves beside its own (the control plane's limit). */
 export const MAX_PAGE_FILES = 200;
 
+/**
+ * The most files a page's lookups ask about, found or not: each may be a
+ * request to a remote host, so a page naming thousands of missing images
+ * stops here rather than asking about every one.
+ */
+export const MAX_PAGE_LOOKUPS = 1000;
+
 /** Why a file the page uses is not included. */
 export type PageFileSkipReason =
 	/** A video the control plane refused: it does not serve videos yet. */
@@ -36,7 +43,7 @@ export type PageFileSkipReason =
 	| "missing"
 	/** A path the share host keeps for itself, or that it cannot serve. */
 	| "unservable"
-	/** Past MAX_PAGE_FILES. */
+	/** Past MAX_PAGE_FILES, or MAX_PAGE_LOOKUPS. */
 	| "limit"
 	/**
 	 * An SVG <use> of another file's symbol: a shared page is sandboxed, so
@@ -285,7 +292,7 @@ export async function findPageFiles<T extends { relativePath: string }>(
 	// Lookups stop once a link's worth of files resolved: each may be a request to a remote host.
 	let includable = 0;
 	const worker = async () => {
-		while (!failed && includable < MAX_PAGE_FILES && next < lookups.length) {
+		while (!failed && includable < MAX_PAGE_FILES && next < Math.min(lookups.length, MAX_PAGE_LOOKUPS)) {
 			const { relative } = lookups[next++];
 			try {
 				const file = await resolve(relative);
@@ -311,7 +318,7 @@ export async function findPageFiles<T extends { relativePath: string }>(
 		}
 		const { reference, served, relative } = entry;
 		const file = resolved.get(relative);
-		// Not looked up: a link's worth of files had already resolved.
+		// Not looked up: a link's worth of files had already resolved, or the lookups ran out.
 		if (file === undefined) {
 			skipped.push({ reference, reason: "limit" });
 			continue;

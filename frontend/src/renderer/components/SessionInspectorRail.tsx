@@ -79,6 +79,25 @@ export function SessionInspectorRail({
 	const prefersReducedMotion = useReducedMotion();
 	const gapRef = useRef<HTMLDivElement>(null);
 	const panelRef = useRef<HTMLDivElement>(null);
+	// The element that paints the line between the session and the inspector,
+	// which the resize line traces: under the floating top bar the session
+	// column draws it on its own last pixel (styles.css, "the session column
+	// draws the line"), so the rail's border stays transparent; otherwise it is
+	// the rail's own left border.
+	const inspectorEdge = useCallback(() => {
+		const panel = panelRef.current;
+		if (!panel?.closest(".center-panel-shell--floating-topbar")) return panel;
+		return panel.parentElement?.querySelector(":scope > [data-panel]:first-child") ?? panel;
+	}, []);
+	// The line runs along the session's visible pane, which starts under the
+	// session's top bar when that bar sits in the same column.
+	const inspectorSpan = useCallback(() => {
+		const column = inspectorEdge();
+		if (!column) return null;
+		const box = column.getBoundingClientRect();
+		const topbar = column.querySelector('[data-testid="session-topbar-host"]');
+		return { top: topbar ? topbar.getBoundingClientRect().bottom : box.top, bottom: box.bottom };
+	}, [inspectorEdge]);
 	useAncestorFlag(gapRef, ".session-split", "data-inspector-expanded", isOpen);
 	const minWidth = useCallback(() => {
 		const split = splitRef.current;
@@ -145,11 +164,14 @@ export function SessionInspectorRail({
 	}, [animate, isOpen, onCloseAnimationComplete, settledClosed]);
 	const width = `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)`;
 
+	// The rail clips to its box except 2px past its left edge: the resize line is
+	// centered on the divider, which can be the session column's last pixel just
+	// outside the rail, and overflow-hidden would cut the line in half.
 	return <>
 		<div aria-hidden="true" className="relative max-w-(--session-inspector-max-width) shrink-0" data-motion={motionMode} data-slot="inspector-gap" ref={gapRef} style={{ width: isOpen ? width : 0 }} />
 		<div
 			aria-hidden={hidden}
-			className="absolute inset-y-0 right-0 z-chrome flex h-full max-w-(--session-inspector-max-width) flex-col overflow-hidden border-l border-border-strong bg-background"
+			className="absolute inset-y-0 right-0 z-chrome flex h-full max-w-(--session-inspector-max-width) flex-col overflow-visible [clip-path:inset(0_0_0_-2px)] border-l border-border-strong bg-background"
 			data-motion={motionMode}
 			data-panel=""
 			data-settled={settledClosed ? "true" : "false"}
@@ -167,7 +189,7 @@ export function SessionInspectorRail({
 			{/* After the content: the handle reaches into the inspector's header,
 			    which is a macOS window-drag region, and Electron applies drag and
 			    no-drag in document order, so only a later no-drag punches through. */}
-			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
+			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" edge={inspectorEdge} span={inspectorSpan} onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 		</div>
 	</>;
 }

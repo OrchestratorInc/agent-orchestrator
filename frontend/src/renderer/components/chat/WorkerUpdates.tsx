@@ -5,21 +5,22 @@
  * time — that opens to the full text, instead of a full-width card. When the
  * orchestrator's answer asks the user nothing, it hangs under the rows as one line
  * that opens to the work behind it, so the chat reads as the user's conversation
- * rather than a log of worker traffic. A turn that spawned workers lists them
- * with where each one is now.
+ * rather than a log of worker traffic. The workers a turn spawned hang off its reply
+ * as a spawn tree, a row each saying where it is now, until each one answers.
  */
 
-import { Bot, ChevronDown, ChevronRight, CircleAlert, FileText, GitPullRequest, Layers, LoaderCircle, Split, Tag } from "@/components/app-icons";
+import { Bot, ChevronDown, ChevronRight, CircleAlert, CornerDownRight, FileText, GitPullRequest, Layers, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
-import { remarkPlainReferences } from "../../lib/session-links";
+import { getSessionRowMarker } from "../../lib/session-presentation";
+import { isSessionLink, remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
-import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
+import type { WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
-import { formatMessageTimestamp, formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
+import { formatMessageTimestamp, formatTime, humanVisibleText, QueuedNote, ResponseSpinner, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { AgentAvatar } from "../AgentAvatar";
 import { Pressable } from "../ui/pressable";
 
@@ -243,6 +244,8 @@ export interface WorkerUpdateIndex {
 	latestKeys: ReadonlySet<string>;
 	/** Each worker's newest update, by session. */
 	latest: ReadonlyMap<string, WorkerUpdate>;
+	/** Workers whose spawn the daemon recorded, so their tree row draws from that record. */
+	spawnRecorded: ReadonlySet<string>;
 }
 
 export const WorkerUpdateIndexContext = createContext<WorkerUpdateIndex | null>(null);
@@ -254,8 +257,14 @@ export function indexWorkerUpdates(items: readonly ConversationItem[]): WorkerUp
 			latest.set(update.sessionId ?? update.key, update);
 		}
 	}
-	return { latest, latestKeys: new Set([...latest.values()].map((update) => update.key)) };
+	return {
+		latest,
+		latestKeys: new Set([...latest.values()].map((update) => update.key)),
+		spawnRecorded: new Set(items.flatMap((item) => spawnedBy(item) ?? [])),
+	};
 }
+
+const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((key) => b.has(key));
 
 /**
  * The index for a timeline, keeping the same object until some worker's newest
@@ -266,8 +275,7 @@ export function useWorkerUpdateIndex(items: readonly ConversationItem[] | undefi
 	return useMemo(() => {
 		const next = items ? indexWorkerUpdates(items) : null;
 		const before = previous.current;
-		const unchanged = before && next && before.latestKeys.size === next.latestKeys.size
-			&& [...next.latestKeys].every((key) => before.latestKeys.has(key));
+		const unchanged = before && next && sameSet(before.latestKeys, next.latestKeys) && sameSet(before.spawnRecorded, next.spawnRecorded);
 		previous.current = unchanged ? before : next;
 		return previous.current;
 	}, [items]);
@@ -744,9 +752,6 @@ export function TaskNamedLine({ title }: { title: string }) {
 	);
 }
 
-const readyToMerge = (pr: PullRequestFacts | undefined) =>
-	pr?.state === "open" && pr.ci === "passing" && pr.review === "approved" && pr.mergeability !== "conflicting";
-
 // What `ao spawn` prints: `spawned session <id> "<name>" (<status>)`.
 // ponytail: reads command output; #6507's session.spawned rows replace this once merged.
 const SPAWNED = /\bspawned\s+session\s+([\w.-]+)/i;
@@ -762,94 +767,226 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
-export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: ReadonlySet<string>): boolean {
-	return item.kind === "activity" && item.activityKind === "ao_action" && item.status === "completed"
-		&& item.detail?.action === "session.spawned"
-		&& typeof item.detail.targetSessionId === "string"
-		&& item.detail.operationId === item.detail.targetSessionId
-		&& spawnedIds.has(item.detail.targetSessionId);
+function completedActionTarget(item: ConversationItem, action: string): string | undefined {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || item.status !== "completed") return undefined;
+	if (item.detail?.action !== action) return undefined;
+	const target = item.detail.targetSessionId;
+	return typeof target === "string" && target !== "" ? target : undefined;
 }
 
-/** The workers a turn started, each showing where it is now. */
-export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
-	const [open, setOpen] = useState(false);
+/**
+ * The worker a spawn the daemon recorded started. The daemon writes it the moment
+ * the session exists, well before the provider reports `ao spawn` finished.
+ */
+export function spawnedBy(item: ConversationItem): string | undefined {
+	return completedActionTarget(item, "session.spawned");
+}
+
+/** A worker a recorded spawn started, with the name, harness and link the record carries. */
+export type SpawnedWorker = { sessionId: string; displayName?: string; harness?: string; href?: string };
+
+/** The worker a recorded spawn started, as its record names it, for a row the session list can't fill. */
+export function spawnedWorker(item: ConversationItem): SpawnedWorker | undefined {
+	const sessionId = spawnedBy(item);
+	if (!sessionId || item.kind !== "activity") return undefined;
+	const { displayName, harness, href } = item.detail ?? {};
+	return { sessionId, displayName, harness, href: href && isSessionLink(href) ? href : undefined };
+}
+
+/** The worker a termination the daemon recorded ended. */
+export function terminatedBy(item: ConversationItem): string | undefined {
+	return completedActionTarget(item, "session.terminated");
+}
+
+/**
+ * The workers a turn started that have not answered yet: those the daemon recorded
+ * it spawning, then any only `ao spawn` output names (a daemon too old to record the spawn).
+ */
+export function waitingSpawns(recorded: readonly SpawnedWorker[], commandSessionIds: readonly string[], index: WorkerUpdateIndex | null, ended: ReadonlySet<string> = NO_ENDED_SPAWNS): SpawnedWorker[] {
+	const unrecorded = commandSessionIds.filter((id) => !index?.spawnRecorded.has(id) && !recorded.some((spawn) => spawn.sessionId === id));
+	return [...recorded, ...unrecorded.map((sessionId) => ({ sessionId }))]
+		.filter((spawn) => !index?.latest.has(spawn.sessionId) && !ended.has(spawn.sessionId));
+}
+
+const NO_ENDED_SPAWNS: ReadonlySet<string> = new Set();
+
+/** The spawned workers no turn waits on any longer though they never answered ({@link useEndedSpawns}). */
+export const EndedSpawnsContext = createContext<ReadonlySet<string>>(NO_ENDED_SPAWNS);
+
+/** A worker that will not answer: terminated, exited, never started, or gone from the session list. */
+function cannotAnswer(session: WorkspaceSession | undefined): boolean {
+	return !session || session.isTerminated || session.status === "terminated" || session.provisionState === "failed"
+		|| session.activity?.state === "exited" || session.status === "exited";
+}
+
+const SPAWNS_OF = new WeakMap<ConversationItem, readonly string[]>();
+
+/**
+ * The workers one row started, recorded or named by `ao spawn` output. Cached per row
+ * so a streamed delta, which keeps earlier rows' identity, skips the output regex.
+ */
+function spawnsOf(item: ConversationItem): readonly string[] {
+	let ids = SPAWNS_OF.get(item);
+	if (!ids) SPAWNS_OF.set(item, ids = [spawnedBy(item) ?? [], spawnedSessionIds([item])].flat());
+	return ids;
+}
+
+/**
+ * The workers this chat spawned that ended without answering, once a later turn has
+ * started. Until then the row under the reply is where the chat says how the worker
+ * ended; after it the row would stay for good and hold its turn out of the background
+ * fold, so the spawn goes back into Worked for with the rest of the turn's work.
+ * The same set until a worker joins or leaves it, since the session list changes
+ * with every session event.
+ */
+export function useEndedSpawns(items: readonly ConversationItem[] | undefined): ReadonlySet<string> {
+	const workspaces = useChatLinkWorkspaces();
+	const previous = useRef(NO_ENDED_SPAWNS);
+	return useMemo(() => {
+		const lastOfTurn = items?.findLast((item) => item.turnId);
+		// An empty list has not loaded, so it says nothing about which workers are gone.
+		if (!items || !lastOfTurn || workspaces.length === 0) return previous.current = NO_ENDED_SPAWNS;
+		const sessions = new Map(workspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session] as const)));
+		const ended = new Set<string>();
+		for (const item of items) {
+			if (item.sequence >= lastOfTurn.sequence) break;
+			if (item.turnId === lastOfTurn.turnId) continue;
+			for (const id of spawnsOf(item)) {
+				if (cannotAnswer(sessions.get(id))) ended.add(id);
+			}
+		}
+		if (ended.size === 0) return previous.current = NO_ENDED_SPAWNS;
+		return previous.current = sameSet(previous.current, ended) ? previous.current : ended;
+	}, [items, workspaces]);
+}
+
+/**
+ * The workers a turn started, under its reply: one reply-arrow row per worker
+ * until it answers (`waitingSpawns`); its reports then say where it is. A row opens
+ * the worker's session, and hovering it opens the card a session link shows.
+ */
+export function SpawnedAgents({ spawns }: { spawns: readonly SpawnedWorker[] }) {
 	return (
-		<div className="min-w-0 text-xs">
-			<Pressable
-				aria-expanded={open}
-				onClick={() => setOpen((current) => !current)}
-				className="inline-flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
-			>
-				<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
-				<Split aria-hidden="true" className="size-3.5" />
-				{sessionIds.length === 1 ? "Spawned 1 agent" : `Spawned ${sessionIds.length} agents`}
-			</Pressable>
-			{open ? (
-				<div className="mt-1 flex flex-col">
-					{sessionIds.map((id) => (
-						<SpawnedAgentLine key={id} sessionId={id} />
-					))}
-				</div>
-			) : null}
-		</div>
+		<ul data-testid="spawned-agents" className="m-0 flex min-w-0 max-w-full list-none flex-col items-start p-0">
+			{spawns.map((spawn) => (
+				<SpawnedAgentRow key={spawn.sessionId} spawn={spawn} />
+			))}
+		</ul>
 	);
 }
 
-function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
-	const session = useWorkerSession(sessionId);
-	const latest = useContext(WorkerUpdateIndexContext)?.latest.get(sessionId);
-	const pr = session?.prs[0];
-	const name = session?.title || latest?.name || sessionId;
-	const href = session?.workspaceId ? sessionHref({ sessionId, projectId: session.workspaceId }) : latest ? sessionHref(latest) : undefined;
-	let lead: ReactNode;
-	let status: ReactNode;
-	if (latest?.state === "needs_input" || latest?.state === "stuck"
-		|| session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = <span className="text-status-needs-you">{latest?.state === "stuck" ? "Stuck" : "Needs input"}</span>;
-	} else if (pr) {
-		const ready = readyToMerge(pr);
-		lead = <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", ready ? "text-status-ready" : "text-muted-foreground")} />;
-		status = ready ? `#${pr.number} · ready to merge` : `#${pr.number}`;
-	} else if (latest?.state === "done") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-ready" />;
-		status = "Done";
-	} else if (session?.isTerminated || session?.status === "terminated") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Terminated";
-	} else if (session?.provisionState === "provisioning") {
-		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
-		status = "Spawning";
-	} else if (session?.provisionState === "failed") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = "Start failed";
-	} else if (session?.activity?.state === "exited" || session?.status === "exited") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Exited";
-	} else if (session?.statusReadiness === "checking") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Checking status";
-	} else if (!session || session.statusReadiness === "unavailable"
-		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Status unavailable";
-	} else if (session.activity?.state === "idle" || session.status === "idle") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Idle";
-	} else if (session.activity?.state === "active" || session.status === "working") {
-		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
-		status = latest ? splitHeadline(splitArtifacts(latest.body).text).headline : "Working";
-	} else {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Status unavailable";
+type SpawnGlyph = "loader" | "alert" | "review" | "ready" | "merged" | "exited" | "terminated" | "quiet";
+type WaitingState = { label: string; glyph: SpawnGlyph };
+
+const PR_STATES = {
+	review: { label: "In review", glyph: "review" },
+	ready: { label: "Ready to merge", glyph: "ready" },
+	merged: { label: "Merged", glyph: "merged" },
+} as const satisfies Record<string, WaitingState>;
+
+/** The PR state a session's sidebar row shows, once a PR decides it. */
+function prState(session: WorkspaceSession): WaitingState | undefined {
+	const marker = getSessionRowMarker(session);
+	// Failing CI, conflicts or requested changes: the sidebar's red alert.
+	if (marker === "attention") return { label: session.displayStatus ?? "Needs attention", glyph: "alert" };
+	// A session waiting on its person outranks its PR, as it does in the sidebar.
+	if (marker === "input") return { label: "Needs input", glyph: "alert" };
+	return marker ? PR_STATES[marker] : undefined;
+}
+
+/** Where a worker that has not answered yet is now, read from its session's durable facts. */
+function waitingState(session: WorkspaceSession | undefined): WaitingState {
+	// A terminated session can't answer, whatever activity it last reported.
+	if (session?.isTerminated || session?.status === "terminated") return { label: "Terminated", glyph: "terminated" };
+	if (session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
+		return { label: "Needs input", glyph: "alert" };
 	}
+	if (session?.provisionState === "provisioning") return { label: "Starting", glyph: "loader" };
+	if (session?.provisionState === "failed") return { label: "Start failed", glyph: "alert" };
+	if (session?.activity?.state === "exited" || session?.status === "exited") return { label: "Exited", glyph: "exited" };
+	if (session?.statusReadiness === "checking") return { label: "Checking", glyph: "quiet" };
+	if (!session || session.statusReadiness === "unavailable"
+		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
+		return { label: "Status unavailable", glyph: "quiet" };
+	}
+	if (session.activity?.state === "idle" || session.status === "idle") return prState(session) ?? { label: "Idle", glyph: "quiet" };
+	if (session.activity?.state === "active" || session.status === "working") return { label: "Working", glyph: "loader" };
+	return prState(session) ?? { label: "Status unavailable", glyph: "quiet" };
+}
+
+const PR_GLYPH_TONE: Partial<Record<SpawnGlyph, string>> = {
+	review: "text-status-in-review",
+	ready: "text-status-ready",
+	merged: "text-status-merged",
+};
+
+function SpawnStateGlyph({ glyph }: { glyph: SpawnGlyph }) {
+	if (glyph === "loader") return <ResponseSpinner />;
+	if (glyph === "alert") return <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />;
+	const prTone = PR_GLYPH_TONE[glyph];
+	if (prTone) return <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", prTone)} />;
 	return (
-		<div className="flex min-w-0 items-center gap-2 py-0.5 pl-5">
-			{lead}
-			<span className="min-w-0 shrink truncate text-foreground">
-				{href ? <SessionLabelLink href={href} className="decoration-foreground/40 underline-offset-2 hover:underline">{name}</SessionLabelLink> : name}
+		<span
+			aria-hidden="true"
+			className={cn(
+				"mx-[3.5px] size-[7px] shrink-0 rounded-full",
+				glyph === "exited" && "bg-destructive",
+				glyph === "terminated" && "border-[1.5px] border-passive",
+				glyph === "quiet" && "bg-passive",
+			)}
+		/>
+	);
+}
+
+/** The part of a spawned worker's row that opens its session: logo, name and state. */
+const SPAWN_LINK_CLASS = "group flex min-w-0 items-center gap-1.5 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+/**
+ * A spawned worker as a reply arrow: its harness, its name, and a glyph for where
+ * it is now, named on the card and to screen readers. Hovering underlines the name;
+ * the arrow stays as it is, since it only shows where the worker came from.
+ */
+function SpawnedAgentRow({ spawn }: { spawn: SpawnedWorker }) {
+	const { sessionId } = spawn;
+	const session = useWorkerSession(sessionId);
+	const state = waitingState(session);
+	// Before the session list has the worker, or once it is deleted, its spawn record names it.
+	const name = session?.title || spawn.displayName || sessionId;
+	const provider = session?.provider ?? spawn.harness;
+	const href = session ? sessionHref({ sessionId, projectId: session.workspaceId }) : spawn.href;
+	const content = (
+		<>
+			{provider ? <AgentAvatar provider={provider} className="size-3.5 shrink-0" /> : <span aria-hidden="true" className="size-3.5 shrink-0" />}
+			<span
+				className={cn(
+					"min-w-0 truncate decoration-foreground/40 underline-offset-2 group-hover:underline group-focus-visible:underline",
+					session?.provisionState === "provisioning" && "text-muted-foreground",
+				)}
+			>
+				{name}
 			</span>
-			<span className="ml-auto max-w-[48%] shrink-0 truncate text-muted-foreground" title={typeof status === "string" ? status : undefined}>{status}</span>
-		</div>
+			<span className={cn("ml-1 flex shrink-0 items-center text-muted-foreground", state.glyph === "alert" && "text-status-needs-you")}>
+				<SpawnStateGlyph glyph={state.glyph} />
+				<span className="sr-only">{state.label}</span>
+			</span>
+		</>
+	);
+	return (
+		<li data-testid="spawned-agent" className="flex h-[26px] min-w-0 max-w-full items-center gap-2 text-[length:var(--font-size-base)] font-medium text-foreground">
+			<CornerDownRight aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			{href ? (
+				<SessionLabelLink
+					href={href}
+					// Above the row, so the card never covers the worker under it. A start that
+					// failed says why on the card, since the row shows only its state.
+					preview={{ side: "top", align: "start", detail: session?.provisionState === "failed" ? session.provisionError : undefined }}
+					className={SPAWN_LINK_CLASS}
+				>
+					{content}
+				</SessionLabelLink>
+			) : (
+				<span className={SPAWN_LINK_CLASS}>{content}</span>
+			)}
+		</li>
 	);
 }

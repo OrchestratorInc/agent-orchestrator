@@ -110,6 +110,9 @@ type SpawnConfig struct {
 	TaskPreparation domain.TaskPreparationToken
 	// Fork makes this spawn a copy of another session. Nil for ordinary spawns.
 	Fork *SpawnFork
+	// Transfer, when set, continues a session moved from another machine
+	// instead of starting a new conversation.
+	Transfer *SpawnTransfer
 	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
 	// and auto-compaction ("200k", "500k", "1m" or "off"), saved with its new
 	// conversation. They are chat settings, not launch options: a spawn that
@@ -179,6 +182,20 @@ type ForkTerminalLaunch struct {
 	Argv []string
 	// AgentSessionID is the fork's own native session, when known before launch.
 	AgentSessionID string
+}
+
+// SpawnTransfer is the moved state a spawn continues. Prompt is delivered as
+// the first new turn of the resumed conversation.
+type SpawnTransfer struct {
+	// NativeArchive is a nativetransfer archive of the agent's conversation.
+	NativeArchive string
+	// FallbackPrompt starts the agent on a new conversation when the moved
+	// one cannot be resumed here.
+	FallbackPrompt string
+	// SystemNote is added to the launch's system prompt: what the agent must
+	// know about the move, such as the WIP commit it made, without a turn
+	// being sent to the resumed conversation.
+	SystemNote string
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

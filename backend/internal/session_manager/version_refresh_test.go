@@ -105,7 +105,7 @@ func TestForEachVersionMoveRunsAtMostFourAtOnce(t *testing.T) {
 }
 
 func TestRetryVersionMovesForgetsSessionsThatAreBack(t *testing.T) {
-	mgr, store, _ := newChatManager(&recordingLauncher{})
+	mgr, store, _ := newChatManager(&recordingLauncher{live: true})
 	seedChatResumeSession(store, domain.ActivityIdle)
 	mgr.versionRetries.note("mer-1")
 	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
@@ -147,6 +147,7 @@ func TestRetryVersionMovesWaitsForSharedPermit(t *testing.T) {
 func TestRetryVersionMoveHoldsPermitThroughStartup(t *testing.T) {
 	entered, finish := make(chan struct{}), make(chan struct{})
 	launcher := &recordingLauncher{beforeStart: func(ChatStart) { close(entered); <-finish }}
+	launcher.afterReady = func() { launcher.live = true }
 	mgr, store, _ := newChatManager(launcher)
 	seedChatResumeSession(store, domain.ActivityExited)
 	mgr.versionRetries.note("mer-1")

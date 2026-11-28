@@ -1,4 +1,5 @@
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
+import { prRepositoryFromUrl } from "../../../../packages/shared/review/review-comments";
 import { sortedPRs, type PRState, type PullRequestFacts, type SessionBranchState, type WorkspaceSession } from "../types/workspace";
 import { appI18n, type PluralMessageKey } from "../i18n";
 import type {
@@ -1199,19 +1200,8 @@ function pluralize(noun: PRNoun, count: number): string {
 	return appI18n.t(prNounKeys[noun], { count });
 }
 
-/**
- * owner/name of the repository a pull request URL points at (GitHub
- * /owner/name/pull/N or GitLab /owner/name/-/merge_requests/N), or undefined.
- */
-export function prRepositoryFromUrl(raw: string | undefined): string | undefined {
-	if (!raw) return undefined;
-	try {
-		const match = new URL(raw).pathname.match(/^\/([^/]+\/[^/]+)\/(?:pull|issues|-\/merge_requests)\/\d+/);
-		return match?.[1];
-	} catch {
-		return undefined;
-	}
-}
+// Shared with the comment model in packages/shared/review.
+export { prRepositoryFromUrl };
 
 /**
  * Whether a session's pull requests span more than one repository (a
