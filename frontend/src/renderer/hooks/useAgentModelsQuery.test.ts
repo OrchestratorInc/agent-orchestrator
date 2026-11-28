@@ -2,7 +2,7 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../lib/api-client";
 import { cacheAgentModels, readCachedAgentModels } from "../lib/agent-model-cache";
-import { agentModelsQueryOptions, invalidateAgentModelCatalogs, modelCatalogAuthIssue, type AgentModelCatalog } from "./useAgentModelsQuery";
+import { agentModelsQueryOptions, discardPendingAgentModelReads, invalidateAgentModelCatalogs, modelCatalogAuthIssue, type AgentModelCatalog } from "./useAgentModelsQuery";
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: vi.fn() },
@@ -361,5 +361,351 @@ describe("invalidateAgentModelCatalogs", () => {
 		await invalidateAgentModelCatalogs(client, "claude-code", "box-a");
 		expect(invalidated(keys.remote) && invalidated(keys.remoteRevalidation)).toBe(true);
 		expect([keys.local, keys.composerRevalidation, keys.otherRevalidation].some(invalidated)).toBe(false);
+	});
+});
+
+
+describe("OpenCode single-read catalogs", () => {
+	it("shows an already-loaded Settings catalog during its single OpenCode read", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const catalog: AgentModelCatalog = { agentId: "opencode", models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		client.setQueryData(agentModelsQueryOptions("opencode", "", undefined, true).queryKey, catalog);
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
+		const observer = new QueryObserver(client, agentModelsQueryOptions("opencode", ""));
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(catalog));
+			expect(apiClient.GET).toHaveBeenCalledTimes(1);
+			finish({ data: catalog });
+			await vi.waitFor(() => expect(observer.getCurrentResult().isFetching).toBe(false));
+		} finally { finish({ data: catalog }); unsubscribe(); client.clear(); }
+	});
+
+	it.each(["opencode", "opencode-v2"])("reuses the pending %s device read after an observer remount", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const catalog: AgentModelCatalog = { agentId, models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
+		const first = new QueryObserver(client, options);
+		const unsubscribe = first.subscribe(() => {});
+		await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+		unsubscribe();
+		const second = new QueryObserver(client, options);
+		const unsubscribeSecond = second.subscribe(() => {});
+		try {
+			finish({ data: catalog });
+			await vi.waitFor(() => expect(second.getCurrentResult().data).toEqual(catalog));
+			expect(apiClient.GET).toHaveBeenCalledTimes(1);
+		} finally { finish({ data: catalog }); unsubscribeSecond(); client.clear(); }
+	});
+
+	it.each(["opencode", "opencode-v2"])("discards a detached %s read on CDC invalidation before remount", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const old: AgentModelCatalog = { agentId, models: [{ id: "provider/old", label: "Old" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const fresh = { ...old, models: [{ id: "provider/new", label: "New", efforts: ["low", "high"] }] };
+		let finishOld!: (value: { data: AgentModelCatalog }) => void;
+		let finishNew!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET)
+			.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }) as never)
+			.mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }) as never);
+		const first = new QueryObserver(client, options);
+		const unsubscribeFirst = first.subscribe(() => {});
+		let unsubscribeSecond = () => {};
+		let unsubscribeThird = () => {};
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			unsubscribeFirst();
+			expect(client.getQueryState(options.queryKey)?.fetchStatus).toBe("idle");
+			// Match CDC's ordinary query invalidation, without the login helper
+			// or any explicit pending-map clearing.
+			await client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+			const second = new QueryObserver(client, options);
+			unsubscribeSecond = second.subscribe(() => {});
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			finishOld({ data: old });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(client.getQueryData(options.queryKey)).toBeUndefined();
+			expect(readCachedAgentModels(agentId, "")).toBeUndefined();
+			// Settling the old GET must not remove the new pending entry.
+			unsubscribeSecond();
+			const third = new QueryObserver(client, options);
+			unsubscribeThird = third.subscribe(() => {});
+			finishNew({ data: fresh });
+			await vi.waitFor(() => expect(third.getCurrentResult().data).toEqual(fresh));
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(fresh.models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+			expect(third.getCurrentResult().isStale).toBe(false);
+		} finally {
+			finishOld({ data: old });
+			finishNew?.({ data: fresh });
+			unsubscribeFirst(); unsubscribeSecond(); unsubscribeThird(); client.clear();
+		}
+	});
+
+	// What event-transport does for a catalog change event.
+	const catalogEvent = (client: QueryClient, agentId: string) => {
+		discardPendingAgentModelReads(["agent-models", agentId], { reread: true });
+		return client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+	};
+
+	it.each(["opencode", "opencode-v2"])("discards detached %s reads across two inactive catalog event cycles", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const first: AgentModelCatalog = { agentId, models: [{ id: "provider/first", label: "First" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const second = { ...first, models: [{ id: "provider/second", label: "Second" }] };
+		const fresh = { ...first, models: [{ id: "provider/new", label: "New", efforts: ["low", "high"] }] };
+		const finish: Array<(value: { data: AgentModelCatalog }) => void> = [];
+		vi.mocked(apiClient.GET).mockImplementation((() => new Promise((resolve) => { finish.push(resolve); })) as never);
+		const unsubscribes: Array<() => void> = [];
+		const mount = () => {
+			const observer = new QueryObserver(client, options);
+			unsubscribes.push(observer.subscribe(() => {}));
+			return observer;
+		};
+		try {
+			mount();
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			unsubscribes.pop()?.();
+			await catalogEvent(client, agentId);
+			mount();
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			unsubscribes.pop()?.();
+			// TanStack now skips the next invalidate event for this query.
+			expect(client.getQueryState(options.queryKey)?.isInvalidated).toBe(true);
+			await catalogEvent(client, agentId);
+			mount();
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(3));
+			finish[0]({ data: first });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(client.getQueryData(options.queryKey)).toBeUndefined();
+			expect(readCachedAgentModels(agentId, "")).toBeUndefined();
+			// An older read's cleanup must keep the replacement shared.
+			unsubscribes.pop()?.();
+			const last = mount();
+			finish[2]({ data: fresh });
+			await vi.waitFor(() => expect(last.getCurrentResult().data).toEqual(fresh));
+			// Nor may the read from between the events overwrite it later.
+			finish[1]({ data: second });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(last.getCurrentResult().data).toEqual(fresh);
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(fresh.models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(3);
+			expect(last.getCurrentResult().isStale).toBe(false);
+		} finally {
+			for (const resolve of finish) resolve({ data: first });
+			for (const unsubscribe of unsubscribes) unsubscribe();
+			client.clear();
+		}
+	});
+
+	it.each(["opencode", "opencode-v2"])("discards a detached %s read on one catalog event after a failed read", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const old: AgentModelCatalog = { agentId, models: [{ id: "provider/old", label: "Old" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const fresh = { ...old, models: [{ id: "provider/new", label: "New" }] };
+		let finishOld!: (value: { data: AgentModelCatalog }) => void;
+		let finishNew!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET)
+			.mockRejectedValueOnce(new Error("daemon unavailable"))
+			.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }) as never)
+			.mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }) as never);
+		const failed = new QueryObserver(client, options);
+		let unsubscribe = failed.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(failed.getCurrentResult().status).toBe("error"));
+			unsubscribe();
+			// A failed read marks the query invalidated without an invalidate event.
+			expect(client.getQueryState(options.queryKey)?.isInvalidated).toBe(true);
+			unsubscribe = new QueryObserver(client, options).subscribe(() => {});
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			unsubscribe();
+			await catalogEvent(client, agentId);
+			const remounted = new QueryObserver(client, options);
+			unsubscribe = remounted.subscribe(() => {});
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(3));
+			finishOld({ data: old });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(remounted.getCurrentResult().data).toBeUndefined();
+			expect(readCachedAgentModels(agentId, "")).toBeUndefined();
+			finishNew({ data: fresh });
+			await vi.waitFor(() => expect(remounted.getCurrentResult().data).toEqual(fresh));
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(fresh.models);
+		} finally {
+			finishOld?.({ data: old });
+			finishNew?.({ data: fresh });
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it.each(["opencode", "opencode-v2"])("re-reads a running %s prefetch overtaken by a catalog change after a generic resync", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const seed: AgentModelCatalog = { agentId, models: [{ id: "provider/seed", label: "Seed" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const old = { ...seed, models: [{ id: "provider/old", label: "Old" }] };
+		const fresh = { ...seed, models: [{ id: "provider/new", label: "New" }] };
+		let finishOld!: (value: { data: AgentModelCatalog }) => void;
+		let finishNew!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET)
+			.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }) as never)
+			.mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }) as never);
+		client.setQueryData(options.queryKey, seed);
+		// An earlier event leaves the query invalidated, so TanStack emits no
+		// invalidate event for the next one.
+		await client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+		const prefetch = client.prefetchQuery(options);
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			// Without an observer nothing cancels this read, and the transport
+			// schedules no catch-up for it.
+			expect(client.isFetching({ queryKey: ["agent-models", agentId], type: "active" })).toBe(0);
+			// A lifecycle resync only stops sharing the read. The later catalog
+			// change must still reach it.
+			discardPendingAgentModelReads(["agent-models"]);
+			await client.invalidateQueries({ queryKey: ["agent-models"] }, { cancelRefetch: false });
+			await catalogEvent(client, agentId);
+			finishOld({ data: old });
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			expect(client.getQueryData(options.queryKey)).toEqual(seed);
+			finishNew({ data: fresh });
+			await prefetch;
+			expect(client.getQueryData(options.queryKey)).toEqual(fresh);
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(fresh.models);
+		} finally {
+			finishOld({ data: old });
+			finishNew({ data: fresh });
+			await prefetch;
+			client.clear();
+		}
+	});
+
+	it("restarts only the changed agent's evicted prefetch", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const entry = (agentId: string, id: string): AgentModelCatalog => ({ agentId, models: [{ id, label: id }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" });
+		const changed = agentModelsQueryOptions("opencode", "");
+		const other = agentModelsQueryOptions("opencode-v2", "");
+		const finish: Record<string, Array<(value: { data: AgentModelCatalog }) => void>> = { "opencode": [], "opencode-v2": [] };
+		vi.mocked(apiClient.GET).mockImplementation(((_path: string, init: { params: { path: { agent: string } } }) =>
+			new Promise((resolve) => { finish[init.params.path.agent].push(resolve); })) as never);
+		client.setQueryData(changed.queryKey, entry("opencode", "seed"));
+		client.setQueryData(other.queryKey, entry("opencode-v2", "seed"));
+		// Both queries are already invalidated, so TanStack emits no further
+		// invalidate events for them.
+		await client.invalidateQueries({ queryKey: ["agent-models"] }, { cancelRefetch: false });
+		const prefetches = Promise.all([client.prefetchQuery(changed), client.prefetchQuery(other)]);
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			discardPendingAgentModelReads(["agent-models"]);
+			await catalogEvent(client, "opencode");
+			finish["opencode"][0]({ data: entry("opencode", "old") });
+			finish["opencode-v2"][0]({ data: entry("opencode-v2", "current") });
+			await vi.waitFor(() => expect(finish["opencode"]).toHaveLength(2));
+			finish["opencode"][1]({ data: entry("opencode", "new") });
+			await prefetches;
+			expect(client.getQueryData(changed.queryKey)?.models).toEqual(entry("opencode", "new").models);
+			expect(readCachedAgentModels("opencode", "")?.models).toEqual(entry("opencode", "new").models);
+			expect(client.getQueryData(other.queryKey)?.models).toEqual(entry("opencode-v2", "current").models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(3);
+		} finally {
+			for (const resolve of [...finish["opencode"], ...finish["opencode-v2"]]) resolve({ data: entry("opencode", "old") });
+			await prefetches;
+			client.clear();
+		}
+	});
+
+	it.each(["opencode", "opencode-v2"])("publishes a slow %s read that outlasts several fallback polls", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const catalog: AgentModelCatalog = { agentId, models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const finish: Array<(value: { data: AgentModelCatalog }) => void> = [];
+		vi.mocked(apiClient.GET).mockImplementation((() => new Promise((resolve) => { finish.push(resolve); })) as never);
+		// What event-transport does on each 2 s fallback poll: no catalog change.
+		const poll = () => {
+			discardPendingAgentModelReads(["agent-models", agentId]);
+			void client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+		};
+		const observer = new QueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			poll(); poll(); poll();
+			finish[0]({ data: catalog });
+			// The first poll's invalidate event restarts the read once.
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			// Later polls during the retry must let it finish.
+			poll(); poll(); poll();
+			finish[1]({ data: catalog });
+			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(catalog));
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(catalog.models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+		} finally {
+			for (const resolve of finish) resolve({ data: catalog });
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it("does not reuse a pending OpenCode read after login invalidation", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions("opencode", "");
+		const before: AgentModelCatalog = { agentId: "opencode", models: [], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, warning: "Not signed in", fetchedAt: "2026-10-18T00:00:00Z" };
+		const after = { ...before, warning: undefined, models: [{ id: "provider/new", label: "New" }] };
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never).mockResolvedValue({ data: after } as never);
+		const observer = new QueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			await invalidateAgentModelCatalogs(client, "opencode");
+			expect(observer.getCurrentResult().data).toEqual(after);
+			finish({ data: before });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(observer.getCurrentResult().data).toEqual(after);
+			expect(readCachedAgentModels("opencode", "")?.models).toEqual(after.models);
+			expect(readCachedAgentModels("opencode", "")?.warning).toBeUndefined();
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+		} finally { finish({ data: before }); unsubscribe(); client.clear(); }
+	});
+
+	it("keeps a manual refresh that arrives during an OpenCode read", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions("opencode", "");
+		const old: AgentModelCatalog = { agentId: "opencode", models: [{ id: "provider/old", label: "Old" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const fresh = { ...old, models: [{ id: "provider/new", label: "New" }] };
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
+		const pending = client.fetchQuery(options);
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			client.setQueryData(options.queryKey, fresh);
+			finish({ data: old });
+			expect(await pending).toEqual(fresh);
+			expect(readCachedAgentModels("opencode", "")?.models).toEqual(fresh.models);
+		} finally { finish({ data: old }); client.clear(); }
+	});
+
+	it.each(["opencode", "opencode-v2"])("deduplicates concurrent %s opens across projects and caches remounts", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const catalog: AgentModelCatalog = { agentId, models: [{ id: "provider/model", label: "Model", efforts: ["low", "high"], lastUsedAt: "2026-10-18T01:00:00Z" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
+		try {
+			const [first, second] = await Promise.all([
+				client.fetchQuery(agentModelsQueryOptions(agentId, "project-a")),
+				client.fetchQuery(agentModelsQueryOptions(agentId, "project-b")),
+			]);
+			expect(first).toEqual(catalog);
+			expect(second).toEqual(catalog);
+			await client.fetchQuery(agentModelsQueryOptions(agentId, "project-c"));
+			expect(apiClient.GET).toHaveBeenCalledTimes(1);
+			expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", { params: { path: { agent: agentId }, query: { projectId: undefined } } });
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(catalog.models);
+			// Settings still explicitly requests every provider's browsing metadata.
+			await client.fetchQuery(agentModelsQueryOptions(agentId, "", undefined, true));
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+			expect(apiClient.GET).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/models", { params: { path: { agent: agentId }, query: { projectId: undefined, catalogOnly: true } } });
+		} finally { client.clear(); }
 	});
 });

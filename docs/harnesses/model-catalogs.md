@@ -48,6 +48,16 @@ session-history recency lookup that task pickers use, so frontend query keys
 can differ while the underlying catalog stays shared. Existing picker display
 ordering is preserved.
 
+OpenCode picker reads use one response containing catalog choices and recency,
+rather than downloading the Settings browsing response first. They share the
+existing per-device/host/credential-scope query cache across projects. Every
+model remains present, including models from unconfigured providers, so project
+and task choices do not shrink. Picker responses omit context windows, input
+modalities and discovery metadata; `catalogOnly=true` retains these fields for
+Settings browsing. This changes decoded JSON size without compressing AO
+responses. The complete option list is preserved rather than capped to meet a
+byte target.
+
 ## Cloud tasks
 
 New Task in a Cloud project lists the control plane's catalog for the agent
