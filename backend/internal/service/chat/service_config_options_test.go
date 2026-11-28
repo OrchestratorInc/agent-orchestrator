@@ -355,12 +355,45 @@ func TestSanitizeCopilotLoadedModeFailsWhenSetterOmitsCatalog(t *testing.T) {
 		t.Fatalf("err = %v, want 'provider did not report the resulting mode'", err)
 	}
 }
+
+func TestSettingsFromConfigOptionsMapsAgyAcceptEditsAndKeepsAutoTiers(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		previous     domain.PermissionMode
+		selectedMode string
+		want         domain.PermissionMode
+	}{
+		{"empty settings adopt accept edits", "", "", domain.PermissionModeAcceptEdits},
+		{"auto keeps auto", domain.PermissionModeAuto, "", domain.PermissionModeAuto},
+		{"bypass keeps bypass", domain.PermissionModeBypassPermissions, "", domain.PermissionModeBypassPermissions},
+		{"explicit selection downgrades auto", domain.PermissionModeAuto, "accept-edits", domain.PermissionModeAcceptEdits},
+		{"explicit selection downgrades bypass", domain.PermissionModeBypassPermissions, "accept-edits", domain.PermissionModeAcceptEdits},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := []ports.ChatConfigOption{{
+				ID:      "mode",
+				Current: ports.ChatConfigOptionValue{Select: "accept-edits"},
+				Choices: []ports.ChatConfigOptionChoice{{Value: "accept-edits", Name: "Accept Edits"}},
+			}}
+			got := permissionConfigOptions(domain.HarnessAgy, input)
+			settings, _ := settingsFromConfigOptions(domain.ConversationSettings{ApprovalMode: tc.previous}, got)
+			if mode, ok := explicitModeApproval(got, tc.selectedMode); ok {
+				settings.ApprovalMode = mode
+			}
+			if settings.ApprovalMode != tc.want {
+				t.Fatalf("settings approval = %q, want %q", settings.ApprovalMode, tc.want)
+			}
+		})
+	}
+}
+
 func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
 	input := []ports.ChatConfigOption{{
 		ID:      "mode",
 		Current: ports.ChatConfigOptionValue{Select: "yolo"},
 		Choices: []ports.ChatConfigOptionChoice{
 			{Value: "default", Name: "Default"},
+			{Value: "accept-edits", Name: "Accept Edits"},
 			{Value: "auto_edit", Name: "Auto Edit"},
 			{Value: "yolo", Name: "YOLO"},
 		},
@@ -371,6 +404,7 @@ func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
 		name string
 	}{
 		{domain.PermissionModeDefault, "Use agent permissions"},
+		{domain.PermissionModeAcceptEdits, "Accept edits"},
 		{domain.PermissionModeAcceptEdits, "Accept edits"},
 		{domain.PermissionModeAuto, "Auto-approve"},
 	}
@@ -383,7 +417,7 @@ func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
 	if settings.ApprovalMode != domain.PermissionModeAuto {
 		t.Fatalf("settings approval = %q, want auto for yolo", settings.ApprovalMode)
 	}
-	if input[0].Choices[2].Name != "YOLO" {
+	if input[0].Choices[3].Name != "YOLO" {
 		t.Fatal("mutated provider catalog")
 	}
 }

@@ -3033,6 +3033,11 @@ func (s *Service) SetConfigOption(
 	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
+	if configID == "mode" {
+		if mode, ok := explicitModeApproval(options, value.Select); ok {
+			settings.ApprovalMode = mode
+		}
+	}
 	if record.Harness == domain.HarnessClaudeCode {
 		// A picked "default" is saved so a relaunch passes --model default and gets
 		// the model the picker showed; without it Claude uses settings.json's model.
@@ -3085,6 +3090,23 @@ func restoreOpenCodeMode(ctx context.Context, conv ports.ChatConversation, mode 
 	return fmt.Errorf("restore OpenCode mode %q: provider did not confirm selected mode", mode)
 }
 
+// explicitModeApproval applies a mode the user picked through the config-option
+// route, overriding the passive catalog reconciliation that keeps agy's shared
+// accept-edits mode from downgrading auto and bypass.
+func explicitModeApproval(options []ports.ChatConfigOption, selected string) (domain.PermissionMode, bool) {
+	for _, option := range options {
+		if option.ID != "mode" {
+			continue
+		}
+		for _, choice := range option.Choices {
+			if choice.Value == selected && choice.PermissionMode != "" {
+				return choice.PermissionMode, true
+			}
+		}
+	}
+	return "", false
+}
+
 func settingsFromConfigOptions(
 	settings domain.ConversationSettings,
 	options []ports.ChatConfigOption,
@@ -3094,6 +3116,13 @@ func settingsFromConfigOptions(
 	for _, option := range options {
 		for _, choice := range option.Choices {
 			if choice.Value == option.Current.Select && choice.PermissionMode != "" {
+				// agy acp reports accept-edits for AO's auto and bypass tiers too,
+				// so a passive echo must not downgrade them. An explicit mode
+				// selection is applied by explicitModeApproval.
+				if choice.Value == "accept-edits" &&
+					(settings.ApprovalMode == domain.PermissionModeAuto || settings.ApprovalMode == domain.PermissionModeBypassPermissions) {
+					continue
+				}
 				next.ApprovalMode = choice.PermissionMode
 			}
 		}
@@ -3563,7 +3592,7 @@ func agyApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	switch value {
 	case "default":
 		return domain.PermissionModeDefault, "Use agent permissions", true
-	case "auto_edit":
+	case "accept-edits", "auto_edit":
 		return domain.PermissionModeAcceptEdits, "Accept edits", true
 	case "yolo":
 		return domain.PermissionModeAuto, "Auto-approve", true
