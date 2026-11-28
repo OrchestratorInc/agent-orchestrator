@@ -10,7 +10,7 @@ info:
     including one-time bootstrap, rotating credentials, fenced turn execution,
     orchestration, and durable workspace and terminal transport.
     This is the currently documented Cloud API subset; broader route parity is
-    tracked in https://github.com/Untrivial-ai/agent-orchestrator/issues/6220.
+    tracked in https://github.com/OrchestratorInc/agent-orchestrator/issues/6220.
 security:
   - bearerAuth: []
 tags:

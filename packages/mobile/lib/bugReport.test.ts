@@ -6,7 +6,7 @@ const build = { version: "1.3.1", build: "42", updateId: "abcdef1234", channel: 
 describe("bug report", () => {
 	it("goes to the repo's own bug form, labelled for the mobile queue", () => {
 		const url = bugReportUrl({ build, platform: "ios", osVersion: "26.6", paired: true, connection: "open" });
-		expect(url.startsWith("https://github.com/Untrivial-ai/agent-orchestrator/issues/new?")).toBe(true);
+		expect(url.startsWith("https://github.com/OrchestratorInc/agent-orchestrator/issues/new?")).toBe(true);
 		expect(url).toContain("template=bug_report.yml");
 		expect(url).toContain(`labels=${encodeURIComponent("bug,comp/mobile")}`);
 		expect(url).toContain("title=");

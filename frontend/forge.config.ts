@@ -17,13 +17,13 @@ import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
 import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
-// Default GitHub release target (production). Releases land on Untrivial-ai
-// (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
-// are prior homes). Builds cut by CI must NOT rely on this fallback: the
+// Default GitHub release target (production). Releases land on OrchestratorInc
+// (the repo's current home; AgentWrapper, aoagents and Untrivial-ai are prior
+// homes). Builds cut by CI must NOT rely on this fallback: the
 // workflows set AO_RELEASE_REPO to the repo they run in, and build-artifacts.yml
 // asserts the baked app-update.yml matches it, so a future org/repo rename
 // fails the build instead of stranding the fleet on a redirect (#3523).
-const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
+const DEFAULT_RELEASE_REPO = "OrchestratorInc/agent-orchestrator";
 
 // The packaged binary name (no extension). Single source of truth: the packager
 // names the exe/ELF from this, and the NSIS + deb makers must point their
@@ -478,9 +478,9 @@ const config: ForgeConfig = {
 			// fork without a source edit. AO_RELEASE_REPO is "owner/repo"; it defaults
 			// to the production target. The dev/test loop sets
 			// AO_RELEASE_REPO=harshitsinghbhandari/agent-orchestrator (spec §1.1, §8).
-			// Note: aoagents/agent-orchestrator and AgentWrapper/agent-orchestrator
-			// are prior homes and intentionally NOT the default; releases land on
-			// Untrivial-ai.
+			// Note: aoagents, AgentWrapper and Untrivial-ai are prior homes of
+			// agent-orchestrator and intentionally NOT the default; releases land
+			// on OrchestratorInc.
 			config: {
 				repository: parseReleaseRepo(process.env.AO_RELEASE_REPO),
 				prerelease: process.env.AO_RELEASE_PRERELEASE === "true",

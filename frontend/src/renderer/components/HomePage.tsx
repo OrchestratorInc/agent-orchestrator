@@ -46,7 +46,7 @@ import { useEdgeFadeRef } from "../hooks/useEdgeFade";
  *   project: it never appears in the recent rows or counts toward the
  *   heading — the grid's standalone action and the sidebar own it.
  */
-const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
+const GITHUB_REPOSITORY_URL = "https://github.com/OrchestratorInc/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
 	"flex w-full items-center gap-3 rounded-lg bg-card px-4 py-3 transition-[background-color] duration-fast ease-out hover:bg-accent hover:text-foreground";

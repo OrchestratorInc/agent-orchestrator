@@ -16,7 +16,7 @@ import { formatVersion, formatUpdate, type BuildInfo } from "./appInfo";
  *  - the repo's own bug form, so the report arrives with a title and the same
  *    fields a desktop report has.
  */
-export const BUG_REPORT_REPO = "Untrivial-ai/agent-orchestrator";
+export const BUG_REPORT_REPO = "OrchestratorInc/agent-orchestrator";
 export const BUG_REPORT_TEMPLATE = "bug_report.yml";
 export const BUG_REPORT_LABELS = ["bug", "comp/mobile"] as const;
 

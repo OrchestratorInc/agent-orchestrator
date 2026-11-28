@@ -24,11 +24,11 @@ import (
 //
 // Mirrors how version.go's Version var is stamped by release tooling.
 //
-// Untrivial-ai is the org the repo was transferred to in July 2026. The old
-// AgentWrapper URLs still resolve only through GitHub's rename redirect, which
+// OrchestratorInc is the repo's current home. The old AgentWrapper and
+// Untrivial-ai URLs still resolve only through GitHub's rename redirect, which
 // is not a contract: the same staleness that stranded the baked update feed
 // (#3523) would strand every `ao start` download the day that redirect stops.
-var releaseRepo = "Untrivial-ai/agent-orchestrator"
+var releaseRepo = "OrchestratorInc/agent-orchestrator"
 
 // appBundleName is the macOS bundle directory name produced by electron-forge
 // (spaced, per frontend/forge.config.ts).
