@@ -64,6 +64,7 @@ import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { useSessionDevice } from "../useSessionDevice";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
@@ -270,6 +271,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// stopping. Until then (`draining` lasts as long as the agent's turn) the
 	// conversation stays readable behind a banner, dismissed requests included.
 	const switchCardShown = mobileInterfaceTransitionStoppingSource(interfaceSwitch.transition) || handoff.pending;
+	// Opening the session is timed until its messages are drawn and not covered by the switch card.
+	useSessionContentShown(Boolean(conversation.snapshot) && !holdArrivingSnapshot && timelineMounted && !conversation.unavailable && !switchCardShown);
 	// The usage sheet follows the conversation while it is up: the numbers move
 	// with every turn.
 	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);

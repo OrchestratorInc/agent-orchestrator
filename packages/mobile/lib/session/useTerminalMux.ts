@@ -19,11 +19,11 @@ export type TerminalMuxEvents = {
 	onError(message: string): void;
 	onResize(cols: number, rows: number): void;
 	/**
-	 * Every chunk of terminal output, as it arrives. It may not be on screen yet:
-	 * while the WebView is (re)initializing, `write` holds it in
-	 * `pendingOutputRef` until `markXtermReady` drains it.
+	 * Terminal output as it is written to a ready xterm, in wire order: as it
+	 * arrives, or when `markXtermReady` drains what arrived while the WebView was
+	 * (re)initializing. Output still held for the xterm is not reported yet.
 	 */
-	onOutput?(bytes: Uint8Array): void;
+	onDrawn?(bytes: Uint8Array): void;
 };
 
 /**
@@ -67,6 +67,7 @@ export function useTerminalMux(args: {
 			return;
 		}
 		xtermRef.current.write(bytes);
+		eventsRef.current.onDrawn?.(bytes);
 	}, [xtermRef]);
 
 	/**
@@ -86,7 +87,11 @@ export function useTerminalMux(args: {
 		xtermReadyRef.current = true;
 		const pending = pendingOutputRef.current;
 		pendingOutputRef.current = [];
-		for (const bytes of pending) xtermRef.current?.write(bytes);
+		for (const bytes of pending) {
+			if (!xtermRef.current) break;
+			xtermRef.current.write(bytes);
+			eventsRef.current.onDrawn?.(bytes);
+		}
 	}, [xtermRef]);
 
 	// One socket per verified connection. Rebuilt when the endpoint changes,
@@ -102,7 +107,6 @@ export function useTerminalMux(args: {
 			onTerminalData: (tid, bytes) => {
 				if (tid !== terminalHandleId) return;
 				write(bytes);
-				eventsRef.current.onOutput?.(bytes);
 			},
 			onTerminalExited: (tid, code) => {
 				if (tid === terminalHandleId) eventsRef.current.onExited(code);

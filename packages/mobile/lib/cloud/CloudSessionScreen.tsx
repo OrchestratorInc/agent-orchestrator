@@ -65,6 +65,7 @@ import { ARCHIVE_CLOUD_SESSION_CONFIRM, cloudSessionMenuGroups } from "./session
 import { useCloudStartup } from "./startup";
 import { useCloudConversation } from "./useCloudConversation";
 import { useCloudPRSummaries } from "./useCloudPRSummaries";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 
 /** A Terminal UI session shows its agent's terminal or its conversation; the sandbox shell is its own page. */
 type SessionView = "chat" | "agent";
@@ -138,6 +139,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 
 	const tui = session?.interfaceMode === "tui";
 	const current: SessionView = view ?? (tui ? "agent" : "chat");
+	const [agentOutputShown, setAgentOutputShown] = useState(false);
+	const showAgentOutput = useCallback(() => setAgentOutputShown(true), []);
 	// A switch of interface (from here or the desktop) shows the new one's own view.
 	useEffect(() => { setView(null); }, [tui]);
 	const terminated = Boolean(session?.isTerminated);
@@ -201,6 +204,9 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// The card covers the screen from the tap; a banner says it only while a
 	// drain waits on the agent's turn, with the conversation still readable.
 	const switchCardShown = cloudSwitchCovers(transition, { launching: launchingSwitch, sourceBusy: switchSourceBusy }) || handoff.pending;
+	// Opening the session is timed until its conversation or its agent's terminal
+	// output shows, and is not covered by the switch card.
+	useSessionContentShown((current === "agent" ? agentOutputShown : Boolean(snapshot)) && !switchCardShown);
 	const switchRecovery = mobileInterfaceTransitionRecoveryMessage(transition);
 	const notice = switchActive || !cloudSwitchNoticeShown(transition) ? undefined : switchNotice(transition);
 	const canSwitch = !terminated && (Boolean(interfaceSwitch.status?.supported) || switchActive);
@@ -620,7 +626,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			<View style={[styles.screen, { paddingTop: headerOverlap }]}>
 				{headerItems}
 				{banners}
-				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} />
+				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} onOutputShown={showAgentOutput} />
 				{switchCard}
 			</View>
 		);

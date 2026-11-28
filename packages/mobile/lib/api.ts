@@ -7,6 +7,7 @@ import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { apiOperation } from "./apiOperation";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { reportRequestTimed, requestStartedIn, transportOf } from "./telemetry/uiUsageRegistry";
 import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
@@ -459,6 +460,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	const timer = setTimeout(cancel, timeoutMs);
 	let received: Response | undefined;
 	let bodyText = "";
+	// Time to the answer's headers, reported once the request's outcome is known.
+	let headersMs = 0;
+	// A background while this is in flight leaves it out of the timings.
+	const startedIn = requestStartedIn();
 	try {
 		const installId = cachedInstallId();
 		const startedAt = Date.now();
@@ -474,6 +479,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 				},
 			});
 			noteRequestAnswered(startedAt);
+			headersMs = Date.now() - startedAt;
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -489,9 +495,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
 			captureMobileApiError(apiOperation(init?.method, path), "timeout", undefined, undefined, undefined, cfg.hostId);
+			reportRequestTimed(null, transportOf(cfg.endpointKind), false, startedIn);
 			throw new UnreachableError("timeout", { cause: e });
 		} else {
 			captureMobileApiError(apiOperation(init?.method, path), "offline", undefined, undefined, undefined, cfg.hostId);
+			reportRequestTimed(null, transportOf(cfg.endpointKind), false, startedIn);
 			throw new UnreachableError("offline", { cause: e });
 		}
 	} finally {
@@ -500,6 +508,9 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}
 	const res = received!;
+	// Once per answered request, by the kind of connection it went over. Timeouts
+	// and network failures were reported above; a cancelled request never is.
+	reportRequestTimed(headersMs, transportOf(cfg.endpointKind), res.ok, startedIn);
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";

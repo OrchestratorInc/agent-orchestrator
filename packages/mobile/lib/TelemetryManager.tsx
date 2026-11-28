@@ -19,7 +19,12 @@ import {
 	telemetryActiveStorage,
 } from "./telemetry/runtime";
 import { surfaceForSegments } from "./telemetry/surfaces";
+import { createAppStateTelemetry } from "./telemetry/appStateTelemetry";
+import { createStallProbe } from "./telemetry/stallProbe";
 import { uiUsage } from "./telemetry/uiUsageRegistry";
+
+// How often the stall probe asks to run; a run 100 ms late or more is a stall.
+const STALL_PROBE_MS = 500;
 
 // RN's global JS error hook. Typed locally so we don't depend on RN internals.
 type ErrorUtilsLike = {
@@ -42,6 +47,10 @@ export function TelemetryManager() {
 	const usable = hostStates.some(({ connection, lastSyncAt }) => connection === "open" && lastSyncAt > 0)
 		|| (Boolean(cloud) && cloudSessionsLoaded);
 	const hasMachine = hostStates.length > 0 || Boolean(cloud);
+	// The newest refresh any paired machine has answered, and whether one is paired.
+	const lastSync = hostStates.reduce((latest, { lastSyncAt }) => Math.max(latest, lastSyncAt), 0);
+	const pairedRef = useRef(false);
+	pairedRef.current = hostStates.length > 0;
 	const connected = hostStates.flatMap(({ config, connection }) => (config && connection === "open" ? [config] : []));
 	// Re-sync when a desktop connects, its endpoint or credential changes, or the
 	// app returns to the foreground; a poll refresh alone does not re-run it.
@@ -73,21 +82,27 @@ export function TelemetryManager() {
 		}
 
 		const frame = requestAnimationFrame(() => markLaunchVisible());
-
-		const onChange = (state: AppStateStatus) => {
-			if (state === "active") {
-				void mobileTelemetry()?.active(telemetryActiveStorage);
-				uiUsage()?.setForeground(true);
-			} else if (state === "background") {
-				// iOS passes through `inactive` for the app switcher and Control
-				// Center too; only a real background ends the stint.
-				uiUsage()?.setForeground(false);
-				markLaunchBackgrounded();
-			}
-		};
+		// Only while in front: a suspended app's first timer back is not a stall.
+		const stalls = createStallProbe({
+			intervalMs: STALL_PROBE_MS,
+			now: Date.now,
+			setTimer: (fn, ms) => setTimeout(fn, ms),
+			clearTimer: (handle) => clearTimeout(handle),
+			onLate: (lateMs) => uiUsage()?.stalled(lateMs),
+		});
+		const appState = createAppStateTelemetry({
+			initial: AppState.currentState,
+			tracker: uiUsage,
+			paired: () => pairedRef.current,
+			stalls,
+			onActive: () => void mobileTelemetry()?.active(telemetryActiveStorage),
+			onBackground: markLaunchBackgrounded,
+		});
+		const onChange = (state: AppStateStatus) => appState.change(state);
 		const sub = AppState.addEventListener("change", onChange);
 		return () => {
 			cancelAnimationFrame(frame);
+			appState.dispose();
 			sub.remove();
 		};
 	}, []);
@@ -100,6 +115,10 @@ export function TelemetryManager() {
 	useEffect(() => {
 		setLaunchHasMachine(hasMachine);
 	}, [hasMachine]);
+
+	useEffect(() => {
+		if (lastSync > 0) uiUsage()?.dataRefreshed(lastSync);
+	}, [lastSync]);
 
 	useEffect(() => {
 		if (!usable) return;

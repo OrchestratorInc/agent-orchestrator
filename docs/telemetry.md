@@ -1108,7 +1108,8 @@ after it is turned back on.
 ## Mobile app screens and launches
 
 When mobile telemetry is active, the phone records which of its screens and
-sheets people use, the errors it shows them, and how long it takes to start,
+sheets people use, the errors it shows them, how long it takes to start, and
+how quickly it responds,
 the mobile counterpart of "UI usage" and "UI responsiveness" above. The
 properties specific to these events are fixed screen names, fixed error kinds,
 counts and durations. Like every phone event they also carry the shared
@@ -1121,6 +1122,7 @@ screenshot. There is no session replay.
 | `mobile.surfaces.viewed` | A screen or sheet stays on screen for a second. At most once per surface per UTC day | `surface` |
 | `mobile.ui.usage_summary` | When the app goes to the background at least 15 minutes after its window started, or at the next launch for a window that ran out while the app was closed. Not sent when nothing was counted | Window fields and counters (below) |
 | `mobile.ui.error_shown` | A user-visible error shows: a warning toast, a board failure view, or a screen or sheet that failed to draw. The same error on the same screen within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface` |
+| `mobile.usage.ui_performance` | With `mobile.ui.usage_summary`, at the end of the same window. Not sent when nothing was measured | `measurement_schema_version`, `window_seconds`, `active_seconds`, `flush_reason`, and the measurements below |
 | `mobile.launches.timed` | Once per app start: when a paired machine's live data or Orchestrator Cloud's first list shows, when 60 seconds pass without it, or when the app goes to the background first | `launch_kind`, `outcome`, `landing_surface`, `clock_origin`, `to_js_start_ms`, `to_visible_ms`, `to_usable_ms` |
 
 - `surface` is one of the app's screens or sheets: `board`, `projects`,
@@ -1153,6 +1155,51 @@ screenshot. There is no session replay.
 | `session_open_from_<source>_count` | Those by where they were opened from: the screen before it (`board`, `project`, `prs`, `spawn`, `notifications_inbox`), another session (`session`), a push tap that opened it (`notification`), a link (`deep_link`), the launch reopening the session the app was left on (`restore`), or `other` |
 | `surface_<surface>_seconds` | Time that screen was on screen while the app was in the foreground |
 | `surface_<surface>_opens` | Times it came on screen, including returning to it |
+
+Properties on `mobile.usage.ui_performance` (`measurement_schema_version` is
+`1`; a count that stayed at 0, or a percentile with nothing measured, is left
+out):
+
+- Session opens: `session_open_count`, counted in
+  `session_open_lt500_count`, `session_open_lt1000_count`,
+  `session_open_lt3000_count` and `session_open_ge3000_count`, and
+  `session_open_p75_ms`: from the session screen coming up after another
+  screen to the session showing its content, that is the chat's messages
+  drawn or the terminal's first output (for an Orchestrator Cloud session, its
+  conversation or its agent's terminal output). A return to a session already
+  open, or a switch between sessions, is not timed.
+  `session_open_dropped_count` counts openings not timed because the screen
+  was left, another session was opened, or the app went to the background
+  before the content showed, or because it took over 30 seconds, as the
+  desktop's `switch_dropped_count` does.
+- Main-thread stalls: a timer asked to run every 500 ms while the app is in
+  front and telemetry is on reports how late it ran. `stall_count` counts runs 100 ms or more late,
+  `stall_long_count` those 500 ms or more, `stall_total_ms` their lateness and
+  `stall_max_ms` the worst. A run 10 seconds or more late is the app having been
+  suspended and is not counted.
+- Requests to paired machines, timed to the answer's headers:
+  `request_count` (requests that got an answer), `request_lt300_count`,
+  `request_lt1000_count`, `request_lt3000_count`, `request_ge3000_count`,
+  `request_p75_ms` and `request_p95_ms`. `request_error_count` counts the
+  answers that were an error status; they are included in `request_count`.
+  `request_unanswered_count` counts requests that timed out or got no answer;
+  they are not included in `request_count`. By connection kind,
+  `request_<kind>_count` and `request_<kind>_p75_ms`, where `<kind>` is `lan`,
+  `tailscale`, `tunnel`, `relay`, or `unknown`. A request the app cancelled
+  because the screen was left, or one still in flight when the app went to the
+  background or telemetry was switched off or on, is not counted. Orchestrator Cloud requests are not included.
+- Returns to the app from the background with a machine paired:
+  `resume_count`, and the time until a paired machine's data was fresh again
+  in `resume_fresh_lt1000_count`,
+  `resume_fresh_lt3000_count`, `resume_fresh_ge3000_count` and
+  `resume_fresh_p75_ms`. `resume_stale_count` counts returns that went back to
+  the background with no fresh data, or got it after 30 seconds or more.
+  Coming back from iOS's `inactive` state (Control Center, Notification
+  Center, the app switcher, Face ID or a system alert) is not a return: the
+  app never left and kept refreshing.
+
+The percentiles come from the last 100 measurements of each kind in the window;
+the counts include every measurement.
 
 Properties on `mobile.launches.timed`:
 
