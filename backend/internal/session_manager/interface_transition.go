@@ -22,8 +22,14 @@ const (
 	interfaceInterruptSettle              = 2 * time.Second
 	interfaceTransitionStopLimit          = 15 * time.Second
 	interfaceTransitionStepLimit          = 45 * time.Second
-	interfaceDeliveryRetry                = 2 * time.Second
-	interfaceDeliveryIdlePoll             = 30 * time.Second
+	// interfaceTransitionHistoryStartLimit bounds starting a Chat target that
+	// must import native history: the supported startup bounds (initialize,
+	// then the first session/load, each up to ports.ChatStartHandshakeLimit),
+	// then the whole settle wait that follows. With less, a slow but supported
+	// launch spent the settle wait and its reload was cancelled mid-load.
+	interfaceTransitionHistoryStartLimit = 2*ports.ChatStartHandshakeLimit + ports.ChatNativeHistorySettleLimit
+	interfaceDeliveryRetry               = 2 * time.Second
+	interfaceDeliveryIdlePoll            = 30 * time.Second
 )
 
 var (
@@ -658,7 +664,13 @@ func (m *Manager) runInterfaceTransition(
 		(modeChanged || transition.SourceMode != domain.SessionModeChat ||
 			!m.chatHoldsProviderConversation(ctx, rec.ID))
 	err = m.startTransitionTarget(ctx, rec.ID, fresh, replayHistory, transition.HistoryPolicy)
-	if errors.Is(err, ports.ErrChatHistoryUnsettled) &&
+	// A provider that timed out its own first session/load (-32602 with a
+	// context deadline) gave no verdict either, so it gets the same single
+	// retry. A settle wait that ran out of AO's own budget is not retried.
+	// Either reason, once AO's own context ran out, is budget exhaustion.
+	retryable := (errors.Is(err, ports.ErrChatHistoryUnsettled) || errors.Is(err, ports.ErrChatHistoryLoadDeadline)) &&
+		!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled)
+	if retryable &&
 		!errors.Is(err, ports.ErrChatRecoveryInconclusive) &&
 		!errors.Is(err, ports.ErrChatHistoryLoadFailed) &&
 		len(ports.ChatHistoryMismatchDimensions(err)) == 0 && transition.TargetMode == domain.SessionModeChat {
@@ -1458,13 +1470,23 @@ func (m *Manager) stopSourceControllerConclusive(rec domain.SessionRecord) error
 	return fmt.Errorf("could not prove the source controller stopped after retry: %w", errors.Join(failures...))
 }
 
+// transitionTargetStartLimit bounds starting a transition target. Only a
+// resumed target that must import native history waits for it to settle after
+// launching, so only that start gets the settle wait on top of the step.
+func transitionTargetStartLimit(fresh, requireNativeHistory bool) time.Duration {
+	if requireNativeHistory && !fresh {
+		return interfaceTransitionHistoryStartLimit
+	}
+	return interfaceTransitionStepLimit
+}
+
 func (m *Manager) startTransitionTarget(
 	ctx context.Context,
 	id domain.SessionID,
 	fresh, requireNativeHistory bool,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) error {
-	ctx, cancel := context.WithTimeout(ctx, interfaceTransitionStepLimit)
+	ctx, cancel := context.WithTimeout(ctx, transitionTargetStartLimit(fresh, requireNativeHistory))
 	defer cancel()
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
