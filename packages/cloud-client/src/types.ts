@@ -59,6 +59,8 @@ export type GitHubUserInstallation = Schemas["GitHubUserInstallation"];
 export type GitHubUserConnection = Schemas["GitHubUserConnection"];
 export type GitHubUserAuthorizationStart =
   Schemas["GitHubUserAuthorizationStart"];
+export type GitHubUpstreamAuthorization =
+  Schemas["GitHubUpstreamAuthorization"];
 export type GitHubRepositoryAccessState =
   Schemas["GitHubRepositoryAccessState"];
 export type GitHubRepository = Schemas["GitHubRepository"];

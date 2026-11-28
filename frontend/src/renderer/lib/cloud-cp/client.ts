@@ -80,6 +80,7 @@ import type {
 	CloudCpGitHubInstallationsResponse,
 	CloudCpSyncGitHubInstallationResponse,
 	CloudCpGitHubUserConnection,
+	CloudCpGitHubAuthorizationStart,
 	CloudCpGitHubRepositoriesPage,
 	CloudCpPutAgentConnectionRequest,
 	CloudCpSendMessageRequest,
@@ -709,6 +710,9 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpStartGitHubInstallationResponse>;
 	getGitHubUser(options?: CloudCpRequestOptions): Promise<CloudCpGitHubUserConnection>;
+	/** Connect GitHub for pull requests on the upstreams of the user's forks (AO's OAuth App). */
+	startGitHubUpstreamAuthorization(options?: CloudCpRequestOptions): Promise<CloudCpGitHubAuthorizationStart>;
+	disconnectGitHubUpstream(options?: CloudCpRequestOptions): Promise<void>;
 	listGitHubInstallations(
 		orgId: string,
 		options?: CloudCpRequestOptions,
@@ -1474,6 +1478,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		startGitHubInstallation: (orgId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/installations/start`, { signal: o?.signal }),
 		getGitHubUser: (o) => requestJson("GET", "/github/user", { signal: o?.signal }),
+		startGitHubUpstreamAuthorization: (o) => requestJson("POST", "/github/upstream/authorize", { signal: o?.signal }),
+		disconnectGitHubUpstream: (o) => requestVoid("DELETE", "/github/upstream", { signal: o?.signal }),
 		listGitHubInstallations: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/github/installations`, { signal: o?.signal }),
 		syncGitHubInstallation: (orgId, installationId, o) =>

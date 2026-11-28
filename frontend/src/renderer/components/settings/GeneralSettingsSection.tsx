@@ -17,6 +17,7 @@ import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
 import { DataRetentionSection } from "./DataRetentionSection";
+import { CloudGitHubUpstreamSection } from "./CloudGitHubUpstreamSection";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
@@ -533,6 +534,8 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 
 			<DefaultCloudSandboxSection />
+
+			<CloudGitHubUpstreamSection />
 
 			<DataRetentionSection />
 

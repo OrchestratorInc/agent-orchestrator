@@ -368,7 +368,7 @@ export function CloudGitHubConnectCard({ connection, disabled }: { connection: C
 				</span>
 				<span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">
 					{connection.busy
-						? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
+						? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser. GitHub may then ask to let AO open pull requests on the repositories your forks came from. Return here when it's done." })
 						: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories Orchestrator can work on" })}
 				</span>
 			</span>
@@ -389,7 +389,7 @@ export function CloudGitHubConnectionStatus({ connection }: { connection: CloudG
 				<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
 					<span>
 						{appConnected
-							? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
+							? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser. GitHub may then ask to let AO open pull requests on the repositories your forks came from. Return here when it's done." })
 							: null}
 					</span>
 					<Button

@@ -307,6 +307,23 @@ export class CloudClient {
     });
   }
 
+  /** Connect GitHub for pull requests on the upstreams of the user's forks (AO's OAuth App). */
+  startGitHubUpstreamAuthorization(
+    options: RequestOptions = {},
+  ): Promise<GitHubUserAuthorizationStart> {
+    return this.request("/api/cloud/v1/github/upstream/authorize", {
+      method: "POST",
+      signal: options.signal,
+    });
+  }
+
+  disconnectGitHubUpstream(options: RequestOptions = {}): Promise<void> {
+    return this.request("/api/cloud/v1/github/upstream", {
+      method: "DELETE",
+      signal: options.signal,
+    });
+  }
+
   async listGitHubInstallations(
     orgId: string,
     options: RequestOptions = {},
