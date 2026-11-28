@@ -111,6 +111,10 @@ jobs:
       - name: Test workspace teardown and session kill
         run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate|TaskNaming|RenameTaskBranch' ./internal/adapters/workspace/... ./internal/session_manager/
 
+      # The spawn PATH and branch-namespacing failures above, fixed in #3681.
+      - name: Test spawn PATH and dev branch namespace
+        run: go test -race -count=1 -v -run '^TestSpawn(_DefaultsBranchUnderDevNamespaceForDevDataDir|_ExplicitBranchBypassesDevNamespace|_DoesNotAddNodeRuntimeForNativeBinary|AndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH)$' ./internal/session_manager/
+
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
 
