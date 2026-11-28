@@ -365,6 +365,7 @@ func (a *API) Register(root chi.Router) {
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
 				browserCommand := middleware.Timeout(max(timeout, browserCommandBudget))(next)
+				connectors := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				deviceCommand := middleware.Timeout(max(timeout, deviceCommandBudget))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
@@ -392,6 +393,12 @@ func (a *API) Register(root chi.Router) {
 					}
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/prs/{id}/stack/merge" {
 						stackMerge.ServeHTTP(w, req)
+						return
+					}
+					// Reading an account's connectors runs the provider CLI's health
+					// check of every server (claude mcp list), bounded at 90 s.
+					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/agents/accounts/{accountId}/connectors" {
+						connectors.ServeHTTP(w, req)
 						return
 					}
 					// A spawn, an orchestrator start or a restore runs the project's

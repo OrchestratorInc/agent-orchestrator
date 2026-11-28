@@ -77,6 +77,9 @@ type Service struct {
 	keyCheck       KeyCheck
 	uiLogin        UILogin
 
+	// connectors caches each account's last connector list.
+	connectors connectorCache
+
 	// keyMu serializes changes to an API key account's key with each other and
 	// with removing an account, apart from mu so a key check never holds it.
 	keyMu sync.Mutex

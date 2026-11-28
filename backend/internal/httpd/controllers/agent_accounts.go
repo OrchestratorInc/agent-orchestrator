@@ -54,11 +54,17 @@ func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Post("/agents/accounts/login/{operationId}/verify", c.verifyLogin)
 	r.Post("/agents/accounts/login/{operationId}/cancel", c.cancelLogin)
 	r.Post("/agents/accounts/api-keys", c.addAPIKey)
-	r.Put("/agents/accounts/{accountId}/api-key", c.replaceAPIKey)
 	r.Get("/agents/accounts/sessions/{sessionId}", c.sessionAccounts)
 	r.Put("/agents/accounts/sessions/{sessionId}", c.switchSession)
+	c.registerAccount(r)
+}
+
+// registerAccount adds the routes that act on one account.
+func (c *AgentAccountsController) registerAccount(r chi.Router) {
+	r.Put("/agents/accounts/{accountId}/api-key", c.replaceAPIKey)
 	r.Post("/agents/accounts/{accountId}/login", c.signInAgain)
 	r.Post("/agents/accounts/{accountId}/default", c.setDefault)
+	r.Get("/agents/accounts/{accountId}/connectors", c.connectors)
 	r.Post("/agents/accounts/{accountId}/reset-credit", c.consumeResetCredit)
 	r.Delete("/agents/accounts/{accountId}", c.remove)
 }
@@ -193,6 +199,54 @@ func (c *AgentAccountsController) setDefault(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	c.writeAccounts(w, r, false)
+}
+
+// AgentAccountConnectorLister reads the connectors an account's sessions load.
+// It is optional so account services without connectors need not stub it.
+type AgentAccountConnectorLister interface {
+	Connectors(ctx context.Context, accountID string, refresh bool) (domain.AgentConnectorsReading, error)
+}
+
+// connectors lists an account's connectors (Claude: its claude.ai connectors),
+// reusing a recent reading unless refresh=true.
+func (c *AgentAccountsController) connectors(w http.ResponseWriter, r *http.Request) {
+	lister, ok := c.Svc.(AgentAccountConnectorLister)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/accounts/{accountId}/connectors")
+		return
+	}
+	refresh := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("refresh")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_REFRESH", "refresh must be true or false", nil)
+			return
+		}
+		refresh = parsed
+	}
+	reading, err := lister.Connectors(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")), refresh)
+	if err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, agentAccountConnectorsResponse(reading))
+}
+
+func agentAccountConnectorsResponse(reading domain.AgentConnectorsReading) AgentAccountConnectorsResponse {
+	out := AgentAccountConnectorsResponse{
+		AccountID:   reading.AccountID,
+		Unavailable: string(reading.Unavailable),
+		Connectors:  make([]AgentAccountConnector, 0, len(reading.Connectors)),
+		Error:       reading.Error,
+	}
+	for _, connector := range reading.Connectors {
+		out.Connectors = append(out.Connectors, AgentAccountConnector{Name: connector.Name, Status: string(connector.Status)})
+	}
+	if !reading.CheckedAt.IsZero() {
+		checked := reading.CheckedAt.UTC()
+		out.CheckedAt = &checked
+	}
+	return out
 }
 
 func (c *AgentAccountsController) remove(w http.ResponseWriter, r *http.Request) {

@@ -511,7 +511,7 @@ describe("HarnessLoginPanel", () => {
 		]} onVerify={onVerify} onClose={onClose} onTerminal={vi.fn()} />);
 		const user = userEvent.setup();
 		const method = screen.getByRole("button", { name: "Setup token" });
-		expect(method).toHaveAccessibleDescription("Paste a token from claude setup-token.");
+		expect(method).toHaveAccessibleDescription("Paste a token from claude setup-token. It can’t load your claude.ai connectors (Gmail, Calendar, Drive).");
 		await user.click(method);
 		expect(startAgentUILogin).not.toHaveBeenCalled();
 		const input = screen.getByPlaceholderText("sk-ant-oat01-…");

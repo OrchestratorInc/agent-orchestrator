@@ -30,7 +30,7 @@ func withSavedSetupToken(t *testing.T) string {
 }
 
 // Choosing the setup token in AO's login menu is an explicit sign-in, so it
-// signs sessions in even when Claude Code has a login of its own.
+// signs sessions in over API keys Claude Code would otherwise find.
 func TestAugmentRuntimeEnvSignsInWithChosenSetupToken(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -321,5 +321,87 @@ func TestRuntimeCredentialEnvChoosesTheCloudTokenAgainstHeldBackKeys(t *testing.
 	}
 	if len(base) != 1 {
 		t.Fatalf("base was changed: %v", base)
+	}
+}
+
+// A usable claude.ai login of Claude Code's own (one made with `claude auth
+// login` outside AO) wins over the menu's setup token: the token is limited to
+// inference and would hide the user's claude.ai connectors (#9101). A login
+// that can no longer be used or renewed does not.
+func TestChosenSetupTokenYieldsToUsableClaudeAILogin(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		credentials string
+		wantToken   bool
+	}{
+		{"usable claude.ai login", `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-native","refreshToken":"r","expiresAt":4102444800000}}`, false},
+		{"expired login without refresh token", `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-native","expiresAt":946684800000}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := withSavedSetupToken(t)
+			configDir := os.Getenv("CLAUDE_CONFIG_DIR")
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte(tc.credentials), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			env := map[string]string{}
+			(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+			if got := env["CLAUDE_CODE_OAUTH_TOKEN"] == testSetupToken; got != tc.wantToken {
+				t.Fatalf("setup token injected = %v, want %v", got, tc.wantToken)
+			}
+		})
+	}
+}
+
+// writeUsableClaudeAILogin stores a claude.ai login in the test's Claude config
+// folder, as `claude auth login` would.
+func writeUsableClaudeAILogin(t *testing.T) {
+	t.Helper()
+	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	login := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-native","refreshToken":"r","expiresAt":4102444800000}}`
+	if err := os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte(login), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The launch inherits the daemon's environment and Claude Code takes a
+// credential variable over its stored login. When the stored login wins over
+// the saved setup token, a credential the daemon itself has must be blanked,
+// or it would sign the session in instead of the login.
+func TestUsableClaudeAILoginIsNotShadowedByAmbientCredentials(t *testing.T) {
+	dataDir := withSavedSetupToken(t)
+	writeUsableClaudeAILogin(t)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-ambient")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ambient")
+
+	env := map[string]string{}
+	(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if value, set := env[name]; !set || value != "" {
+			t.Fatalf("%s = %q (set %v), want blanked so the stored login signs in", name, value, set)
+		}
+	}
+	if value, set := env["ANTHROPIC_AUTH_TOKEN"]; set {
+		t.Fatalf("ANTHROPIC_AUTH_TOKEN added although the daemon has none: %q", value)
+	}
+}
+
+// A credential set for this launch (project environment) keeps its precedence
+// over both the saved setup token and the stored login.
+func TestLaunchSpecificCredentialOutranksUsableClaudeAILogin(t *testing.T) {
+	dataDir := withSavedSetupToken(t)
+	writeUsableClaudeAILogin(t)
+	env := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-api03-project"}
+	(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+	if env["ANTHROPIC_API_KEY"] != "sk-ant-api03-project" {
+		t.Fatal("the launch-specific key was changed")
+	}
+	if value, set := env["CLAUDE_CODE_OAUTH_TOKEN"]; set {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q, want untouched", value)
 	}
 }

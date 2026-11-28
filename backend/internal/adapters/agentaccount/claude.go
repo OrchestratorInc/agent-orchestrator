@@ -73,17 +73,38 @@ var claudeSetupToken = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
 
 // LaunchEnv points Claude Code at home. Claude keys the folder's Keychain login
 // on the exact path text, so both variables carry the same string. A setup
-// token account's CLI signs in with its saved token.
+// token account's CLI signs in with its saved token, unless the folder also
+// holds a usable claude.ai login (the account was signed in again with
+// `claude auth login`): the token would shadow that login, and with it the
+// user's claude.ai connectors, which a setup token cannot load (#9101).
 func (*Claude) LaunchEnv(home string) map[string]string {
 	if home == "" {
 		return nil
 	}
 	env := map[string]string{"CLAUDE_CONFIG_DIR": home, "CLAUDE_SECURESTORAGE_CONFIG_DIR": home}
 	neutralize(env, claudeCredentialEnv...)
-	if token, err := readSetupToken(home); err == nil {
+	if token, err := readSetupToken(home); err == nil && !claudeHasSubscriptionLogin(home) {
 		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
 	}
 	return env
+}
+
+// claudeHasSubscriptionLogin reports whether home holds a claude.ai login of
+// its own that Claude Code can use or renew. Replaced in tests.
+var claudeHasSubscriptionLogin = func(home string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return agentcreds.HasUsableSubscriptionLogin(ctx, agentcreds.ResolveOptions{
+		ConfigDir: home, AllowKeychain: true,
+		// The folder's own login: both config variables name home, exactly
+		// as LaunchEnv hands them to the CLI.
+		Env: func(key string) string {
+			if key == "CLAUDE_CONFIG_DIR" || key == "CLAUDE_SECURESTORAGE_CONFIG_DIR" {
+				return home
+			}
+			return os.Getenv(key)
+		},
+	}, claudeNow())
 }
 
 // SaveSetupToken saves a `claude setup-token` token as home's sign-in.

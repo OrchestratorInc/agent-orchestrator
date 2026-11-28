@@ -4957,6 +4957,29 @@ type AgentAccountUsageByModel struct {
 	CostNanos int64  `json:"costNanos"`
 }
 
+// AgentAccountConnectorsQuery asks for a fresh connector reading.
+type AgentAccountConnectorsQuery struct {
+	Refresh bool `query:"refresh" description:"Read the list again instead of reusing one younger than ten minutes."`
+}
+
+// AgentAccountConnectorsResponse is the connectors an account's sessions load:
+// for Claude, the claude.ai connectors of its claude.ai login. Unavailable set
+// means the account cannot load any and no list was read; error set means the
+// read failed.
+type AgentAccountConnectorsResponse struct {
+	AccountID   string                  `json:"accountId"`
+	Unavailable string                  `json:"unavailable,omitempty" enum:"setup_token,api_key,unsupported" description:"Why the account cannot load connectors: a setup token or API key carries no claude.ai account, or the provider has none."`
+	Connectors  []AgentAccountConnector `json:"connectors"`
+	Error       string                  `json:"error,omitempty"`
+	CheckedAt   *time.Time              `json:"checkedAt,omitempty"`
+}
+
+// AgentAccountConnector is one connector and how the CLI last found it.
+type AgentAccountConnector struct {
+	Name   string `json:"name"`
+	Status string `json:"status" enum:"connected,needs_auth,failed,unknown"`
+}
+
 // SessionAgentAccountsResponse is the account a session uses per provider.
 type SessionAgentAccountsResponse struct {
 	Claude string `json:"claude,omitempty"`

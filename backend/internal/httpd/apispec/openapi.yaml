@@ -1096,6 +1096,55 @@ paths:
       summary: Save a new key for an API key account, once the provider accepts it
       tags:
       - agents
+  /api/v1/agents/accounts/{accountId}/connectors:
+    get:
+      operationId: listAgentAccountConnectors
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      - description: Read the list again instead of reusing one younger than ten minutes.
+        in: query
+        name: refresh
+        schema:
+          description: Read the list again instead of reusing one younger than ten
+            minutes.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountConnectorsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the connectors an account's sessions load, such as its claude.ai
+        connectors
+      tags:
+      - agents
   /api/v1/agents/accounts/{accountId}/default:
     post:
       operationId: setDefaultAgentAccount
@@ -17629,6 +17678,48 @@ components:
           type:
           - "null"
           - integer
+      type: object
+    AgentAccountConnector:
+      properties:
+        name:
+          type: string
+        status:
+          enum:
+          - connected
+          - needs_auth
+          - failed
+          - unknown
+          type: string
+      required:
+      - name
+      - status
+      type: object
+    AgentAccountConnectorsResponse:
+      properties:
+        accountId:
+          type: string
+        checkedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        connectors:
+          items:
+            $ref: '#/components/schemas/AgentAccountConnector'
+          type: array
+        error:
+          type: string
+        unavailable:
+          description: 'Why the account cannot load connectors: a setup token or API
+            key carries no claude.ai account, or the provider has none.'
+          enum:
+          - setup_token
+          - api_key
+          - unsupported
+          type: string
+      required:
+      - accountId
+      - connectors
       type: object
     AgentAccountExtraUsage:
       properties:
