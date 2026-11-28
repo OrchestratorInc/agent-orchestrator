@@ -522,7 +522,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The models and reasoning efforts a new Cloud task for this agent runs with, for the authenticated user in this organization. The list is what the next task's worker runs, not a suggestion, and needs no live worker: `source` says whether a Cloud worker running the same CLI version with the user's current credential reported it, or it is the list the control plane's pinned CLI version supports. A task that names no model keeps the project's or the agent's default. A listed model without `efforts` takes no reasoning effort; every model that takes one lists its levels. */
+        /** @description The models and reasoning efforts a new Cloud task for this agent runs with, for the authenticated user in this organization. The list is what the next task's worker runs, not a suggestion, and needs no live worker: `source` says whether it is the account's own list for the same CLI version under the user's current credential (saved at sign-in or reported by a Cloud worker), or the list the control plane's pinned CLI version supports. A task that names no model keeps the project's or the agent's default. A listed model without `efforts` takes no reasoning effort; every model that takes one lists its levels. */
         get: operations["listUserAgentModels"];
         put?: never;
         post?: never;
@@ -3588,7 +3588,7 @@ export interface components {
         /** @description One harness as the organization's new Cloud sessions run it. */
         CloudHarnessVersion: {
             /** @enum {string} */
-            agentId: "claude-code" | "codex" | "cursor";
+            agentId: "claude-code" | "codex" | "cursor" | "opencode";
             /** @description The release of the harness's CLI that AO tested and its images bake. */
             defaultVersion: string;
             /** @description The newer release the organization chose in its place; absent while it runs the default. */
@@ -4795,13 +4795,13 @@ export interface components {
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
             /**
-             * @description Where the list came from. worker: reported by a Cloud worker running this CLI version with the user's current credential. release: the models the control plane's pinned CLI version supports.
+             * @description Where the list came from. worker: the account's own list for this CLI version under the user's current credential, saved when the user signed in (fetched from the provider with that login) or reported by a Cloud worker running this CLI version. release: the models the control plane's pinned CLI version supports.
              * @enum {string}
              */
             source?: "worker" | "release";
             /** @description The harness CLI version the list is for. */
             cliVersion?: string;
-            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
+            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a session list becomes the user's catalog. */
             accountListed?: boolean;
             /** @description On a session's list, true when its worker marks the models it added for the session (sessionOnly). A Claude Code list without it does not become the user's catalog. */
             sessionOnlyMarked?: boolean;
@@ -6826,7 +6826,7 @@ export interface components {
         /** @description The app install's stable identifier. */
         PushInstallId: string;
         /** @description A harness whose version AO Cloud manages. */
-        CloudHarnessAgent: "claude-code" | "codex" | "cursor";
+        CloudHarnessAgent: "claude-code" | "codex" | "cursor" | "opencode";
         OrgId: string;
         ProjectId: string;
         SessionId: string;

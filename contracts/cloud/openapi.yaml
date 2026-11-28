@@ -1072,9 +1072,10 @@ paths:
         The models and reasoning efforts a new Cloud task for this agent runs
         with, for the authenticated user in this organization. The list is
         what the next task's worker runs, not a suggestion, and needs no live
-        worker: `source` says whether a Cloud worker running the same CLI
-        version with the user's current credential reported it, or it is the
-        list the control plane's pinned CLI version supports. A task that
+        worker: `source` says whether it is the account's own list for the
+        same CLI version under the user's current credential (saved at
+        sign-in or reported by a Cloud worker), or the list the control
+        plane's pinned CLI version supports. A task that
         names no model keeps the project's or the agent's default. A listed
         model without `efforts` takes no reasoning effort; every model that
         takes one lists its levels.
@@ -5778,7 +5779,7 @@ components:
       description: A harness whose version AO Cloud manages.
       schema:
         type: string
-        enum: [claude-code, codex, cursor]
+        enum: [claude-code, codex, cursor, opencode]
     OrgId:
       name: orgId
       in: path
@@ -6644,7 +6645,7 @@ components:
       properties:
         agentId:
           type: string
-          enum: [claude-code, codex, cursor]
+          enum: [claude-code, codex, cursor, opencode]
         defaultVersion:
           type: string
           description: The release of the harness's CLI that AO tested and its images bake.
@@ -9238,8 +9239,10 @@ components:
             $ref: "#/components/schemas/ChatModel"
         source:
           description: >-
-            Where the list came from. worker: reported by a Cloud worker
-            running this CLI version with the user's current credential.
+            Where the list came from. worker: the account's own list for this
+            CLI version under the user's current credential, saved when the
+            user signed in (fetched from the provider with that login) or
+            reported by a Cloud worker running this CLI version.
             release: the models the control plane's pinned CLI version
             supports.
           type: string
@@ -9251,7 +9254,7 @@ components:
           description: >-
             On a session's list, true when its worker listed the models for
             the signed-in account rather than from the CLI's built-in list.
-            Only such a list becomes the user's catalog.
+            Only such a session list becomes the user's catalog.
           type: boolean
         sessionOnlyMarked:
           description: >-
