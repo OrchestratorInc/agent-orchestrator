@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
 import { useSettings, useUpdateHarnessDefault } from "../../../hooks/useSettings";
-import { agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
+import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { groupModelProviders } from "../../../lib/model-providers";
@@ -100,6 +100,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div></div>;
 	}
 	const data = catalog.data;
+	const acceptsDirectModel = acceptsLocalModelID(agentId, data);
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
@@ -178,7 +179,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 			</span> : null}
 		</div>
 		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
-		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
+		{providerModels.length > MODELS_PAGE_SIZE ? <label data-field="search" className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
 			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}
 				className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"
@@ -186,7 +187,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</label> : null}
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? null
-			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty")}</p>
+			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : acceptsDirectModel ? "settings.harness.models.directEntry" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">

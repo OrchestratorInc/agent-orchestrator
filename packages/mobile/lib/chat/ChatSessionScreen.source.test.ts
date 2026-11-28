@@ -89,13 +89,13 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain('disabled={switchingToTerminal || Boolean(failedStart)}');
 	});
 
-	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
-		expect(screenSource).toContain("sessionPRReadyForReview(session)");
-		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
-		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
-		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
-		expect(screenSource).toContain("reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number)");
-		expect(screenSource).toContain("<ChatComposer");
+	it("offers every PR the worker raised over the chat composer, leaving it in place", () => {
+		expect(screenSource).toContain("usePRSummaries(config && hasPullRequests ? [{ config, sessionId: session.id }] : [])");
+		expect(screenSource).toContain("useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined)");
+		expect(screenSource).toContain("pullRequests={pullRequests}");
+		expect(screenSource).toContain("onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}");
+		expect(screenSource).toContain("pullRequestListRequest={pullRequestListRequest}");
+		expect(screenSource).toContain("<StableChatComposer");
 	});
 
 });
@@ -135,7 +135,7 @@ describe("the composer and the keyboard", () => {
 		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
 		expect(root).toBeGreaterThan(-1);
 		expect(follower).toBeGreaterThan(root);
-		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+		expect(screenSource.indexOf("<StableChatComposer")).toBeGreaterThan(follower);
 	});
 	// The root padded for the keyboard shrank the list, which then chased its end
 	// from JS a frame or more behind the keys: the text lagged, then jumped up.

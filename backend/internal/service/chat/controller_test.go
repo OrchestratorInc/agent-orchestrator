@@ -3192,6 +3192,10 @@ type harness struct {
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
+	// skillSharingOff switches the skill sharing setting off; it is on.
+	skillSharingOff atomic.Bool
+	// workspace is the directory the controller was started in.
+	workspace string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3318,15 +3322,17 @@ func newHarnessInWorkspace(
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now:     h.now,
-		Renders: h.renders,
-		DataDir: h.rendersDir,
+		Now:                 h.now,
+		Renders:             h.renders,
+		DataDir:             h.rendersDir,
+		SkillSharingEnabled: func(context.Context) bool { return !h.skillSharingOff.Load() },
 		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
 			h.reconciled = append(h.reconciled, id)
 			return h.reconcileErr
 		},
 	})
 
+	h.workspace = workspace
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID:     testSession,
 		ProjectID:     testProject,
@@ -4425,6 +4431,37 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 	}
 	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna", string(testSession) + ":5.6-full", string(testSession) + ":"}) {
 		t.Fatalf("model persistence log = %v, want model override cleared", log)
+	}
+}
+
+func TestSetTurnSettingsPersistsEffortBeforeRouting(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	var persisted []string
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "persist-effort-id" },
+		OnEffortChanged: func(id domain.SessionID, effort string) {
+			persisted = append(persisted, string(id)+":"+effort)
+		},
+	})
+	t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, effort := range []string{"high", "high", ""} {
+		if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{ReasoningEffort: effort}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{string(testSession) + ":high", string(testSession) + ":"}
+	if !reflect.DeepEqual(persisted, want) {
+		t.Fatalf("persisted effort changes = %v, want %v", persisted, want)
 	}
 }
 
@@ -6986,6 +7023,82 @@ func TestCompactionReplayDoesNotDuplicateTheRow(t *testing.T) {
 	}
 }
 
+// A compaction a driver sees start is one row that runs, then settles in place.
+// While it runs the history is still what it was, so the conversation is not
+// marked compacted until the row settles.
+func TestCompactionRowRunsThenSettlesInPlace(t *testing.T) {
+	conv := newCompactingConversation()
+	h := newHarnessWithConversation(t, conv)
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderItemID: "cc-1",
+		ActivityStatus: domain.ActivityStatusRunning,
+		Detail:         []byte(`{"tokensBefore":180000,"contextWindow":200000}`),
+	})
+	running := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 1 })
+	if row := running.Activities[0]; row.Status != domain.ActivityStatusRunning || row.Summary != "Compacting the conversation history" {
+		t.Fatalf("running row = %q %q", row.Status, row.Summary)
+	}
+	if running.Conversation.CompactedAt != nil {
+		t.Fatal("conversation marked compacted while its compaction runs")
+	}
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderItemID: "cc-1",
+		Summary: "Compacted history, freeing 156.0k tokens of context",
+		Detail:  []byte(`{"tokensBefore":180000,"tokensAfter":24000,"tokensReclaimed":156000,"contextWindow":200000}`),
+	})
+	settled := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Activities) == 1 && s.Activities[0].Status == domain.ActivityStatusCompleted && s.Conversation.CompactedAt != nil
+	})
+	var detail struct {
+		Event           string `json:"event"`
+		TokensReclaimed int64  `json:"tokensReclaimed"`
+	}
+	if err := json.Unmarshal(settled.Activities[0].Detail, &detail); err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if detail.Event != "compaction" || detail.TokensReclaimed != 156000 {
+		t.Fatalf("detail = %+v", detail)
+	}
+}
+
+// A failed compaction left the history as it was. Its row keeps the provider's
+// reason apart from its label, and the conversation is not marked compacted.
+func TestFailedCompactionKeepsItsReasonAndTheHistory(t *testing.T) {
+	conv := newCompactingConversation()
+	h := newHarnessWithConversation(t, conv)
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderItemID: "cc-1",
+		ActivityStatus: domain.ActivityStatusFailed, Summary: "Conversation too long",
+	})
+	// A marker after it, so the flag is checked after the compaction projected.
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventActivityCompleted, ProviderItemID: "exec-1",
+		ActivityKind: domain.ActivityKindCommand, ActivityStatus: domain.ActivityStatusCompleted,
+		Summary: "date -u",
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 2 })
+	row := snapshot.Activities[0]
+	if row.Status != domain.ActivityStatusFailed || row.Summary != "Could not compact the conversation history: Conversation too long" {
+		t.Fatalf("failed row = %q %q", row.Status, row.Summary)
+	}
+	var detail struct {
+		Event string `json:"event"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(row.Detail, &detail); err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if detail.Event != "compaction" || detail.Error != "Conversation too long" {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if snapshot.Conversation.CompactedAt != nil {
+		t.Fatal("a failed compaction marked the conversation compacted")
+	}
+}
+
 func TestCompactReportsWhatIsAboutToBeReclaimed(t *testing.T) {
 	conv := newCompactingConversation()
 	h := newHarnessWithConversation(t, conv)
@@ -7478,5 +7591,38 @@ func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
 	}
 	if launched {
 		t.Fatal("unsupported permission reached provider launch")
+	}
+}
+
+func TestStartTurnsOpenCodeCompactionOffInThePreparedEnvironment(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	conversation, err := st.CreateConversation(ctx, "opencode-compaction-off", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := st.SetConversationSettings(ctx, conversation.ID, domain.ConversationSettings{AutoCompactWindow: domain.AutoCompactOff}, now); err != nil {
+		t.Fatalf("SetConversationSettings: %v", err)
+	}
+	var started ports.ChatStartConfig
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation(), startCfg: &started}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "opencode-compaction-off-start" },
+	})
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
+	// A persistent host launches with the environment prepared here, not the one passed to Start.
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessOpenCodeV2, WorkspacePath: t.TempDir(),
+		PrepareControllerEnv: func(context.Context, domain.SessionControllerOwner) (map[string]string, error) {
+			return map[string]string{"OPENCODE_CONFIG_CONTENT": `{"model":"a/b"}`}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got, want := started.Env["OPENCODE_CONFIG_CONTENT"], `{"compaction":{"auto":false},"model":"a/b"}`; got != want {
+		t.Fatalf("OpenCode config = %s, want %s", got, want)
 	}
 }

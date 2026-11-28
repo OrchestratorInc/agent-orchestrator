@@ -1,0 +1,550 @@
+// Which parts of the app people look at and use, counted on the phone and sent
+// as a few summaries, the mobile counterpart of the desktop's UI usage events
+// (docs/telemetry.md, "UI usage"). Pure: the clock, the capture call and the
+// storage write are injected, so every rule here is unit-tested. runtime.ts
+// wires the real ones.
+//
+// Nothing here can carry content: a surface is a fixed id (surfaces.ts), a
+// session-open source and an error kind are fixed ids, and everything else is
+// a count or a duration.
+
+import { isSessionSurface, SURFACES, type Surface } from "./surfaces";
+import {
+	emptyPerf,
+	hasPerf,
+	mergePerf,
+	PERF_EVENT,
+	perfProperties,
+	recordRequest,
+	recordResume,
+	recordResumeFresh,
+	recordResumeStale,
+	recordSessionOpen,
+	recordSessionOpenDropped,
+	recordStall,
+	restorePerf,
+	type PerfWindow,
+	type Transport,
+} from "./uiPerformance";
+
+export const SESSION_OPEN_SOURCES = [
+	"board",
+	"project",
+	"prs",
+	"spawn",
+	"notification",
+	"notifications_inbox",
+	"deep_link",
+	// The launch reopened the session the app was left on (RouteRestorer).
+	"restore",
+	// Opened from another session, such as a worker from its orchestrator.
+	"session",
+	"other",
+] as const;
+export type SessionOpenSource = (typeof SESSION_OPEN_SOURCES)[number];
+export type OpenedBySource = "notification" | "deep_link" | "restore";
+/** The session a mark is for; `hostId` when the route names its machine. */
+export type SessionTarget = { sessionId: string; hostId?: string };
+
+export const ERROR_PRESENTATIONS = ["toast", "screen", "sheet"] as const;
+export type ErrorPresentation = (typeof ERROR_PRESENTATIONS)[number];
+
+export const ERROR_KINDS = [
+	"render_crash",
+	"unreachable",
+	"auth",
+	"incompatible_host",
+	"rate_limited",
+	"server_error",
+	"phone_offline",
+	"cloud_unavailable",
+	"action_failed",
+] as const;
+export type ErrorKind = (typeof ERROR_KINDS)[number];
+
+/** A summary covers at least this much wall time; shorter windows carry on. */
+export const UI_WINDOW_MS = 15 * 60_000;
+/** A surface counts as viewed once it has been on screen this long. */
+export const VIEW_DWELL_MS = 1_000;
+/** The same error shown again within this long is counted but not sent again. */
+export const ERROR_REPEAT_MS = 5 * 60_000;
+/** A push, link or relaunch opens the session it names within this long. */
+export const OPENED_BY_MS = 5_000;
+export const UI_MEASUREMENT_SCHEMA_VERSION = 1;
+
+export const UI_EVENTS = {
+	viewed: "mobile.surfaces.viewed",
+	summary: "mobile.ui.usage_summary",
+	errorShown: "mobile.ui.error_shown",
+	performance: PERF_EVENT,
+} as const;
+type UiEvent = (typeof UI_EVENTS)[keyof typeof UI_EVENTS];
+
+const SOURCE_BY_SURFACE: Partial<Record<Surface, SessionOpenSource>> = {
+	board: "board",
+	projects: "project",
+	project: "project",
+	prs: "prs",
+	compose: "spawn",
+	spawn: "spawn",
+	cloud_new_project: "spawn",
+	notifications: "notifications_inbox",
+};
+
+export type UsageWindow = {
+	startedAt: number;
+	/** The last time the window was saved, which ends a window found at launch. */
+	updatedAt: number;
+	activeMs: number;
+	foregrounds: number;
+	surfaces: Partial<Record<Surface, { ms: number; opens: number }>>;
+	sessionOpens: Partial<Record<SessionOpenSource, number>>;
+	errors: number;
+	/** Responsiveness, sent as its own event at the same flush (uiPerformance.ts). */
+	perf: PerfWindow;
+};
+
+export type PersistedUiUsage = { window: UsageWindow; viewedDay: string; viewed: Surface[] };
+
+export type UiUsageDeps = {
+	now: () => number;
+	/** Returns false when the event was not sent (opted out, kill switch, rate cap). */
+	capture: (event: UiEvent, properties: Record<string, unknown>) => boolean;
+	save: (state: PersistedUiUsage) => void;
+	clear: () => void;
+};
+
+export type UiUsageTracker = {
+	/** The surface of the route on screen, from expo-router's segments. */
+	setRoute(surface: Surface): void;
+	/** A route's screen naming which form it took (chat or terminal), or null on unmount. */
+	setVariant(base: Surface, variant: Surface | null): void;
+	setForeground(active: boolean): void;
+	/**
+	 * A session screen is showing `key` (its host and id, kept on the phone).
+	 * Counted once per session, so a remount or a mode switch is not a new
+	 * opening but going straight to another session is.
+	 */
+	sessionOpened(key: string): void;
+	/** The session screen showing `key` is in front again; not a new opening. */
+	sessionReturned(key: string): void;
+	/**
+	 * The session screen in front shows its content: a chat's messages or a
+	 * terminal's first output. Ends the timing of the session's opening.
+	 */
+	sessionContentShown(): void;
+	/**
+	 * A push, a link or the launch's restore is about to open a session, named by
+	 * `target` when known: the source is then credited only to that session (on
+	 * that machine, when named), so a push for the session already on screen, or
+	 * for a same-id session on another machine, cannot claim the next one.
+	 */
+	openedBy(source: OpenedBySource, target?: SessionTarget): void;
+	errorShown(presentation: ErrorPresentation, kind: ErrorKind): void;
+	/** Restores what an earlier run saved; sends it first if its window is over. */
+	restore(saved: PersistedUiUsage | null): void;
+	/**
+	 * Off (opt-out) drops everything counted and the saved copy, and stops
+	 * counting; on starts a fresh window, so nothing from before is sent.
+	 */
+	setEnabled(enabled: boolean): void;
+	isEnabled(): boolean;
+	/** Calls `listener` each time counting is switched on or off; returns the unsubscribe. */
+	onEnabledChange(listener: (enabled: boolean) => void): () => void;
+	current(): Surface | null;
+	/** A daemon request's time to an answer (`null`: none came), over the connection kind it used. */
+	requestTimed(ms: number | null, transport: Transport, ok: boolean): void;
+	/** The JS thread ran a timer `lateMs` late. */
+	stalled(lateMs: number): void;
+	/** Back in front with a machine paired: times how long until fresh data. */
+	resumed(): void;
+	/** A machine's data was refreshed at `syncAt` (epoch ms). */
+	dataRefreshed(syncAt: number): void;
+};
+
+function utcDay(ms: number): string {
+	return new Date(ms).toISOString().slice(0, 10);
+}
+
+function emptyWindow(now: number): UsageWindow {
+	return { startedAt: now, updatedAt: now, activeMs: 0, foregrounds: 0, surfaces: {}, sessionOpens: {}, errors: 0, perf: emptyPerf() };
+}
+
+function hasActivity(window: UsageWindow): boolean {
+	return window.activeMs > 0 || window.errors > 0 || Object.keys(window.surfaces).length > 0;
+}
+
+// Both of a window's events, as one flush sends them.
+function windowEvents(window: UsageWindow, endedAt: number, reason: "background" | "startup"): Array<[UiEvent, Record<string, unknown>]> {
+	const events: Array<[UiEvent, Record<string, unknown>]> = [];
+	if (hasActivity(window)) events.push([UI_EVENTS.summary, summaryProperties(window, endedAt, reason)]);
+	if (hasPerf(window.perf)) {
+		const summary = summaryProperties(window, endedAt, reason);
+		events.push([UI_EVENTS.performance, {
+			...perfProperties(window.perf),
+			window_seconds: summary.window_seconds,
+			active_seconds: summary.active_seconds,
+			flush_reason: reason,
+		}]);
+	}
+	return events;
+}
+
+/** The summary's properties: counters, durations and the fixed ids above. Zeros are left out. */
+export function summaryProperties(window: UsageWindow, endedAt: number, reason: "background" | "startup"): Record<string, unknown> {
+	const props: Record<string, unknown> = {
+		measurement_schema_version: UI_MEASUREMENT_SCHEMA_VERSION,
+		window_seconds: Math.max(0, Math.round((endedAt - window.startedAt) / 1000)),
+		active_seconds: Math.round(window.activeMs / 1000),
+		flush_reason: reason,
+	};
+	if (window.foregrounds > 0) props.foreground_count = window.foregrounds;
+	if (window.errors > 0) props.error_shown_count = window.errors;
+	let opens = 0;
+	for (const source of SESSION_OPEN_SOURCES) {
+		const count = window.sessionOpens[source] ?? 0;
+		if (count > 0) props[`session_open_from_${source}_count`] = count;
+		opens += count;
+	}
+	if (opens > 0) props.session_open_count = opens;
+	for (const surface of SURFACES) {
+		const entry = window.surfaces[surface];
+		if (!entry) continue;
+		const seconds = Math.round(entry.ms / 1000);
+		if (seconds > 0) props[`surface_${surface}_seconds`] = seconds;
+		if (entry.opens > 0) props[`surface_${surface}_opens`] = entry.opens;
+	}
+	return props;
+}
+
+function mergeWindows(earlier: UsageWindow, later: UsageWindow): UsageWindow {
+	const surfaces = { ...earlier.surfaces };
+	for (const [surface, entry] of Object.entries(later.surfaces) as Array<[Surface, { ms: number; opens: number }]>) {
+		const prev = surfaces[surface];
+		surfaces[surface] = { ms: (prev?.ms ?? 0) + entry.ms, opens: (prev?.opens ?? 0) + entry.opens };
+	}
+	const sessionOpens = { ...earlier.sessionOpens };
+	for (const [source, count] of Object.entries(later.sessionOpens) as Array<[SessionOpenSource, number]>) {
+		sessionOpens[source] = (sessionOpens[source] ?? 0) + count;
+	}
+	return {
+		startedAt: earlier.startedAt,
+		updatedAt: later.updatedAt,
+		activeMs: earlier.activeMs + later.activeMs,
+		foregrounds: earlier.foregrounds + later.foregrounds,
+		surfaces,
+		sessionOpens,
+		errors: earlier.errors + later.errors,
+		perf: mergePerf(earlier.perf, later.perf),
+	};
+}
+
+// Whether a mark is for the session `key` ("<host>|<id>") names: the same id,
+// and the same machine when the mark names one. A mark without a target fits any.
+function targets(target: SessionTarget | undefined, key: string): boolean {
+	if (!target) return true;
+	const split = key.lastIndexOf("|");
+	if (target.sessionId !== key.slice(split + 1)) return false;
+	return target.hostId === undefined || target.hostId === key.slice(0, split);
+}
+
+// A saved window is only trusted in the shape this file writes.
+function isWindow(value: unknown): value is UsageWindow {
+	const w = value as UsageWindow | null;
+	return !!w && typeof w === "object" && Number.isFinite(w.startedAt) && Number.isFinite(w.updatedAt)
+		&& Number.isFinite(w.activeMs) && Number.isFinite(w.foregrounds) && Number.isFinite(w.errors)
+		&& typeof w.surfaces === "object" && w.surfaces !== null && typeof w.sessionOpens === "object" && w.sessionOpens !== null;
+}
+
+export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
+	const start = deps.now();
+	// The launch is the window's first time in the foreground.
+	let window: UsageWindow = { ...emptyWindow(start), foregrounds: 1 };
+	let viewedDay = utcDay(start);
+	const viewed = new Set<Surface>();
+	let route: Surface | null = null;
+	let variant: { base: Surface; surface: Surface } | null = null;
+	let shown: Surface | null = null;
+	let shownAt = start;
+	let foreground = true;
+	let activeSince = start;
+	let lastOutsideSession: Surface | null = null;
+	// The session counted since the app last left the session screens.
+	let countedSession: string | null = null;
+	// `latched` once the session screen came up in time: the mark then waits for
+	// that session to load, however long it takes, until the app leaves it.
+	let pendingSource: { source: SessionOpenSource; at: number; target?: SessionTarget; latched?: boolean } | null = null;
+	const pendingLive = (now: number) => !!pendingSource && (pendingSource.latched || now - pendingSource.at <= OPENED_BY_MS);
+	const lastErrorAt = new Map<string, number>();
+	let lastSaveAt = start;
+	let enabled = true;
+	// When the session route came up from outside the session screens: its
+	// first counted opening is timed from here until the session shows its
+	// content. `contentShownAt` holds content that showed before the opening was
+	// counted (a cached chat draws in the same commit), and `openWaiting` an
+	// opening counted before its content showed.
+	let sessionRouteAt: number | null = null;
+	let contentShownAt: number | null = null;
+	let openWaiting: { at: number } | null = null;
+	// The session screen came up but went to the background before its session
+	// was found (a push or a link looking it up): that opening is dropped too.
+	let routeInterrupted = false;
+	const enabledListeners = new Set<(enabled: boolean) => void>();
+	// When the app came back to the front, until fresh data arrives.
+	let resumeAt: number | null = null;
+
+	// No opening is being timed any more; one already counted is dropped.
+	const dropOpen = () => {
+		if (openWaiting && enabled) recordSessionOpenDropped(window.perf);
+		openWaiting = null;
+		sessionRouteAt = null;
+		contentShownAt = null;
+	};
+
+	const finishOpen = (from: number, shownAt: number) => {
+		recordSessionOpen(window.perf, shownAt - from);
+		openWaiting = null;
+		sessionRouteAt = null;
+		contentShownAt = null;
+	};
+
+	const save = (now: number) => {
+		if (!enabled) return;
+		// Bank the foreground time so far, so a window saved before the process
+		// ends carries it with the surface times.
+		if (foreground) {
+			window.activeMs += Math.max(0, now - activeSince);
+			activeSince = now;
+		}
+		lastSaveAt = now;
+		window.updatedAt = now;
+		deps.save({ window, viewedDay, viewed: [...viewed] });
+	};
+
+	const markViewed = (surface: Surface, now: number) => {
+		if (!enabled) return;
+		const day = utcDay(now);
+		if (day !== viewedDay) {
+			viewedDay = day;
+			viewed.clear();
+		}
+		if (viewed.has(surface)) return;
+		// Marked only once sent, so a capped or blocked event is tried again on
+		// the next view rather than lost for the day.
+		if (deps.capture(UI_EVENTS.viewed, { surface })) viewed.add(surface);
+	};
+
+	// Closes the current stint on screen at `now`.
+	const account = (now: number) => {
+		if (enabled && foreground && shown) {
+			const ms = Math.max(0, now - shownAt);
+			const entry = window.surfaces[shown] ?? { ms: 0, opens: 0 };
+			entry.ms += ms;
+			window.surfaces[shown] = entry;
+			if (ms >= VIEW_DWELL_MS) markViewed(shown, now);
+		}
+		shownAt = now;
+	};
+
+	const show = (next: Surface | null) => {
+		if (next === shown) return;
+		const now = deps.now();
+		account(now);
+		const relabel = shown === "session" && next !== null && next !== "session" && isSessionSurface(next);
+		if (relabel) {
+			// The session route became the chat or terminal it shows: one opening, not two.
+			const base = window.surfaces.session;
+			if (base && base.opens > 0) base.opens -= 1;
+		}
+		const previous = shown;
+		shown = next;
+		if (next && enabled) {
+			const entry = window.surfaces[next] ?? { ms: 0, opens: 0 };
+			entry.opens += 1;
+			window.surfaces[next] = entry;
+			if (isSessionSurface(next) && (previous === null || !isSessionSurface(previous))) {
+				sessionRouteAt = now;
+				contentShownAt = null;
+				routeInterrupted = false;
+			}
+			if (!isSessionSurface(next)) {
+				// Left the session screens before the session showed its content.
+				dropOpen();
+				routeInterrupted = false;
+				lastOutsideSession = next;
+				countedSession = null;
+				// Its session screen came and went without the session opening.
+				if (pendingSource?.latched) pendingSource = null;
+			} else if (pendingSource && pendingLive(now)) {
+				pendingSource.latched = true;
+			}
+		}
+		if (now - lastSaveAt >= 60_000) save(now);
+	};
+
+	const effective = (): Surface | null => {
+		if (!route) return null;
+		return variant && variant.base === route ? variant.surface : route;
+	};
+
+	const flush = (reason: "background" | "startup", now: number) => {
+		if (!enabled) return;
+		if (now - window.startedAt < UI_WINDOW_MS) return;
+		for (const [event, properties] of windowEvents(window, now, reason)) deps.capture(event, properties);
+		window = emptyWindow(now);
+		if (foreground) activeSince = now;
+		save(now);
+	};
+
+	return {
+		setRoute(surface) {
+			route = surface;
+			show(effective());
+		},
+		setVariant(base, surface) {
+			if (surface) variant = { base, surface };
+			else if (variant?.base === base) variant = null;
+			show(effective());
+		},
+		setForeground(active) {
+			if (active === foreground) return;
+			const now = deps.now();
+			if (!active) {
+				account(now);
+				if (enabled && resumeAt !== null) recordResumeStale(window.perf);
+				resumeAt = null;
+				// Time away is not loading time: an opening in progress is dropped.
+				if (enabled && sessionRouteAt !== null && !openWaiting) routeInterrupted = true;
+				dropOpen();
+				if (enabled) window.activeMs += Math.max(0, now - activeSince);
+				foreground = false;
+				save(now);
+				flush("background", now);
+				return;
+			}
+			foreground = true;
+			activeSince = now;
+			shownAt = now;
+			if (!enabled) return;
+			window.foregrounds += 1;
+			if (shown) {
+				const entry = window.surfaces[shown] ?? { ms: 0, opens: 0 };
+				entry.opens += 1;
+				window.surfaces[shown] = entry;
+			}
+		},
+		sessionOpened(key) {
+			if (!enabled || key === countedSession) return;
+			const fromSession = countedSession !== null;
+			countedSession = key;
+			const now = deps.now();
+			// Only what marked itself (a push, a link, the launch's restore) for this
+			// session, or the screen it was opened from, names the source; nothing is
+			// guessed. A mark for another session is left for that one.
+			const marked = pendingSource && pendingLive(now) && targets(pendingSource.target, key) ? pendingSource : null;
+			const source: SessionOpenSource = marked
+				? marked.source
+				: fromSession ? "session"
+					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
+			if (marked) pendingSource = null;
+			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
+			// Only an opening from outside the session screens is timed, not a
+			// switch; switching away from one still loading drops it.
+			if (routeInterrupted && !fromSession) recordSessionOpenDropped(window.perf);
+			routeInterrupted = false;
+			if (fromSession || sessionRouteAt === null) dropOpen();
+			else if (contentShownAt !== null) finishOpen(sessionRouteAt, contentShownAt);
+			else {
+				openWaiting = { at: sessionRouteAt };
+				sessionRouteAt = null;
+			}
+		},
+		sessionReturned(key) {
+			if (!enabled) return;
+			countedSession = key;
+			// A return is not an opening, so nothing after it is timed from that
+			// route. An opening still waiting (a chat/terminal switch mid-load) waits on.
+			sessionRouteAt = null;
+			contentShownAt = null;
+			routeInterrupted = false;
+		},
+		sessionContentShown() {
+			if (!enabled) return;
+			const now = deps.now();
+			if (openWaiting) finishOpen(openWaiting.at, now);
+			else if (sessionRouteAt !== null && contentShownAt === null) contentShownAt = now;
+		},
+		openedBy(source, target) {
+			pendingSource = { source, at: deps.now(), ...(target ? { target } : {}) };
+		},
+		errorShown(presentation, kind) {
+			if (!enabled) return;
+			const now = deps.now();
+			window.errors += 1;
+			const surface = shown ?? "other";
+			const key = `${presentation}|${kind}|${surface}`;
+			const last = lastErrorAt.get(key);
+			if (last !== undefined && now - last < ERROR_REPEAT_MS) return;
+			// Held back only once sent, as with screen views: a dropped send is retried.
+			if (deps.capture(UI_EVENTS.errorShown, { presentation, error_kind: kind, surface })) lastErrorAt.set(key, now);
+		},
+		restore(saved) {
+			if (!enabled || !saved || !isWindow(saved.window)) return;
+			const now = deps.now();
+			// A window saved before responsiveness was counted has no perf part.
+			const savedWindow: UsageWindow = { ...saved.window, perf: restorePerf((saved.window as Partial<UsageWindow>).perf) };
+			if (saved.viewedDay === viewedDay && Array.isArray(saved.viewed)) {
+				for (const surface of saved.viewed) if ((SURFACES as readonly string[]).includes(surface)) viewed.add(surface);
+			}
+			if (now - saved.window.startedAt >= UI_WINDOW_MS) {
+				// Its window ran out while the app was closed: send it as it was saved.
+				for (const [event, properties] of windowEvents(savedWindow, savedWindow.updatedAt, "startup")) deps.capture(event, properties);
+			} else {
+				window = mergeWindows(savedWindow, window);
+			}
+			save(now);
+		},
+		setEnabled(next) {
+			if (next === enabled) return;
+			const now = deps.now();
+			enabled = next;
+			window = emptyWindow(now);
+			viewed.clear();
+			lastErrorAt.clear();
+			pendingSource = null;
+			sessionRouteAt = null;
+			contentShownAt = null;
+			openWaiting = null;
+			routeInterrupted = false;
+			resumeAt = null;
+			shownAt = now;
+			activeSince = now;
+			if (!next) deps.clear();
+			for (const listener of enabledListeners) listener(next);
+		},
+		isEnabled: () => enabled,
+		onEnabledChange(listener) {
+			enabledListeners.add(listener);
+			return () => {
+				enabledListeners.delete(listener);
+			};
+		},
+		current: () => shown,
+		requestTimed(ms, transport, ok) {
+			if (enabled) recordRequest(window.perf, ms, transport, ok);
+		},
+		stalled(lateMs) {
+			if (enabled && foreground) recordStall(window.perf, lateMs);
+		},
+		resumed() {
+			if (!enabled) return;
+			recordResume(window.perf);
+			resumeAt = deps.now();
+		},
+		dataRefreshed(syncAt) {
+			if (!enabled || resumeAt === null || syncAt < resumeAt) return;
+			recordResumeFresh(window.perf, syncAt - resumeAt);
+			resumeAt = null;
+		},
+	};
+}

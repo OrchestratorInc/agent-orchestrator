@@ -7,7 +7,8 @@ import { archiveCloudSession, launchCloudOrchestrator, renameCloudSession, resum
 import type { CloudClient } from "./client";
 import { CloudError } from "./errors";
 import { CLOUD_HOST_ID, cloudPullRequest, cloudSessionRow, createCloudEnvironment, isCloudHost } from "./mapping";
-import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail } from "./spawnSource";
+import { STANDALONE_PROJECT } from "../projectFilter";
+import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, cloudSpawnProjectOptions, NEW_CLOUD_PROJECT } from "./spawnSource";
 import type { CloudProject, CloudProviderConnection, CloudSession } from "./types";
 
 const session = (overrides: Partial<CloudSession> = {}): CloudSession => ({
@@ -55,6 +56,18 @@ describe("cloud rows on the shared screens", () => {
 		const cloud = createCloudEnvironment()([project()], [session()]);
 		const rows = hostedProjectSections([cloud]).flatMap((section) => section.data);
 		expect(rows).toEqual([expect.objectContaining({ project: expect.objectContaining({ id: "p1", name: "web", hostId: CLOUD_HOST_ID, hostName: "Cloud", hostAppearance: { symbol: "cloud" } }) })]);
+	});
+
+	it("keeps a standalone agent's own project out of the Projects tab and shows its session as standalone", () => {
+		const build = createCloudEnvironment();
+		const agent = project({ id: "a1", displayName: "Fix login", repositoryUrl: "https://scratch.ao.local/a1", standaloneAgent: true });
+		const first = build([project(), agent], [session(), session({ id: "s2", projectId: "a1" })]);
+		expect(first.projects.map((row) => row.id)).toEqual(["p1"]);
+		expect(hostedProjectSections([first]).flatMap((section) => section.data).map((row) => row.project.id)).toEqual(["p1"]);
+		// No project id, as a machine's standalone session has none: the board calls it Standalone.
+		expect(first.sessions.map((row) => [row.id, row.projectId])).toEqual([["s1", "p1"], ["s2", ""]]);
+		const second = build([project(), agent], [session(), session({ id: "s2", projectId: "a1" })]);
+		expect(second.sessions[1]).toBe(first.sessions[1]);
 	});
 
 	it("maps the PR summary like the daemon's", () => {
@@ -115,6 +128,57 @@ describe("board actions on cloud rows", () => {
 		await spawnCloudWorker(context({}, { createSession: createSession as never }), { projectId: "p1", prompt: "x", harness: "codex", clientRequestId: "k" });
 		expect(createSession.mock.calls[1][1]).not.toHaveProperty("interfaceMode");
 		expect(createSession.mock.calls[1][2]).toBe("k:legacy");
+	});
+
+	it("starts a standalone agent with no project, and lists its own project at once", async () => {
+		const agent = project({ id: "a1", standaloneAgent: true, config: {} });
+		const createStandaloneAgent = vi.fn(async (..._args: unknown[]) => ({ project: agent, session: session({ id: "new", projectId: "a1" }) }));
+		const createSession = vi.fn();
+		const upsertProject = vi.fn();
+		const ctx = context({ upsertProject }, { createStandaloneAgent: createStandaloneAgent as never, createSession: createSession as never });
+		const row = await spawnCloudWorker(ctx, { standalone: true, prompt: "Draft the release notes", harness: "claude-code", model: "opus", approvalMode: "auto", clientRequestId: "req-1" });
+		expect(createStandaloneAgent).toHaveBeenCalledWith("o", { harness: "claude-code", displayName: "Draft the release notes", prompt: "Draft the release notes", model: "opus", approvalMode: "auto", interfaceMode: "chat" }, "req-1");
+		expect(createSession).not.toHaveBeenCalled();
+		expect(upsertProject).toHaveBeenCalledWith(agent);
+		expect(ctx.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "new", projectId: "a1" }));
+		expect(row).toMatchObject({ id: "new", projectId: "" });
+	});
+
+	it("gives a standalone agent the first connected agent, never a project's, and retries it without interfaceMode", async () => {
+		const createStandaloneAgent = vi.fn()
+			.mockRejectedValueOnce(new CloudError("bad", { status: 400, code: "invalid_request" }))
+			.mockResolvedValueOnce({ project: project({ id: "a1", standaloneAgent: true }), session: session({ projectId: "a1" }) });
+		// p1's worker agent is claude-code; with no project, codex comes first.
+		await spawnCloudWorker(context({}, { createStandaloneAgent: createStandaloneAgent as never }), { standalone: true, projectId: "p1", prompt: "x", clientRequestId: "k" });
+		expect(createStandaloneAgent.mock.calls[0][1]).toMatchObject({ harness: "codex", interfaceMode: "chat" });
+		expect(createStandaloneAgent.mock.calls[1][1]).not.toHaveProperty("interfaceMode");
+		expect(createStandaloneAgent.mock.calls[1][2]).toBe("k:legacy");
+		await expect(spawnCloudWorker(context(), { standalone: true, attachments: [{}] })).rejects.toThrow(/attachments/);
+	});
+
+	it("lists a create's answer only through the writes taken before it was sent", async () => {
+		const scopedWrites = { upsertSession: vi.fn(), upsertProject: vi.fn() };
+		const scoped = vi.fn(() => scopedWrites);
+		let answer!: (value: unknown) => void;
+		const createStandaloneAgent = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+		const ctx = context({ scoped, upsertProject: vi.fn() }, { createStandaloneAgent: createStandaloneAgent as never });
+		const pending = spawnCloudWorker(ctx, { standalone: true, prompt: "x", harness: "codex" });
+		// Taken before the answer: the provider drops them if the organization changes meanwhile.
+		await vi.waitFor(() => expect(createStandaloneAgent).toHaveBeenCalled());
+		expect(scoped).toHaveBeenCalledTimes(1);
+		answer({ project: project({ id: "a1", standaloneAgent: true }), session: session({ id: "new", projectId: "a1" }) });
+		await pending;
+		expect(scopedWrites.upsertProject).toHaveBeenCalledWith(expect.objectContaining({ id: "a1" }));
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "new" }));
+		expect(ctx.upsertProject).not.toHaveBeenCalled();
+		expect(ctx.upsertSession).not.toHaveBeenCalled();
+
+		// A project's worker goes the same way.
+		const createSession = vi.fn(async () => ({ session: session({ id: "w1" }) }));
+		const projectCtx = context({ scoped }, { createSession: createSession as never });
+		await spawnCloudWorker(projectCtx, { projectId: "p1", prompt: "x", harness: "codex" });
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "w1" }));
+		expect(projectCtx.upsertSession).not.toHaveBeenCalled();
 	});
 
 	it("refuses what a cloud task cannot take, in words a person can act on", async () => {
@@ -182,9 +246,84 @@ describe("board actions on cloud rows", () => {
 		expect(createSession.mock.calls[0][1]).toEqual({ projectId: "p1", kind: "orchestrator", harness: "codex", displayName: "Orchestrator", prompt: "", interfaceMode: "chat" });
 		expect(link).toMatchObject({ id: "o1", projectName: "web" });
 	});
+
+	// A project keeps one orchestrator until it is archived; asking for a second
+	// was refused with "The resource conflicts with an existing record."
+	it("opens the project's orchestrator whose sandbox is asleep instead of starting a second", async () => {
+		const asleep = session({ id: "o1", kind: "orchestrator", runtimeConnected: false, desiredState: "paused", observedState: "stopped" });
+		const createSession = vi.fn();
+		const link = await launchCloudOrchestrator(context({ sessions: [session(), asleep] }, { createSession: createSession as never }), "p1", "chat");
+		expect(createSession).not.toHaveBeenCalled();
+		expect(link).toMatchObject({ id: "o1", projectName: "web", hasRuntime: false });
+	});
+
+	it("starts a new orchestrator when the project's only one is archived or another project's", async () => {
+		const createSession = vi.fn(async (..._args: unknown[]) => ({ session: session({ id: "o2", kind: "orchestrator" }) }));
+		const sessions = [session({ id: "o1", kind: "orchestrator", isTerminated: true }), session({ id: "x1", kind: "orchestrator", projectId: "p2" })];
+		const link = await launchCloudOrchestrator(context({ sessions }, { createSession: createSession as never }), "p1", "chat");
+		expect(createSession).toHaveBeenCalledTimes(1);
+		expect(link.id).toBe("o2");
+	});
+
+	it("opens the orchestrator another device started when the listing was behind", async () => {
+		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
+		const listSessions = vi.fn(async () => ({ items: [session({ id: "o9", kind: "orchestrator" })], page: { hasMore: false } }));
+		const ctx = context({ sessions: [] }, { createSession: createSession as never, listSessions: listSessions as never });
+		const link = await launchCloudOrchestrator(ctx, "p1", "chat");
+		expect(listSessions).toHaveBeenCalledWith("o", { projectId: "p1", cursor: undefined });
+		expect(link).toMatchObject({ id: "o9", projectName: "web" });
+		expect(ctx.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "o9" }));
+	});
+
+	it("looks past the first page for the orchestrator a stale listing missed", async () => {
+		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
+		const listSessions = vi.fn(async (_org: string, list: { cursor?: string }) => list.cursor === "page2"
+			? { items: [session({ id: "o9", kind: "orchestrator" })], page: { hasMore: false } }
+			: { items: [session({ id: "w1" })], page: { hasMore: true, nextCursor: "page2" } });
+		const link = await launchCloudOrchestrator(context({ sessions: [] }, { createSession: createSession as never, listSessions: listSessions as never }), "p1", "chat");
+		expect(listSessions).toHaveBeenCalledWith("o", { projectId: "p1", cursor: "page2" });
+		expect(link.id).toBe("o9");
+	});
+
+	it("lists a launched or recovered orchestrator only through the writes taken before the create", async () => {
+		const scopedWrites = { upsertSession: vi.fn(), upsertProject: vi.fn() };
+		const scoped = vi.fn(() => scopedWrites);
+		const created = context({ sessions: [], scoped }, { createSession: vi.fn(async () => ({ session: session({ id: "o1", kind: "orchestrator" }) })) as never });
+		await launchCloudOrchestrator(created, "p1", "chat");
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "o1" }));
+		expect(created.upsertSession).not.toHaveBeenCalled();
+
+		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
+		const listSessions = vi.fn(async () => ({ items: [session({ id: "o9", kind: "orchestrator" })], page: { hasMore: false } }));
+		const recovered = context({ sessions: [], scoped }, { createSession: createSession as never, listSessions: listSessions as never });
+		await launchCloudOrchestrator(recovered, "p1", "chat");
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "o9" }));
+		expect(recovered.upsertSession).not.toHaveBeenCalled();
+		expect(scoped).toHaveBeenCalledTimes(2);
+	});
+
+	it("still reports a conflict it cannot explain with a live orchestrator", async () => {
+		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
+		const listSessions = vi.fn(async () => ({ items: [], page: { hasMore: false } }));
+		await expect(launchCloudOrchestrator(context({ sessions: [] }, { createSession: createSession as never, listSessions: listSessions as never }), "p1", "chat"))
+			.rejects.toThrow("The resource conflicts with an existing record.");
+		const failingList = vi.fn(async () => { throw new CloudError("down", { status: 503 }); });
+		await expect(launchCloudOrchestrator(context({ sessions: [] }, { createSession: createSession as never, listSessions: failingList as never }), "p1", "chat"))
+			.rejects.toThrow("The resource conflicts with an existing record.");
+	});
 });
 
 describe("spawn sheet sources", () => {
+	it("offers a standalone agent on Cloud only where the control plane does, before a new cloud project", () => {
+		const listed = [{ id: "p1", label: "web", icon: "folder" as const }];
+		expect(cloudSpawnProjectOptions(listed, true).map((item) => [item.id, item.sectionBreakBefore ?? false])).toEqual([
+			["p1", false], [STANDALONE_PROJECT, true], [NEW_CLOUD_PROJECT, false],
+		]);
+		expect(cloudSpawnProjectOptions(listed, true)[1]).toMatchObject({ label: "Standalone agent", icon: "message-square-plus" });
+		expect(cloudSpawnProjectOptions(listed, false).map((item) => [item.id, item.sectionBreakBefore ?? false])).toEqual([["p1", false], [NEW_CLOUD_PROJECT, true]]);
+		expect(cloudSpawnProjectOptions([], true).map((item) => [item.id, item.sectionBreakBefore])).toEqual([[STANDALONE_PROJECT, false], [NEW_CLOUD_PROJECT, false]]);
+	});
+
 	it("offers only the agents this account has connected", () => {
 		const catalog = cloudAgentCatalog([connection("codex"), connection("claude-code")]);
 		expect(catalog.supported.map((agent) => agent.id)).toEqual(["claude-code", "codex", "cursor", "opencode"]);

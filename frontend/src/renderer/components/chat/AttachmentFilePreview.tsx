@@ -1,14 +1,21 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
+import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
+import { AttachmentLightbox } from "./AttachmentLightbox";
+import { CopyButton } from "./CopyButton";
 import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
 	ATTACHMENT_TILE_PILL_CLASS,
 	ATTACHMENT_TILE_SOLID_FILL_CLASS,
 	attachmentTypeLabel,
+	formatAttachmentSize,
 	type AttachmentPreviewKind,
 } from "./messageAttachments";
 
@@ -17,20 +24,26 @@ import {
 const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ default: module.PdfPreview })));
 
 /** Enough of a text file to fill a tile. */
-const TEXT_PREVIEW_BYTES = 2048;
+export const TEXT_PREVIEW_BYTES = 2048;
+
+/** As much of a text file as the viewer reads into the window. */
+const TEXT_VIEWER_BYTES = 4 * 1024 * 1024;
 
 /**
- * The first TEXT_PREVIEW_BYTES of a response, then the read is cancelled. A
- * file just sent is read from its local copy, which takes no Range, and it may
- * be gigabytes: reading it whole for a tile would stream all of it.
+ * The first `limit` bytes of a response, and whether it had more, then the read
+ * is cancelled. A file just sent is read from its local copy, which takes no
+ * Range, and it may be gigabytes: reading it whole would stream all of it.
  */
-async function readTextPrefix(response: Response): Promise<string> {
+async function readTextUpTo(response: Response, limit: number): Promise<{ text: string; more: boolean }> {
 	const reader = response.body?.getReader();
-	if (!reader) return (await response.text()).slice(0, TEXT_PREVIEW_BYTES);
+	if (!reader) {
+		const text = await response.text();
+		return { text: text.slice(0, limit), more: text.length > limit };
+	}
 	const chunks: Uint8Array[] = [];
 	let size = 0;
 	try {
-		while (size < TEXT_PREVIEW_BYTES) {
+		while (size <= limit) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			chunks.push(value);
@@ -39,7 +52,7 @@ async function readTextPrefix(response: Response): Promise<string> {
 	} finally {
 		void reader.cancel().catch(() => undefined);
 	}
-	const bytes = new Uint8Array(Math.min(size, TEXT_PREVIEW_BYTES));
+	const bytes = new Uint8Array(Math.min(size, limit));
 	let offset = 0;
 	for (const chunk of chunks) {
 		if (offset >= bytes.length) break;
@@ -47,9 +60,110 @@ async function readTextPrefix(response: Response): Promise<string> {
 		bytes.set(part, offset);
 		offset += part.length;
 	}
-	return new TextDecoder().decode(bytes);
+	return { text: new TextDecoder().decode(bytes, { stream: size > limit }), more: size > limit };
+}
+
+/** The first TEXT_PREVIEW_BYTES of a response, for a tile. */
+export async function readTextPrefix(response: Response): Promise<string> {
+	return (await readTextUpTo(response, TEXT_PREVIEW_BYTES)).text;
 }
 const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overflow-hidden";
+
+function rawTextUrl(src: string): string {
+	return src.startsWith("blob:") ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`;
+}
+
+async function saveFile(src: string, name: string) {
+	const local = src.startsWith("blob:");
+	let url = src;
+	if (!local) {
+		const response = await fetch(rawTextUrl(src));
+		if (!response.ok) throw new AoError("ATTACHMENT_TEXT_SAVE_FAILED", `Save failed: ${response.status}`);
+		url = URL.createObjectURL(await response.blob());
+	}
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = name;
+	link.click();
+	if (!local) setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function TextViewer({ src, name, start, onOpenChange }: {
+	src: string;
+	name: string;
+	start?: string;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const [full, setFull] = useState<{ text: string; more: boolean }>();
+	const [failed, setFailed] = useState(false);
+	const [attempt, setAttempt] = useState(0);
+	const [saving, setSaving] = useState(false);
+	useEffect(() => {
+		const controller = new AbortController();
+		void fetch(rawTextUrl(src), {
+			signal: controller.signal,
+			headers: src.startsWith("blob:") ? undefined : { Range: `bytes=0-${TEXT_VIEWER_BYTES}` },
+		})
+			.then((response) => {
+				if (!response.ok) throw new AoError("ATTACHMENT_TEXT_READ_FAILED", `Read failed: ${response.status}`);
+				return readTextUpTo(response, TEXT_VIEWER_BYTES);
+			})
+			.then(setFull)
+			.catch(() => {
+				if (!controller.signal.aborted) setFailed(true);
+			});
+		return () => controller.abort();
+	}, [src, attempt]);
+	return (
+		<Dialog open onOpenChange={onOpenChange}>
+			<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
+				<div className="flex min-w-0 items-center gap-2 pr-8">
+					<DialogTitle className="min-w-0 flex-1 truncate text-sm">{name}</DialogTitle>
+					{full?.more ? (
+						<>
+							<span className="text-xs text-muted-foreground">{t("chat.attachment.viewerTruncated", { size: formatAttachmentSize(TEXT_VIEWER_BYTES) })}</span>
+							<Button
+								type="button"
+								variant="secondary"
+								size="xs"
+								disabled={saving}
+								onClick={() => {
+									setSaving(true);
+									void saveFile(src, name)
+										.catch(() => useUiStore.getState().showGlobalToast(t("chat.attachment.saveFailed"), undefined, "error"))
+										.finally(() => setSaving(false));
+								}}
+							>
+								{t("chat.attachment.saveWhole")}
+							</Button>
+						</>
+					) : full ? (
+						<CopyButton text={full.text} label="Copy text" />
+					) : failed ? (
+						<>
+							<span role="alert" className="text-xs text-destructive">{t("chat.attachment.readFailed")}</span>
+							<Button
+								type="button"
+								variant="secondary"
+								size="xs"
+								onClick={() => {
+									setFailed(false);
+									setAttempt((count) => count + 1);
+								}}
+							>
+								{t("files.retry")}
+							</Button>
+						</>
+					) : (
+						<span className="text-xs text-muted-foreground">{t("common.loading")}</span>
+					)}
+				</div>
+				<pre className="m-0 min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-foreground">{full?.text ?? start}</pre>
+			</DialogContent>
+		</Dialog>
+	);
+}
 
 /**
  * A preview laid over a file tile: a video's first frame, a PDF's first page, or
@@ -95,7 +209,7 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 		const controller = new AbortController();
 		// A file just sent is read from its in-memory copy, which takes no query or range.
 		const local = src.startsWith("blob:");
-		void fetch(local ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`, {
+		void fetch(rawTextUrl(src), {
 			signal: controller.signal,
 			headers: local ? undefined : { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
 		})
@@ -127,36 +241,34 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 	return (
 		<>
 			<span ref={sentinel} aria-hidden="true" className="pointer-events-none absolute inset-0" />
-			{preview ? (
+			{src && (preview || kind === "text") ? (
 				<>
-					{kind === "text" ? (
-						<span inert className={PREVIEW_CLASS}>{preview}</span>
-					) : (
-						<Pressable
-							onClick={() => setOpen(true)}
-							aria-label={name}
-							className="absolute inset-0 cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-						>
+					<Pressable
+						onClick={() => setOpen(true)}
+						aria-label={name}
+						className="absolute inset-0 cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+					>
+						{preview ? (
 							<span inert className={PREVIEW_CLASS}>
 								<Suspense fallback={null}>{preview}</Suspense>
 							</span>
-						</Pressable>
-					)}
-					{type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
+						) : null}
+					</Pressable>
+					{preview && type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
 				</>
 			) : null}
-			{open && src ? (
+			{open && src && kind === "video" ? (
+				<AttachmentLightbox open onOpenChange={setOpen} kind="video" src={src} name={name} details={type} onError={onError} />
+			) : open && src && kind === "text" ? (
+				<TextViewer src={src} name={name} start={text} onOpenChange={setOpen} />
+			) : open && src ? (
 				<Dialog open onOpenChange={setOpen}>
 					<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
 						<DialogTitle className="truncate text-sm">{name}</DialogTitle>
 						<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-							{kind === "pdf" ? (
-								<Suspense fallback={null}>
-									<PdfPreview onError={onError} path={name} src={src} />
-								</Suspense>
-							) : (
-								<video crossOrigin={mediaCrossOrigin(src)} controls onError={onError} playsInline preload="metadata" src={src} className="size-full min-h-0 object-contain" />
-							)}
+							<Suspense fallback={null}>
+								<PdfPreview onError={onError} path={name} src={src} />
+							</Suspense>
 						</div>
 					</DialogContent>
 				</Dialog>

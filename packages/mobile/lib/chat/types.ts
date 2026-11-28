@@ -68,6 +68,7 @@ export type ConversationTurn = {
 	hasRetryAttempt?: boolean;
 	/** The turn answers a person's prompt, not an automation's. */
 	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
 	/**
 	 * Where the turn sorts when its prompt is above the loaded history (a Cloud
 	 * chat read newest first): just before the loaded events, which its first
@@ -114,7 +115,8 @@ export type ConversationMessage = {
 	createdAt: string;
 };
 
-export type DecisionOption = { id: string; label: string };
+/** `kind` is the agent's own category for the option, when it sends one: allow_once, allow_always, reject_once, reject_always. */
+export type DecisionOption = { id: string; label: string; kind?: string };
 export type FileChange = DiffFile & { patch?: string; patchTruncated?: boolean };
 export type InputProperty = {
 	type?: "string" | "number" | "integer" | "boolean" | "array";
@@ -198,6 +200,8 @@ export type ActivityDetail = {
 	senderSessionId?: string;
 	senderProjectId?: string;
 	senderDisplayName?: string;
+	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
+	deliveredBeforeDelete?: boolean;
 	fromModel?: string;
 	toModel?: string;
 	origin?: string;

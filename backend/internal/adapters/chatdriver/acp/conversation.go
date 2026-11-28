@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -18,13 +20,16 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const (
-	eventBuffer  = 4096
+	eventBuffer = 4096
+	// approvalWait bounds an unanswered permission request. Questions have no
+	// such bound (see requestInput).
 	approvalWait = 30 * time.Minute
 	// sessionCloseWait bounds the session/close sent before a provider is
 	// terminated (quickSessionCloseWait for a QuickStop provider).
@@ -49,6 +54,9 @@ type preparedTurn struct {
 	id              string
 	clientMessageID string
 	prompt          []acpsdk.ContentBlock
+	// endedCycle is the agent's own cycle this turn ended, settled when the
+	// turn runs (see settleEndedCycle).
+	endedCycle *providerCycle
 }
 
 type interruptAttempt struct {
@@ -65,6 +73,7 @@ type parkedPermission struct {
 
 type parkedInput struct {
 	request ports.ChatInputRequest
+	turnID  string
 	result  chan ports.ChatInputResponse
 	ready   chan struct{}
 }
@@ -90,6 +99,7 @@ type nestedMessageState struct {
 type conversation struct {
 	harness              domain.AgentHarness
 	suppressSessionModes bool
+	backgroundObserved   backgroundtasks.Tracker
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process
@@ -97,6 +107,9 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
+	// task ID to reference-only native session alias; guarded by mu.
+	backgroundAgentSessions map[string]string
+
 	// handshake is the agent's initialize answer, for steering details that
 	// vary by agent version.
 	handshake       acpsdk.InitializeResponse
@@ -130,12 +143,23 @@ type conversation struct {
 	closed            bool
 	// sessionLost records that the agent stopped holding this conversation's
 	// session and the provider was stopped for it. See providerSessionLost.
-	sessionLost bool
-	modeFor     func(ports.PermissionMode) string
-	optionsFor  func(ports.ChatTurnSettings) []SessionOption
+	sessionLost       bool
+	modeFor           func(ports.PermissionMode) string
+	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	splitModelVariant func(string) (string, SessionOption, bool)
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
+	// reapplySettings makes the next applyTurnSettings send every setting even
+	// where the catalog already names it current. See markSettingsApplied.
+	reapplySettings bool
+	// restoredFrom maps each option markSettingsApplied moved to the value the
+	// snapshot had, until the provider accepts a value or reports its catalog.
+	restoredFrom map[string]string
+	// unofferedModel is the optional model the session was opened on but the
+	// agent does not offer, so applyTurnSettings left the agent's own model in
+	// place. It is the session's model, not a switch, on later sends.
+	unofferedModel    string
 	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
@@ -213,8 +237,13 @@ type conversation struct {
 	// sessionPromptResponseFailure is promptResponseFailure given the session.
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	backgroundTasks              func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
+	stopBackgroundTask           func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	backgroundTaskOutput         func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	historyNotice                func(string) bool
 	hideCommand                  func(acpsdk.AvailableCommand) bool
+	// compactionMessage: see Config.CompactionMessage.
+	compactionMessage func(string, map[string]any) (CompactionReport, bool)
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
@@ -223,6 +252,18 @@ type conversation struct {
 	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// plansSpanTurns: see Config.PlansSpanTurns.
 	plansSpanTurns bool
+	// toolsOutliveTurn: see Config.ToolsOutliveTurn.
+	toolsOutliveTurn bool
+	// cycle is work the agent is running on its own between AO's turns; see
+	// providerCycle. providerReportsState records that the agent reports its
+	// own running and idle states, so its idle, not quiet, ends a cycle.
+	cycle                *providerCycle
+	providerReportsState bool
+	// cycleStateMu orders a cycle's active and idle reports: it is held, before
+	// mu, from opening a cycle through reporting it active, and from ending one
+	// through reporting it idle, so a cycle that opens as another ends cannot
+	// report active before the ended one reports idle.
+	cycleStateMu sync.Mutex
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -257,7 +298,27 @@ type conversation struct {
 	compactionBefore  int64
 	compactionSummary string
 	compactionFailure string
+	// compactionSkipped is set when the agent found nothing to compact on AO's
+	// own compaction turn, so the turn settles its row as such.
+	compactionSkipped bool
 	compactedTurn     string
+	// providerCompaction is a compaction the agent started on its own inside a
+	// turn, reported through its compaction status; providerCompactions numbers
+	// them within providerCompactionTurn so each gets a row of its own.
+	providerCompaction     *providerCompaction
+	providerCompactions    int
+	providerCompactionTurn string
+	// settledCompaction is the last one that settled without the agent's own
+	// figures, so figures that arrive just after it still reach its row.
+	settledCompaction *providerCompaction
+	// compactionReport holds the figures the agent gave for AO's own
+	// compaction turn, which settleCompaction prefers to the token bracket.
+	compactionReport *CompactionReport
+	// usageReports counts the agent's token reports, so a finished compaction
+	// can tell whether a newer context figure arrived.
+	usageReports int
+	// contextTurn is the turn the latest context figure was reported in.
+	contextTurn string
 
 	claudeRejectedLimits map[string]time.Time
 
@@ -283,6 +344,7 @@ var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatHistoryReader = (*conversation)(nil)
 var _ ports.ChatDeferredTurnStarter = (*conversation)(nil)
 var _ ports.ChatConfigOptionController = (*conversation)(nil)
+var _ ports.ChatModelVariantResolver = (*conversation)(nil)
 var _ ports.ChatSkillLister = (*conversation)(nil)
 var _ ports.ChatSteerer = (*conversation)(nil)
 var _ ports.ChatInputResponder = (*conversation)(nil)
@@ -608,16 +670,191 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 }
 
 // checkModelSwitch refuses a switch to a model the binding knows the agent
-// cannot use. Only a change is checked: a session already on such a model must
-// still open, so the user can pick another one.
+// cannot use. An acknowledged current model is not rechecked, but a restored
+// model may only be stored in AO and must be checked before reapplication.
 func (c *conversation) checkModelSwitch(ctx context.Context, model string) error {
-	if c.validateModel == nil || model == "" || model == c.configOptionCurrent("model") {
+	if model == "" {
 		return nil
 	}
-	if err := c.validateModel(ctx, model); err != nil {
-		return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+	c.mu.Lock()
+	current := c.configOptionCurrentLocked("model")
+	_, restored := c.restoredFrom["model"]
+	c.mu.Unlock()
+	if model == current && !restored {
+		return nil
+	}
+	if c.validateModel != nil {
+		if err := c.validateModel(ctx, model); err != nil {
+			return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+		}
+	}
+	return c.checkOptionalModelOffered(model)
+}
+
+// checkOptionalModelOffered refuses a switch to an optional model the session
+// neither offers nor lists under its name. applyTurnSettings skips such a model
+// so a session opened on it still starts; for a switch, skipping would keep the
+// old model answering while AO shows the new one.
+func (c *conversation) checkOptionalModelOffered(model string) error {
+	c.mu.Lock()
+	optionsFor := c.optionsFor
+	legacyModel := c.legacyModel && !c.modelConfigOption
+	unofferedModel := c.unofferedModel
+	c.mu.Unlock()
+	if optionsFor == nil || legacyModel {
+		return nil
+	}
+	// A variant id whose base model the session offers is applied as that base
+	// plus its reasoning level, so it is offered too.
+	for _, option := range c.expandModelVariant(optionsFor(ports.ChatTurnSettings{Model: model})) {
+		if option.ID != "model" || !option.Optional {
+			continue
+		}
+		// The model the session was opened on is not a switch, even though
+		// the agent kept its own model in its place.
+		if unofferedModel != "" && option.Value == unofferedModel {
+			return nil
+		}
+		offered, known := c.configOptionOffers(option.ID, option.Value)
+		if !known || offered || c.configOptionValueNamed(option.ID, option.Name) != "" {
+			return nil
+		}
+		// A new chat on this model would not run it either: the agent keeps its
+		// own model there too, so the message points only at the models it lists.
+		return fmt.Errorf("%w: this chat can't switch to %q because its agent doesn't offer that model; pick one it lists",
+			ports.ErrChatConfigOptionInvalid, model)
 	}
 	return nil
+}
+
+// markSettingsApplied records settings the live session already runs with as
+// the catalog's current values, without asking the provider.
+//
+// A live reconnect rebuilds the catalog from the host's session/new snapshot.
+// That snapshot predates initial_settings and every change since, so it names
+// the agent's launch defaults as current while the provider process is still
+// in the state AO last applied (#6758). The restored settings normally are that
+// state; a value the catalog does not offer is left where the snapshot had it,
+// as applyTurnSettings would leave it.
+//
+// They can also be a choice stored after the last turn and never sent: the
+// provider only receives settings with a turn. So nothing marked here counts
+// as acknowledged, and the next turn sends every setting again.
+func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
+	c.mu.Lock()
+	modeFor, optionsFor := c.modeFor, c.optionsFor
+	legacyModel := c.legacyModel && !c.modelConfigOption
+	c.reapplySettings = true
+	c.mu.Unlock()
+	if modeFor != nil && settings.Approval != "" {
+		if mode := modeFor(settings.Approval); mode != "" {
+			if offered, known := c.configOptionOffers("mode", mode); known && offered {
+				c.markRestored("mode", mode)
+			}
+		}
+	}
+	if optionsFor == nil {
+		return
+	}
+	options := optionsFor(settings)
+	if !legacyModel {
+		options = c.expandModelVariant(options)
+	}
+	for _, option := range options {
+		value := option.Value
+		offered, known := c.configOptionOffers(option.ID, value)
+		if known && !offered && option.Name != "" {
+			if named := c.configOptionValueNamed(option.ID, option.Name); named != "" {
+				value = named
+				offered, known = c.configOptionOffers(option.ID, value)
+			}
+		}
+		if known && offered {
+			c.markRestored(option.ID, value)
+		}
+	}
+}
+
+// expandModelVariant maps a composite model onto the base model and separate
+// variant option when that is how the live catalog offers it.
+func (c *conversation) expandModelVariant(options []SessionOption) []SessionOption {
+	// Agy also restores the separate effort saved after an opening fallback.
+	// Its two servers use different IDs for the same thought-level control.
+	if c.harness == domain.HarnessAgy {
+		for i, option := range options {
+			if option.ID == "thinking_level" {
+				options[i] = c.variantOptionFor(option)
+			}
+		}
+	}
+	if c.splitModelVariant == nil {
+		return options
+	}
+	for i, option := range options {
+		if option.ID != "model" || option.Value == "" {
+			continue
+		}
+		if offered, known := c.configOptionOffers("model", option.Value); !known || offered {
+			break
+		}
+		if base, variant, split := c.splitModelVariant(option.Value); split {
+			if offered, _ := c.configOptionOffers("model", base); offered {
+				options[i].Value = base
+				options[i].Name = ""
+				options = append(options, c.variantOptionFor(variant))
+			}
+		}
+		break
+	}
+	return options
+}
+
+// ModelVariantBase is the base model a composite model id runs as, when the
+// live catalog offers that base instead of the id itself, as
+// expandModelVariant applies it.
+func (c *conversation) ModelVariantBase(model string) (string, bool) {
+	if c.splitModelVariant == nil || model == "" {
+		return "", false
+	}
+	if offered, known := c.configOptionOffers("model", model); !known || offered {
+		return "", false
+	}
+	base, _, split := c.splitModelVariant(model)
+	if !split {
+		return "", false
+	}
+	if offered, _ := c.configOptionOffers("model", base); !offered {
+		return "", false
+	}
+	return base, true
+}
+
+// markRestored names value current for option id and remembers the snapshot's
+// value, so a provider that rejects the restored value gets it back.
+func (c *conversation) markRestored(id, value string) {
+	previous := c.configOptionCurrent(id)
+	if previous == value {
+		return
+	}
+	c.applyAcceptedConfigOption(id, ports.ChatConfigOptionValue{Select: value})
+	c.mu.Lock()
+	if c.restoredFrom == nil {
+		c.restoredFrom = make(map[string]string)
+	}
+	c.restoredFrom[id] = previous
+	c.mu.Unlock()
+}
+
+// revertRestored puts back the snapshot's value of an option whose restored
+// value the provider has just rejected. The catalog then no longer claims the
+// restored value, so a later turn asking for it sends it again.
+func (c *conversation) revertRestored(id string) {
+	c.mu.Lock()
+	previous, ok := c.restoredFrom[id]
+	c.mu.Unlock()
+	if ok {
+		c.applyAcceptedConfigOption(id, ports.ChatConfigOptionValue{Select: previous})
+	}
 }
 
 func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.ChatTurnSettings) error {
@@ -632,6 +869,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	configOptions := cloneConfigOptions(c.configOptions)
+	reapply := c.reapplySettings
 	c.mu.Unlock()
 	if sessionID == "" {
 		return errors.New("ACP session is not open")
@@ -646,33 +884,48 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		options = optionsFor(settings)
 	}
 	// A setting the session already has is skipped (some agents take seconds
-	// per change) unless session/set_model made the list stale.
-	catalogStale := false
+	// per change) unless session/set_model made the list stale, or a live
+	// reconnect named current values the provider never acknowledged.
+	catalogStale := reapply
 	if legacyModel && settings.Model != "" {
 		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		modelOptional := false
 		for _, option := range options {
 			if option.ID == "model" && option.Value != "" {
 				model = option.Value
+				modelOptional = option.Optional
 			}
 		}
-		modelOptionFound := false
+		modelOptionFound, modelSkipped := false, false
 		for _, option := range configOptions {
 			if option.ID != "model" {
 				continue
 			}
 			modelOptionFound = true
 			resolved, ok := resolveModelChoice(c.harness, option.Choices, model)
-			if !ok {
+			if !ok && c.splitModelVariant != nil {
+				if base, variant, split := c.splitModelVariant(model); split {
+					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
+						options = append(options, c.variantOptionFor(variant))
+					}
+				}
+			}
+			if !ok && !modelOptional {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}
-			model = resolved
+			model, modelSkipped = resolved, !ok
 			break
 		}
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if c.configOptionCurrent("model") != model {
+		switch {
+		case modelSkipped:
+			c.log.Warn("ACP session does not offer the chosen model; keeping its default", "model", settings.Model)
+		case !catalogStale && c.configOptionCurrent("model") == model:
+			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
+		default:
 			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
 				if isACPMethodNotFound(err) {
 					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
@@ -680,8 +933,11 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				return fmt.Errorf("set ACP session model %q: %w", model, err)
 			}
 			catalogStale = true
+			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 		}
-		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
+	}
+	if !legacyModel {
+		options = c.expandModelVariant(options)
 	}
 	applyOption := func(option SessionOption) error {
 		if option.ID == "" || option.Value == "" {
@@ -696,13 +952,31 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
+			if option.ID == "model" {
+				// The agent's own model was chosen: the session no longer runs on
+				// the unoffered model it opened on.
+				c.mu.Lock()
+				c.unofferedModel = ""
+				c.mu.Unlock()
+			}
 			return nil
 		}
 		// The models offered do not depend on the model chosen, so this is final.
 		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
+			c.mu.Lock()
+			c.unofferedModel = option.Value
+			c.mu.Unlock()
 			return nil
 		}
-		return c.setSessionOption(ctx, sessionID, option)
+		if err := c.setSessionOption(ctx, sessionID, option); err != nil {
+			return err
+		}
+		if option.ID == "model" {
+			c.mu.Lock()
+			c.unofferedModel = ""
+			c.mu.Unlock()
+		}
+		return nil
 	}
 	// A model switch may change the modes an ACP agent offers. Apply a modern
 	// model config option before session/set_mode so the requested mode is
@@ -746,11 +1020,14 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 	}
+	c.mu.Lock()
 	if settings.Approval != "" {
-		c.mu.Lock()
 		c.permissionMode = ports.NormalizePermissionMode(effectiveApproval)
-		c.mu.Unlock()
 	}
+	if reapply {
+		c.reapplySettings = false
+	}
+	c.mu.Unlock()
 	return nil
 }
 
@@ -803,6 +1080,7 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		// An optional setting the chosen model lacks is skipped; session/set_model
 		// does not return the new model's options to check in advance.
 		if option.Optional && isACPInvalidParams(err) {
+			c.revertRestored(option.ID)
 			return nil
 		}
 		if isACPMethodNotFound(err) {
@@ -845,6 +1123,9 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
 		c.preambleSpent = true
 	}
+	// A cycle the agent was still running on its own ends here: what it wrote
+	// so far stays its own, and the turn's output starts fresh items.
+	turn.endedCycle = c.detachProviderCycleLocked()
 	c.activeTurn = turn.id
 	c.turnModelID = turn.id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -865,11 +1146,14 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.providerFailure = nil
 	c.mu.Unlock()
 
+	// The ended cycle settles in runTurn: its settle can wait on an update
+	// still being emitted, and this caller may be the one that drains events.
 	go c.runTurn(turnCtx, sessionID, turn)
 	return nil
 }
 
 func (c *conversation) runTurn(ctx context.Context, sessionID string, turn preparedTurn) {
+	c.settleEndedCycle(turn.endedCycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.id})
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
 	// ACP message ids are opaque idempotency/correlation keys. Preserve AO's
@@ -956,7 +1240,8 @@ func (c *conversation) finishPrompt(
 		turnModel = c.turnModel
 	}
 	c.mu.Unlock()
-	c.settleOpenItems(turnID)
+	interruptRequested := interrupt != nil && interrupt.turnID == turnID
+	c.settleOpenItems(turnID, c.keepToolsOutlivingTurn(interruptRequested, resp, err))
 	interruptedLocally := false
 	if interrupt != nil && interrupt.turnID == turnID {
 		// ACP cancellation and Prompt completion can race. Wait for the sender's
@@ -1057,7 +1342,29 @@ func (c *conversation) finishPrompt(
 			c.preambleSpent = false
 		}
 	}
+	if c.settledCompaction != nil && c.settledCompaction.turnID == turnID {
+		c.settledCompaction = nil
+	}
+	settleFinished := false
+	var unreported *providerCompaction
+	if c.providerCompaction != nil && c.providerCompaction.turnID == turnID {
+		if c.providerCompaction.finished {
+			settleFinished = true
+		} else {
+			unreported = c.providerCompaction
+			c.providerCompaction = nil
+		}
+	}
 	c.mu.Unlock()
+	if settleFinished {
+		c.settleFinishedCompaction(c.emit)
+	}
+	if unreported != nil && turnErr == nil && state == domain.TurnStateCompleted {
+		// A compaction still open when its turn ends never reported how it went.
+		// A stopped or failed turn settles its row as such; one that ended
+		// normally would settle it as a finished compaction, so it says so here.
+		c.settleUnreportedCompaction(unreported, c.emit)
+	}
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
 			c.settleCompaction(turnID)
@@ -1067,11 +1374,21 @@ func (c *conversation) finishPrompt(
 			c.compactionBefore = 0
 			c.compactionSummary = ""
 			c.compactionFailure = ""
+			c.compactionSkipped = false
+			c.compactionReport = nil
 			c.mu.Unlock()
-			if turnErr != nil {
-				// A compaction turn has no prompt or reply. Without this row the
-				// timeline leaves the turn out and the failure is never shown.
+			switch {
+			case turnErr == nil:
+				// Stopped: settling the turn settles the running row with it.
+			case errors.Is(turnErr, ports.ErrChatAuthRequired):
+				// Needs its own row: the account, not the compaction, has to be fixed.
 				c.emit(ports.ChatEvent{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: turnErr})
+			default:
+				c.emit(ports.ChatEvent{
+					Kind: ports.ChatEventCompacted, ProviderTurnID: turnID,
+					ProviderItemID: c.compactionItemID(turnID),
+					ActivityStatus: domain.ActivityStatusFailed, Summary: turnErr.Error(),
+				})
 			}
 		}
 	}
@@ -1145,7 +1462,9 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 		return ports.ChatCompactionResult{}, errors.New("ACP session is not open")
 	}
 	before := c.contextTokens
+	window := c.contextWindow
 	id := uuid.NewString()
+	cycle := c.detachProviderCycleLocked()
 	c.activeTurn = id
 	c.turnModelID = id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -1153,6 +1472,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.compactionBefore = before
 	c.compactionSummary = ""
 	c.compactionFailure = ""
+	c.compactionSkipped = false
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
@@ -1166,10 +1486,29 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.providerFailure = nil
 	c.mu.Unlock()
 
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
-
-	go c.runCompactionTurn(turnCtx, sessionID, id)
+	start := func() {
+		c.settleEndedCycle(cycle)
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
+		// The row says the compaction is under way; settling the turn settles
+		// the same row with what was reclaimed, or why it could not be.
+		c.emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: id, ProviderItemID: c.compactionItemID(id),
+			ActivityStatus: domain.ActivityStatusRunning, Detail: compactionFigures(before, 0, window),
+		})
+	}
+	if cycle == nil {
+		start()
+		go c.runCompactionTurn(turnCtx, sessionID, id)
+	} else {
+		// The ended cycle settles off this call, as in runTurn: its settle can
+		// wait on an update blocked emitting, and the caller may hold a lock the
+		// event drain needs. Its items still settle before the turn starts.
+		go func() {
+			start()
+			c.runCompactionTurn(turnCtx, sessionID, id)
+		}()
+	}
 	return ports.ChatCompactionResult{TokensBefore: before}, nil
 }
 
@@ -1193,19 +1532,401 @@ func (c *conversation) settleCompaction(turnID string) {
 	after := c.contextTokens
 	window := c.contextWindow
 	summary := c.compactionSummary
+	reported := c.compactionReport
+	skipped := c.compactionSkipped && reported == nil
 	c.compactingTurnID = ""
 	c.compactionBefore = 0
 	c.compactionSummary = ""
 	c.compactionFailure = ""
-	c.compactedTurn = turnID
+	c.compactionSkipped = false
+	c.compactionReport = nil
+	if !skipped {
+		c.compactedTurn = turnID
+	}
+	if reported != nil {
+		// The agent's own figures, when it gave them, beat the bracket.
+		after = reported.TokensAfter
+		if reported.TokensBefore > 0 {
+			before = reported.TokensBefore
+		}
+	}
 	c.mu.Unlock()
 
+	if skipped {
+		// The agent found nothing to compact. The history did not change, so the
+		// row says so rather than claim a compaction, as one the agent ran on its
+		// own does.
+		c.emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: c.compactionItemID(turnID),
+			ActivityStatus: domain.ActivityStatusFailed, Summary: "Nothing to compact",
+			Detail: compactionFigures(before, 0, window),
+		})
+		return
+	}
 	if before > after && after > 0 {
 		summary = compactionSummary(before, after)
 	} else if summary == "" {
 		summary = "Compacted the conversation history"
 	}
 
+	c.emit(ports.ChatEvent{
+		Kind:           ports.ChatEventCompacted,
+		ProviderTurnID: turnID,
+		ProviderItemID: c.compactionItemID(turnID),
+		Summary:        summary,
+		Detail:         compactionFigures(before, after, window),
+	})
+}
+
+// compactionItemID names the row of AO's own compaction turn. It is derived
+// from the turn so a controller that reattaches to a running compaction
+// settles the row the first one opened.
+func (c *conversation) compactionItemID(turnID string) string {
+	return c.providerItemID("compaction:" + turnID)
+}
+
+// providerCompaction is a compaction the agent started inside a turn.
+type providerCompaction struct {
+	turnID string
+	itemID string
+	before int64
+	// measured is set when before was reported inside this turn. Only such a
+	// figure decides when the compaction settles: an attachment that reconnects
+	// to the turn gets the turn's updates replayed, not those of earlier turns,
+	// and must settle it on the same update, so the events it emits line up.
+	measured bool
+	// finished is set when the agent said it finished without saying what it
+	// freed. Claude reports its result just before the boundary that carries
+	// its figures. The row settles on those figures, or on the next token
+	// report, the agent's next output or the turn's end, whichever comes first.
+	finished bool
+	// usageAtFinish is usageReports when it finished.
+	usageAtFinish int
+}
+
+// CompactionReport is one step of a compaction the agent reported.
+type CompactionReport struct {
+	// Status is "started", "completed" or "failed", or "skipped" when the
+	// agent found nothing to compact: a row already under way says so, and
+	// with none under way there is nothing to report.
+	Status string
+	// TokensBefore and TokensAfter are the agent's own figures, when it gives
+	// them. Without them the row brackets the compaction from the token reports
+	// either side of it.
+	TokensBefore int64
+	TokensAfter  int64
+	// Reason is why a failed compaction gave up.
+	Reason string
+}
+
+// trackCompactionStatus follows the compaction status an agent reports in
+// `_meta`: OpenCode as "opencode/compaction", Claude (patched by AO's ACP
+// runtime build) as "ao/compaction", both {status, error: {message}}. Claude's
+// also sends a second "completed" with tokensBefore/tokensAfter, its own
+// figures, from the compaction's boundary.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any, emit func(ports.ChatEvent)) {
+	compaction := compactionStatusMeta(meta)
+	if compaction == nil {
+		return
+	}
+	report := CompactionReport{}
+	if before, ok := compaction["tokensBefore"].(float64); ok && before > 0 {
+		report.TokensBefore = int64(before)
+	}
+	if after, ok := compaction["tokensAfter"].(float64); ok && after > 0 {
+		report.TokensAfter = int64(after)
+	}
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+		report.Status = status
+	case "failed":
+		report.Status = status
+		report.Reason, _ = nestedMap(compaction, "error")["message"].(string)
+	default:
+		// Only the three statuses above are sent. Leave the recorded outcome
+		// alone rather than guess what a new one means.
+		return
+	}
+	c.reportCompaction(turnID, report, emit)
+}
+
+// compactionStatusMeta is the compaction status an update's `_meta` carries,
+// or nil.
+func compactionStatusMeta(meta map[string]any) map[string]any {
+	if compaction := nestedMap(meta, "ao/compaction"); compaction != nil {
+		return compaction
+	}
+	return nestedMap(meta, "opencode/compaction")
+}
+
+// reportCompaction applies one step of a compaction the agent reported.
+//
+// On AO's own compaction turn it only records a failure, or that there was
+// nothing to compact: OpenCode ends a failed compaction with a normal end_turn,
+// so the status is the only sign that the history was left as it was. Inside
+// any other turn the agent compacted on its own, and the steps drive a row that
+// runs and then settles in place.
+func (c *conversation) reportCompaction(turnID string, report CompactionReport, emit func(ports.ChatEvent)) bool {
+	failure := ""
+	if report.Status == "failed" {
+		failure = compactionFailureText(report.Reason)
+	}
+	hasFigures := report.Status == "completed" && report.TokensAfter > 0
+	replaying := c.historyReplayActive()
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+		// The latest step decides: a start after "nothing to compact" is a new try.
+		c.compactionSkipped = report.Status == "skipped"
+		if hasFigures {
+			c.compactionReport = &report
+		}
+		c.mu.Unlock()
+		return true
+	}
+	if replaying {
+		// The live run already stored this compaction's row.
+		c.mu.Unlock()
+		return true
+	}
+	open := c.providerCompaction
+	if report.Status == "failed" && open == nil && strings.HasPrefix(turnID, providerCyclePrefix) {
+		// A failure between prompts with nothing open is the late report of a
+		// compaction whose turn already ended, as when Stop cancels AO's own
+		// /compact: that turn's row already says so.
+		c.mu.Unlock()
+		return true
+	}
+	if open != nil && open.turnID != turnID {
+		open = nil
+	}
+	switch {
+	case report.Status == "started":
+		if open != nil && open.finished {
+			// A new compaction starts while the finished one still waits to hear
+			// what it freed. That one settles now, and this one gets its own row.
+			c.mu.Unlock()
+			c.settleFinishedCompaction(emit)
+			return c.reportCompaction(turnID, report, emit)
+		}
+		if open != nil {
+			// Claude repeats the status while it works.
+			c.mu.Unlock()
+			return true
+		}
+		open = &providerCompaction{
+			turnID:   turnID,
+			itemID:   c.nextProviderCompactionIDLocked(turnID),
+			before:   c.contextTokens,
+			measured: c.contextTurn == turnID && c.contextTokens > 0,
+		}
+		if report.TokensBefore > 0 {
+			open.before = report.TokensBefore
+			open.measured = true
+		}
+		c.providerCompaction = open
+		c.settledCompaction = nil
+		window := c.contextWindow
+		c.mu.Unlock()
+		emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
+			ActivityStatus: domain.ActivityStatusRunning, Detail: compactionFigures(open.before, 0, window),
+		})
+		return true
+	case report.Status == "skipped":
+		if open == nil {
+			// Nothing was under way, so there is nothing to report: the
+			// agent's own words stay in the reply.
+			c.mu.Unlock()
+			return false
+		}
+		// The agent started, then found nothing to compact. The history did
+		// not change, so the row says so instead of claiming a compaction.
+		c.providerCompaction = nil
+		c.settledCompaction = nil
+		window := c.contextWindow
+		c.mu.Unlock()
+		emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
+			ActivityStatus: domain.ActivityStatusFailed, Summary: "Nothing to compact",
+			Detail: compactionFigures(open.before, 0, window),
+		})
+		return true
+	case report.Status == "completed" && !hasFigures && open != nil && !c.contextDroppedSince(open):
+		// Done, but the context figure has not dropped yet: wait for what it
+		// freed rather than settle "freed nothing". One that already dropped
+		// (the agent reported it first) settles below.
+		if !open.finished {
+			open.finished = true
+			open.usageAtFinish = c.usageReports
+		}
+		if report.TokensBefore > 0 {
+			open.before = report.TokensBefore
+		}
+		c.mu.Unlock()
+		return true
+	case report.Status == "completed" && !hasFigures && open == nil:
+		// Done, with no start seen (an agent that reports only the outcome, or a
+		// reattach mid-compaction) and no figures: the context figure here is
+		// from before it. Wait for a newer one, as a compaction that started
+		// does, and claim none if the agent moves on without one.
+		c.providerCompaction = &providerCompaction{
+			turnID:        turnID,
+			itemID:        c.nextProviderCompactionIDLocked(turnID),
+			before:        report.TokensBefore,
+			finished:      true,
+			usageAtFinish: c.usageReports,
+		}
+		c.settledCompaction = nil
+		c.mu.Unlock()
+		return true
+	}
+	c.providerCompaction = nil
+	if open == nil && hasFigures && c.settledCompaction != nil && c.settledCompaction.turnID == turnID {
+		// The figures for the row that just settled without them.
+		open = c.settledCompaction
+	}
+	if open == nil {
+		// No start was seen, and the outcome needs no newer figure: it failed,
+		// or the agent gave its own. It still gets a row of its own.
+		open = &providerCompaction{
+			turnID: turnID,
+			itemID: c.nextProviderCompactionIDLocked(turnID),
+		}
+	}
+	// A row settled without the agent's own figures stays known, so figures
+	// that arrive just after it still reach the same row.
+	c.settledCompaction = nil
+	if report.Status == "completed" && !hasFigures {
+		c.settledCompaction = open
+	}
+	before, after, window := open.before, c.contextTokens, c.contextWindow
+	if report.TokensBefore > 0 {
+		before = report.TokensBefore
+	}
+	if report.TokensAfter > 0 {
+		after = report.TokensAfter
+	}
+	c.mu.Unlock()
+	if report.Status == "failed" {
+		emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
+			ActivityStatus: domain.ActivityStatusFailed, Summary: failure,
+			Detail: compactionFigures(before, 0, window),
+		})
+		return true
+	}
+	emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
+		Summary: compactionSummary(before, after),
+		Detail:  compactionFigures(before, after, window),
+	})
+	return true
+}
+
+// nextProviderCompactionIDLocked names the next compaction the agent reported
+// in turnID. They are counted per turn: an attachment that reconnects to a
+// running turn gets every update of that turn replayed by the host, so it
+// numbers the turn's compactions as the attachment before it did. A replayed
+// one reaches the row already stored, and a new one gets a number no earlier
+// attachment used. c.mu must be held.
+func (c *conversation) nextProviderCompactionIDLocked(turnID string) string {
+	if c.providerCompactionTurn != turnID {
+		c.providerCompactionTurn = turnID
+		c.providerCompactions = 0
+	}
+	c.providerCompactions++
+	return c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions))
+}
+
+// unreportedCompaction is why a compaction whose agent never said how it went
+// did not settle as one.
+const unreportedCompaction = "No result reported"
+
+// settleUnreportedCompaction settles a compaction whose agent never said how it
+// went before its turn, or its cycle, ended. Left to the turn's settling, its row
+// would read as a finished compaction, though nothing marked the conversation
+// compacted.
+func (c *conversation) settleUnreportedCompaction(open *providerCompaction, emit func(ports.ChatEvent)) {
+	c.mu.Lock()
+	window := c.contextWindow
+	c.mu.Unlock()
+	emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(open.turnID), ProviderItemID: open.itemID,
+		ActivityStatus: domain.ActivityStatusFailed, Summary: unreportedCompaction,
+		Detail: compactionFigures(open.before, 0, window),
+	})
+}
+
+// abandonCycleCompaction returns the events that settle a compaction the agent
+// was running between prompts when it went away. Only the cycle's end settles
+// such a row, as it has no turn, so without this it would read "Compacting
+// conversation" for good.
+func (c *conversation) abandonCycleCompaction() []ports.ChatEvent {
+	c.mu.Lock()
+	open := c.providerCompaction
+	if open == nil || !strings.HasPrefix(open.turnID, providerCyclePrefix) {
+		c.mu.Unlock()
+		return nil
+	}
+	if !open.finished {
+		c.providerCompaction = nil
+	}
+	c.mu.Unlock()
+	var settled []ports.ChatEvent
+	collect := func(event ports.ChatEvent) { settled = append(settled, event) }
+	if open.finished {
+		// It finished and only waited to hear what it freed.
+		c.settleFinishedCompaction(collect)
+	} else {
+		c.settleUnreportedCompaction(open, collect)
+	}
+	return settled
+}
+
+// contextDroppedSince reports whether the agent's context figure, measured in
+// this turn, is already below where the compaction started. c.mu must be held.
+func (c *conversation) contextDroppedSince(open *providerCompaction) bool {
+	return open.measured && c.contextBelow(open.before)
+}
+
+// contextBelow reports whether the latest context figure is below before.
+// c.mu must be held.
+func (c *conversation) contextBelow(before int64) bool {
+	return c.contextTokens > 0 && c.contextTokens < before
+}
+
+// settleFinishedCompaction settles a compaction that finished without saying
+// what it freed, once a newer context figure arrives or the agent moves on
+// without one. A compaction still under way is left alone.
+func (c *conversation) settleFinishedCompaction(emit func(ports.ChatEvent)) {
+	c.mu.Lock()
+	open := c.providerCompaction
+	if open == nil || !open.finished {
+		c.mu.Unlock()
+		return
+	}
+	c.providerCompaction = nil
+	// Settled without the agent's own figures, whatever a usage report gave:
+	// figures that still follow reach this row instead of opening another.
+	c.settledCompaction = open
+	after, window := c.contextTokens, c.contextWindow
+	if c.usageReports == open.usageAtFinish && !c.contextBelow(open.before) {
+		// Nothing newer than the finish, and nothing lower than the start: the
+		// figure is from before it.
+		after = 0
+	}
+	c.mu.Unlock()
+	emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(open.turnID), ProviderItemID: open.itemID,
+		Summary: compactionSummary(open.before, after),
+		Detail:  compactionFigures(open.before, after, window),
+	})
+}
+
+// compactionFigures is what a compaction reclaimed, as far as the token reports
+// either side of it show. Zero means unknown and is left out.
+func compactionFigures(before, after, window int64) []byte {
 	detail := map[string]any{}
 	if before > 0 {
 		detail["tokensBefore"] = before
@@ -1219,23 +1940,19 @@ func (c *conversation) settleCompaction(turnID string) {
 	if window > 0 {
 		detail["contextWindow"] = window
 	}
-	var detailBytes []byte
-	if encoded, err := json.Marshal(detail); err == nil {
-		detailBytes = encoded
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return nil
 	}
-
-	c.emit(ports.ChatEvent{
-		Kind:           ports.ChatEventCompacted,
-		ProviderTurnID: turnID,
-		Summary:        summary,
-		Detail:         detailBytes,
-	})
+	return encoded
 }
 
-func (c *conversation) trackContext(used, window int64) {
+func (c *conversation) trackContext(turnID string, used, window int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.usageReports++
 	c.contextTokens = used
+	c.contextTurn = turnID
 	if window > 0 {
 		c.contextWindow = window
 	}
@@ -1274,9 +1991,24 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 		c.mu.Unlock()
 		return ports.ErrChatNoActiveTurn
 	}
-	if c.interrupt != nil {
+	if prior := c.interrupt; prior != nil {
 		c.mu.Unlock()
-		return fmt.Errorf("ACP session/cancel is already in progress")
+		// A repeated Stop for the turn already being cancelled is the same request,
+		// not a new one: ACP's session/cancel is a notification with no turn id, so
+		// sending it again cannot be scoped and adds nothing. Answer with the first
+		// attempt's outcome. The turn stays busy until its Prompt returns either way.
+		select {
+		case <-prior.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		c.mu.Lock()
+		err := prior.err
+		c.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("ACP session/cancel: %w", err)
+		}
+		return nil
 	}
 	attempt := &interruptAttempt{turnID: active, done: make(chan struct{})}
 	c.interrupt = attempt
@@ -1295,10 +2027,29 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	if err != nil {
 		return fmt.Errorf("ACP session/cancel: %w", err)
 	}
+	// Not every provider withdraws its open questions on session/cancel (ACP
+	// leaves answering them to the client), so close them here: otherwise
+	// Stop leaves the turn waiting on a question nobody can answer.
+	c.cancelTurnInputs(active)
 	// The provider owns the root Prompt until it returns a terminal result. Keep
 	// AO busy after accepting session/cancel so a restart cannot start a second
 	// root prompt while the first one is still executing downstream.
 	return nil
+}
+
+// turnInterruptedLocked reports whether session/cancel was sent for turnID.
+// The caller must hold c.mu.
+func (c *conversation) turnInterruptedLocked(turnID string) bool {
+	attempt := c.interrupt
+	if attempt == nil || attempt.turnID != turnID {
+		return false
+	}
+	select {
+	case <-attempt.done:
+		return attempt.err == nil
+	default:
+		return false
+	}
 }
 
 func (c *conversation) ResolveRequest(
@@ -1377,9 +2128,18 @@ func (c *conversation) Terminate() error {
 	return c.closeProvider(true, true)
 }
 
+// staleBackgroundTask bounds how long an event-derived running task can keep a
+// session from hibernating after its last event. ACP cannot enumerate native
+// jobs, so a completion the provider never sends must not block it forever.
+const staleBackgroundTask = 30 * time.Minute
+
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.providerCycleActive(time.Now()) {
+		// The agent is working on its own; hibernating would kill that work.
+		return false, nil
+	}
 	if c.hibernationCheck == nil {
-		return true, nil
+		return !c.backgroundObserved.Active(time.Now(), staleBackgroundTask), nil
 	}
 	c.mu.Lock()
 	id := c.sessionID
@@ -1452,6 +2212,9 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		if c.cycle != nil && c.cycle.timer != nil {
+			c.cycle.timer.Stop()
+		}
 		close(c.closing)
 		c.releasePendingSteersLocked()
 		persistent := c.proc.terminate != nil
@@ -1519,9 +2282,11 @@ func (c *conversation) watchConnection() {
 	// its ownership lock. Stopping this transport must not terminate the host.
 	_ = c.legacyWire.reader.Close()
 	_ = c.proc.stop()
+	var settled []ports.ChatEvent
 	if !detaching && !preserve {
 		c.failPendingPermissions()
 		c.failPendingInputs()
+		settled = c.abandonCycleCompaction()
 	}
 	event := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
 	if preserve {
@@ -1529,6 +2294,12 @@ func (c *conversation) watchConnection() {
 	}
 	c.eventMu.Lock()
 	if !c.eventsClosed {
+		for _, row := range settled {
+			select {
+			case c.events <- row:
+			case <-c.closing:
+			}
+		}
 		// Deliver the recovery boundary even though conn.Done is already closed;
 		// emit's disconnect select could otherwise drop this ownership signal.
 		select {
@@ -1576,12 +2347,21 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	}
 }
 
-func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+// keepOpen names tools that outlive the turn (see keepToolsOutlivingTurn);
+// they stay running instead of failing with it.
+func (c *conversation) settleOpenItems(turnID string, keepOpen map[string]bool, turnState ...domain.TurnState) {
+	// Copy what is settled while holding the lock. A late session/update for the
+	// same turn can still write these maps and tool states (processUpdate) while
+	// the items below are emitted, so iterating the live ones raced.
 	c.mu.Lock()
-	messages := c.messages
-	thoughts := c.thoughts
-	nestedMessages := c.nestedMessages
-	tools := c.tools
+	messages := maps.Clone(c.messages)
+	thoughts := maps.Clone(c.thoughts)
+	nestedMessages := maps.Clone(c.nestedMessages)
+	liveTools := c.tools
+	tools := make(map[string]toolState, len(liveTools))
+	for id, tool := range liveTools {
+		tools[id] = *tool
+	}
 	c.mu.Unlock()
 	recovered := len(turnState) > 0 && turnState[0] == domain.TurnStateRecovered
 	activityStatus := domain.ActivityStatusCompleted
@@ -1612,8 +2392,8 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	toolIDs := sortedKeys(tools)
 	for _, id := range toolIDs {
 		tool := tools[id]
-		if tool.status == acpsdk.ToolCallStatusPending || tool.status == acpsdk.ToolCallStatusInProgress || tool.status == "" {
-			snapshot := *tool
+		if toolStatusOpen(tool.status) && !keepOpen[id] && c.toolStillOpen(liveTools, id) {
+			snapshot := tool
 			snapshot.status = acpsdk.ToolCallStatusFailed
 			event := c.toolEvent(turnID, &snapshot, true)
 			if recovered {
@@ -1622,6 +2402,21 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 			c.emit(event)
 		}
 	}
+}
+
+func toolStatusOpen(status acpsdk.ToolCallStatus) bool {
+	return status == acpsdk.ToolCallStatusPending || status == acpsdk.ToolCallStatusInProgress || status == ""
+}
+
+// toolStillOpen reports whether the settled turn's tool is still open in the
+// map it was snapshotted from. A late session/update may complete it after
+// the snapshot; settling must not then replace that completion with a
+// synthetic failure.
+func (c *conversation) toolStillOpen(tools map[string]*toolState, id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tool := tools[id]
+	return tool == nil || toolStatusOpen(tool.status)
 }
 
 func sortedKeys[T any](values map[string]T) []string {
@@ -1641,6 +2436,33 @@ func (c *conversation) failPendingPermissions() {
 	for _, request := range pending {
 		select {
 		case request.result <- "":
+		default:
+		}
+	}
+}
+
+// cancelTurnInputs answers the turn's open questions with Cancel.
+func (c *conversation) cancelTurnInputs(turnID string) {
+	c.mu.Lock()
+	var cancelled map[string]*parkedInput
+	for id, input := range c.pendingInputs {
+		if input.turnID != turnID {
+			continue
+		}
+		if cancelled == nil {
+			cancelled = make(map[string]*parkedInput)
+		}
+		cancelled[id] = input
+		delete(c.pendingInputs, id)
+	}
+	c.mu.Unlock()
+	for id, input := range cancelled {
+		// requestInput emits InputRequested after it registers the question;
+		// wait for that so the resolution never comes first.
+		<-input.ready
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
+		select {
+		case input.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
 		default:
 		}
 	}
@@ -1710,4 +2532,20 @@ func (c *conversation) promptContent(message ports.ChatUserMessage) ([]acpsdk.Co
 		return nil, errors.New("chat message has no content")
 	}
 	return prompt, nil
+}
+
+// sdkErrorCode matches a bare error code such as "too_few_groups".
+var sdkErrorCode = regexp.MustCompile(`^[a-z0-9]+(_[a-z0-9]+)+$`)
+
+// compactionFailureText is the reason a failed compaction shows: the agent's
+// own words, a readable line for a known SDK code, never the raw code.
+func compactionFailureText(reason string) string {
+	reason = strings.TrimSpace(reason)
+	switch {
+	case reason == "too_few_groups":
+		return "Not enough messages to compact."
+	case reason == "" || sdkErrorCode.MatchString(reason):
+		return "Compaction failed"
+	}
+	return reason
 }

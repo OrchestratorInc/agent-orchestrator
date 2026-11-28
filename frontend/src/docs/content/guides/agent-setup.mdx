@@ -1,0 +1,35 @@
+---
+title: Set up with your coding agent
+description: Ask Claude Code, Codex, or another coding agent to register your project and start its orchestrator.
+---
+
+After you [install the desktop app](/installation), a coding agent can do the rest of the setup. Two steps stay with you: signing in to the agent, and signing in to GitHub with `gh auth login`.
+
+## Ask an agent inside Orchestrator
+
+1. Click **+** next to **Projects**, choose **On this computer**, then **Start a standalone agent**.
+2. Send a request like this one:
+
+```text
+Set up Orchestrator for my repository at /path/to/repo: register it as a project, start its orchestrator, and tell me where to click next.
+```
+
+Agents that Orchestrator starts already have the `ao` command on their PATH and a guide to it.
+
+If the page says **No agent is ready**, install and sign in to one under **Settings → Agents** first.
+
+## Ask an agent outside Orchestrator
+
+An agent in your own terminal needs the bundled CLI, which a new install does not add to your PATH. See [Run the CLI](/cli#run-the-cli). Give the agent this page, or these steps:
+
+1. `ao status` reports the daemon ready, and `ao doctor` prints no `FAIL` lines.
+2. `ao agent ls --refresh` shows the agent you want as `installed` and `authorized`.
+3. `ao project add --path <absolute-path> --worker-agent <agent> --orchestrator-agent <agent>` registers the repository. A repository with no remote also needs `ao project set-config <project-id> --default-branch <branch>` before sessions can start.
+4. `ao spawn --project <project-id> --kind orchestrator --name "<name>"` starts the project's orchestrator, as the app does when you add a project there.
+5. Open the project in the app. **New task** starts a worker, and **Orchestrator** opens the project's main agent.
+
+## What stays with you
+
+- Signing in to a coding agent, under **Settings → Agents** or in the agent's own CLI.
+- Signing in to GitHub with `gh auth login`, for pull requests and CI.
+- Choosing the repository, when more than one is plausible.

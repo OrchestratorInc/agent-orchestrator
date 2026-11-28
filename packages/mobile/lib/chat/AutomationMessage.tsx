@@ -15,9 +15,10 @@
  */
 
 import { router } from "expo-router";
-import { createContext, memo, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
 import { AgentLogo } from "../AgentLogo";
+import { AppSymbol } from "../AppSymbol";
 import type { DashboardSession } from "../api";
 import type { ServerConfig } from "../config";
 import { haptics } from "../haptics";
@@ -27,10 +28,11 @@ import { openGitHub } from "../openGitHub";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { font, prose, radius, space, type } from "../tokens";
+import { font, iconSize, prose, radius, space, type } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userMessageSurfaceStyle } from "./chatChrome";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { githubSegments, type GitHubSegment } from "./githubHtml";
 import { readSession, sessionReadKey } from "./sessionLookup";
 import {
 	artifactEntry,
@@ -279,7 +281,7 @@ const WorkerUpdateRow = memo(function WorkerUpdateRow({ update }: { update: Work
 					{state ? <Text style={[styles.updateState, attention && styles.updateAttention]}>{state.label}</Text> : null}
 					<View style={styles.spacer} />
 					<Text style={styles.time}>{clockTime(update.createdAt)}</Text>
-					<Feather name={open ? "chevron-down" : "chevron-right"} size={12} color={t.textFaint} />
+					<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.xs} color={t.textFaint} weight="semibold" />
 				</View>
 				{headline && !(open && sentence && more) ? <Text numberOfLines={open ? undefined : 2} style={styles.updateHeadline}>{headline}</Text> : null}
 			</Pressable>
@@ -291,7 +293,7 @@ const WorkerUpdateRow = memo(function WorkerUpdateRow({ update }: { update: Work
 					{openSession ? (
 						<Pressable accessibilityRole="button" hitSlop={8} onPress={openSession} style={({ pressed }) => [styles.openChat, pressed && styles.pressed]}>
 							<Text style={styles.openChatText}>Open chat</Text>
-							<Feather name="chevron-right" size={12} color={t.textSecondary} />
+							<AppSymbol name="chevronForward" size={iconSize.xs} color={t.textSecondary} weight="semibold" />
 						</Pressable>
 					) : null}
 				</View>
@@ -388,14 +390,14 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 							{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
 						</View>
 					) : null}
-					<Folded><ChatMarkdown text={safeMarkdown(comment.body)} /></Folded>
+					<Folded><GitHubComment body={comment.body} /></Folded>
 				</View>
 			));
 			break;
 		}
 		case "changesRequested":
 			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "Built-in reviewer"}</Text> requested changes on {prLink}</>;
-			detail = automation.body ? <Folded><ChatMarkdown text={safeMarkdown(automation.body)} /></Folded> : null;
+			detail = automation.body ? <Folded><GitHubComment body={automation.body} /></Folded> : null;
 			break;
 		case "mergeConflict":
 			// The PR cannot merge until the agent rebases: a failure, like failing CI.
@@ -416,6 +418,55 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 				</View>
 				{detail ? <View style={styles.detail}>{detail}</View> : null}
 			</View>
+		</View>
+	);
+}
+
+/**
+ * A GitHub comment or review body, drawn as GitHub draws it: bots write much of
+ * theirs in HTML (hidden markers, icons, `<details>` sections), which reads as
+ * its words, each section folded under its summary as on the desktop.
+ */
+export function GitHubComment({ body }: { body: string }) {
+	const segments = useMemo(() => githubSegments(body), [body]);
+	return <GitHubSegments segments={segments} />;
+}
+
+function GitHubSegments({ segments }: { segments: readonly GitHubSegment[] }) {
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<View style={styles.github}>
+			{segments.map((segment, index) => segment.kind === "markdown"
+				? <ChatMarkdown key={index} text={safeMarkdown(segment.text)} />
+				: <GitHubSection key={index} section={segment} />)}
+		</View>
+	);
+}
+
+function GitHubSection({ section }: { section: Extract<GitHubSegment, { kind: "details" }> }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const unfold = useContext(Unfold);
+	const [open, setOpen] = useState(false);
+	return (
+		<View>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityState={{ expanded: open }}
+				accessibilityLabel={inlineRuns(section.summary).map((run) => run.text).join("")}
+				hitSlop={8}
+				onPress={() => {
+					haptics.tap();
+					// What the section opens to is what the reader asked for; the fold around it should not clip it.
+					if (!open) unfold?.();
+					setOpen(!open);
+				}}
+				style={({ pressed }) => [styles.section, pressed && styles.pressed]}
+			>
+				<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.xs} color={t.textTertiary} weight="semibold" />
+				<ReportInline text={section.summary} style={styles.sectionSummary} />
+			</Pressable>
+			{open && section.body.length > 0 ? <View style={styles.sectionBody}><GitHubSegments segments={section.body} /></View> : null}
 		</View>
 	);
 }
@@ -493,7 +544,7 @@ function FileChip({ path, line, end }: { path: string; line?: number; end?: numb
 			accessibilityRole={files ? "button" : undefined}
 			accessibilityLabel={`Open ${path}`}
 			disabled={!files}
-			onPress={() => { haptics.tap(); files?.openFile(path); }}
+			onPress={() => { haptics.tap(); files?.openFile(path, undefined, line); }}
 			style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
 		>
 			<Feather name="file-text" size={12} color={t.textTertiary} />
@@ -538,7 +589,7 @@ function GitActionBody({ action, base }: { action: GitAction; base?: string }) {
 			<Text style={styles.userText}>{GIT_ACTION_LABELS[action]}</Text>
 			{base ? (
 				<>
-					<Feather name="chevron-right" size={12} color={t.textTertiary} />
+					<AppSymbol name="chevronForward" size={iconSize.xs} color={t.textTertiary} weight="semibold" />
 					<Text numberOfLines={1} style={[styles.chipText, styles.shrink]}>{base}</Text>
 				</>
 			) : null}
@@ -589,11 +640,15 @@ function NoticeLine({ label }: { label: string }) {
 // Five whole lines of ChatMarkdown prose: Android clips rather than ellipsizes, so a fold between lines never cuts one in half.
 const FOLD_HEIGHT = prose.lineHeight * 5;
 
+/** Opens the fold around a section the reader opened. */
+const Unfold = createContext<(() => void) | null>(null);
+
 /** Content folded after five lines, with "Show more" whenever the fold hides something. */
 function Folded({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [open, setOpen] = useState(false);
+	const unfold = useCallback(() => setOpen(true), []);
 	const [measure, setMeasure] = useState({ width: 0, height: 0 });
 	const folds = measure.height > FOLD_HEIGHT + 4;
 	const clipped = !open && folds;
@@ -612,12 +667,12 @@ function Folded({ children }: { children: ReactNode }) {
 				<View onLayout={(event) => {
 					const { height } = event.nativeEvent.layout;
 					if (!clipped) setMeasure((current) => current.height === height ? current : { ...current, height });
-				}}>{children}</View>
+				}}><Unfold.Provider value={unfold}>{children}</Unfold.Provider></View>
 			</View>
 			{folds ? (
 				<Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} hitSlop={8} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.more}>
 					<Text style={styles.toggle}>{open ? "Show less" : "Show more"}</Text>
-					<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
+					<AppSymbol name={open ? "chevronUp" : "chevronDown"} size={iconSize.xs} color={t.textTertiary} weight="semibold" />
 				</Pressable>
 			) : null}
 		</View>
@@ -669,6 +724,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	prTitle: { color: t.textTertiary },
 	detail: { gap: space.md },
 	detailBlock: { gap: space.xs },
+	github: { gap: space.sm },
+	section: { alignSelf: "flex-start", maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xxs },
+	sectionSummary: { flexShrink: 1, fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	sectionBody: { marginLeft: space.md, paddingTop: space.xs },
 	chipRow: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0 },
 	chip: { alignSelf: "flex-start", maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xxs, borderRadius: radius.xs, backgroundColor: t.bgSubtle, paddingHorizontal: space.xs, paddingVertical: space.hair },
 	chipText: { flexShrink: 1, fontFamily: font.mono, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },

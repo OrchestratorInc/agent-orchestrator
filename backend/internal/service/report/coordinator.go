@@ -56,6 +56,7 @@ type DeliveryStore interface {
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
+	ListPendingReportsOfDoneProjects(context.Context) ([]domain.ReportRecord, error)
 	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time) ([]domain.ReportRecord, error)
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
@@ -85,6 +86,14 @@ type Coordinator struct {
 	failureAckedSeq     map[domain.ProjectID]int
 	wake                chan struct{}
 	mu                  sync.Mutex
+	// earlyHold pauses early flush for a project whose last attempt, early or
+	// due, left its batch pending (busy orchestrator, failed submit, or coalesced
+	// stuck deferral). Those deferrals cannot move a done row's later settlement
+	// deadline, and early flush does not wait for a retry time, so without the
+	// hold every wake would retry at once. Guarded by mu.
+	earlyHold map[domain.ProjectID]time.Time
+	// started prevents immediate retries of batches recovered after restart.
+	started time.Time
 }
 
 // CoordinatorDeps configures durable scheduling and delivery.
@@ -133,6 +142,8 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 		failureSeq:          make(map[domain.ProjectID]int),
 		failureAckedSeq:     make(map[domain.ProjectID]int),
 		wake:                make(chan struct{}, 1),
+		earlyHold:           make(map[domain.ProjectID]time.Time),
+		started:             d.Now().UTC(),
 	}
 }
 
@@ -144,6 +155,15 @@ func (c *Coordinator) Wake() {
 	select {
 	case c.wake <- struct{}{}:
 	default:
+	}
+}
+
+// SessionActivityChanged wakes the coordinator when a session stops working:
+// its activity left active or it was terminated. That is the moment a pending
+// done batch may become eligible for an early flush. The wake is non-blocking.
+func (c *Coordinator) SessionActivityChanged(state domain.ActivityState, terminated bool) {
+	if terminated || state != domain.ActivityActive {
+		c.Wake()
 	}
 }
 
@@ -180,7 +200,9 @@ func (c *Coordinator) run(ctx context.Context) {
 }
 
 // RunDue performs bounded due delivery and returns the delay until the next
-// durable deadline. Tests call it directly with fake time.
+// durable deadline. A pending done batch is flushed before its settlement
+// deadline once no other worker of its project is still working (see
+// nextEarlyFlush). Tests call it directly with fake time.
 func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	if c == nil || c.store == nil || c.delivery == nil {
 		return -1, errors.New("report coordinator dependencies are required")
@@ -193,16 +215,143 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 			return c.retryDelay, err
 		}
 		if len(pending) == 0 {
+			clear(c.earlyHold)
 			return -1, nil
 		}
 		now := c.now().UTC()
+		projectID := pending[0].ProjectID
 		if pending[0].AvailableAt.After(now) {
-			return pending[0].AvailableAt.Sub(now), nil
+			delay := pending[0].AvailableAt.Sub(now)
+			early, wait, err := c.nextEarlyFlush(ctx, now)
+			if err != nil {
+				return c.retryDelay, err
+			}
+			if early == "" {
+				if wait > 0 && wait < delay {
+					delay = wait
+				}
+				return delay, nil
+			}
+			projectID = early
 		}
-		if err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
+		// Held until a batch of the project is delivered (see deliverProject).
+		c.earlyHold[projectID] = now.Add(OrchestratorBusyRetry)
+		if err := c.deliverProject(ctx, projectID); err != nil {
 			return c.retryDelay, err
 		}
 	}
+}
+
+// nextEarlyFlush returns a project whose pending done batch may be delivered
+// before its settlement deadline, or the shortest remaining debounce or hold
+// among projects that only wait for time. Projects whose other workers are
+// still working wait for an activity wake or the deadline.
+func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain.ProjectID, time.Duration, error) {
+	pending, err := c.store.ListPendingReportsOfDoneProjects(ctx)
+	if err != nil {
+		return "", 0, err
+	}
+	var projects []domain.ProjectID
+	byProject := map[domain.ProjectID][]domain.ReportRecord{}
+	for _, report := range pending {
+		if _, seen := byProject[report.ProjectID]; !seen {
+			projects = append(projects, report.ProjectID)
+		}
+		byProject[report.ProjectID] = append(byProject[report.ProjectID], report)
+	}
+	for projectID := range c.earlyHold {
+		if _, pending := byProject[projectID]; !pending {
+			delete(c.earlyHold, projectID)
+		}
+	}
+	var wait time.Duration
+	for _, projectID := range projects {
+		first := byProject[projectID][0]
+		if !claimsDone(byProject[projectID]) {
+			// The next claim would take another batch first, for example one
+			// deferred until a retry time. It goes out when it is due.
+			continue
+		}
+		flushAt, ok, err := c.earlyFlushAt(ctx, projectID, byProject[projectID])
+		if err != nil {
+			return "", 0, err
+		}
+		if !ok {
+			continue
+		}
+		if hold := c.earlyHold[projectID]; hold.After(flushAt) {
+			flushAt = hold
+		}
+		// Only the original done settlement deadline may be shortened. An
+		// attempted batch's earlier urgent row can hold a longer retry time.
+		if first.DeliveryBatchID != "" && (first.State != domain.ReportDone || first.AvailableAt.After(first.SettlementDeadline)) && first.AvailableAt.After(flushAt) {
+			flushAt = first.AvailableAt
+		}
+		// A batch that was already attempted may wait for a retry time that a
+		// done row cannot store, so after a restart it waits out a full retry.
+		if retry := c.started.Add(OrchestratorBusyRetry); first.DeliveryBatchID != "" && retry.After(flushAt) {
+			flushAt = retry
+		}
+		if !flushAt.After(now) {
+			return projectID, 0, nil
+		}
+		if d := flushAt.Sub(now); wait == 0 || d < wait {
+			wait = d
+		}
+	}
+	return "", wait, nil
+}
+
+// claimsDone reports whether the next claim for a project takes a done report.
+// pending holds the project's pending reports in claim order: the first one
+// names the batch a claim takes, and unbatched reports join a new batch.
+func claimsDone(pending []domain.ReportRecord) bool {
+	for _, report := range pending {
+		if report.DeliveryBatchID == pending[0].DeliveryBatchID && report.State == domain.ReportDone {
+			return true
+		}
+	}
+	return false
+}
+
+// earlyFlushAt reports when a project's pending done batch may flush early.
+// Live workers that are active or provisioning hold the batch unless they have
+// already reported done. Without an active orchestrator the batch keeps its
+// deadline, so no retry loop starts early.
+func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.ProjectID, pending []domain.ReportRecord) (time.Time, bool, error) {
+	recs, err := c.store.ListSessions(ctx, projectID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if _, ok := newestOrchestrator(recs); !ok {
+		return time.Time{}, false, nil
+	}
+	reporters := map[domain.SessionID]bool{}
+	var settled time.Time
+	for _, report := range pending {
+		if report.State != domain.ReportDone {
+			continue
+		}
+		reporters[report.SessionID] = true
+		if report.CreatedAt.After(settled) {
+			settled = report.CreatedAt
+		}
+	}
+	for _, rec := range recs {
+		if rec.Kind != domain.KindWorker || rec.IsTaskPreparation {
+			continue
+		}
+		if !rec.IsTerminated && (rec.Activity.State == domain.ActivityActive || rec.ProvisionState.IsProvisioning()) {
+			if !reporters[rec.ID] {
+				return time.Time{}, false, nil
+			}
+			continue
+		}
+		if rec.Activity.LastActivityAt.After(settled) {
+			settled = rec.Activity.LastActivityAt
+		}
+	}
+	return settled.Add(domain.ReportEarlyFlushDebounce), true, nil
 }
 
 func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
@@ -258,12 +407,15 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return c.retryLater(ctx, batch, err)
 	}
 	nAcked, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
-	if err == nil {
-		if nAcked > 0 && batch.UndeliveredReports > 0 && batch.FailureCheckpoint > c.failureAckedSeq[batch.ProjectID] {
-			c.failureAckedSeq[batch.ProjectID] = batch.FailureCheckpoint
-		}
+	if err != nil {
+		return err
 	}
-	return err
+	if nAcked > 0 && batch.UndeliveredReports > 0 && batch.FailureCheckpoint > c.failureAckedSeq[batch.ProjectID] {
+		c.failureAckedSeq[batch.ProjectID] = batch.FailureCheckpoint
+	}
+	// Accepted, so a separate pending batch need not wait out the hold.
+	delete(c.earlyHold, projectID)
+	return nil
 }
 
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {
@@ -271,6 +423,11 @@ func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.P
 	if err != nil {
 		return domain.SessionRecord{}, false, err
 	}
+	selected, ok := newestOrchestrator(recs)
+	return selected, ok, nil
+}
+
+func newestOrchestrator(recs []domain.SessionRecord) (domain.SessionRecord, bool) {
 	var selected domain.SessionRecord
 	for _, rec := range recs {
 		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
@@ -280,7 +437,7 @@ func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.P
 			selected = rec
 		}
 	}
-	return selected, selected.ID != "", nil
+	return selected, selected.ID != ""
 }
 
 // PreparedBatch is a token-fenced durable batch awaiting acceptance.
@@ -398,18 +555,21 @@ func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause
 	if c.isExpired(batch) {
 		return c.fail(ctx, batch, cause)
 	}
-	delay := c.backoffDelay(batch)
+	retryAt := c.now().UTC().Add(c.backoffDelay(batch))
 	if isUnacknowledged(cause) {
-		n, err := c.store.RetryUnacknowledgedReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), c.maxDeliveryAttempts, cause.Error())
+		n, err := c.store.RetryUnacknowledgedReportBatch(ctx, batch.ProjectID, batch.Token, retryAt, c.maxDeliveryAttempts, cause.Error())
 		if err != nil {
 			return errors.Join(cause, err)
 		}
 		c.recordFailedBatch(ctx, batch, cause, n)
-		return cause
-	}
-	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), cause.Error())
-	if deferErr != nil {
+		if n > 0 {
+			return cause
+		}
+	} else if _, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, retryAt, cause.Error()); deferErr != nil {
 		return errors.Join(cause, deferErr)
+	}
+	if retryAt.After(c.earlyHold[batch.ProjectID]) && batch.hasState(domain.ReportDone) {
+		c.earlyHold[batch.ProjectID] = retryAt
 	}
 	return cause
 }

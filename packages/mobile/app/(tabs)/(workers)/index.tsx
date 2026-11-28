@@ -10,7 +10,8 @@ import { useApp } from "../../../lib/store";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CLOUD_HOST_ID } from "../../../lib/cloud/mapping";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
-import { useBoardFailure } from "../../../lib/useBoardFailure";
+import { useBoardFailure, useBoardFailureKind } from "../../../lib/useBoardFailure";
+import { useErrorShown } from "../../../lib/telemetry/useErrorShown";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
@@ -158,7 +159,7 @@ export default function FleetScreen() {
 		: inlineFinishedAt;
 	const selectEnvironment = useCallback((environmentId: string) => {
 		// Resolve both selectors in one React event. Letting the project reset in the
-		// effect below creates an intermediate empty board and a second remount.
+		// effect below creates an intermediate empty board and a second board change.
 		setWorkerEnvironmentId(environmentId);
 		setWorkerProjectId((projectId) => workerProjectForEnvironment(allProjects, environmentId, projectId));
 	}, [allProjects]);
@@ -222,7 +223,25 @@ export default function FleetScreen() {
 					: workerProjectId !== ALL_WORKER_PROJECTS ? "project"
 						: workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? "environment"
 							: "idle";
-	const [boardEmpty, setBoardEmpty] = useState(false);
+	// Kept with the board it came from: a new filter re-keys the list, and until
+	// that list reports, the last board's answer must not stand for this one.
+	const [emptyBoard, setEmptyBoard] = useState<{ key: string; empty: boolean } | null>(null);
+	const boardEmpty = emptyBoard?.key === boardIdentityKey && emptyBoard.empty;
+	const onEmptyChange = useCallback((empty: boolean) => {
+		setEmptyBoard((prev) => (prev?.key === boardIdentityKey && prev.empty === empty ? prev : { key: boardIdentityKey, empty }));
+	}, [boardIdentityKey]);
+	const failureKind = useBoardFailureKind();
+	// The selected machine's own state, classified as WorkerMachineState does;
+	// reconnecting is not shown as a failure.
+	const selectedLink = emptyView === "machine" && selectedHost
+		? classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())
+		: null;
+	useErrorShown(!boardEmpty ? null
+		: emptyView === "cloud" ? "cloud_unavailable"
+			: emptyView === "error" ? (hostStates.length > 1 ? "unreachable" : failureKind)
+				: selectedLink === "unreachable" ? "unreachable"
+					: selectedLink === "phone-offline" ? "phone_offline"
+						: null);
 	// The one machine every row is on, when it is a paired machine: the line under
 	// the title speaks for it, since a dot on every row would say the same thing.
 	// With several machines on the board their chips and rows carry the dots.
@@ -241,8 +260,8 @@ export default function FleetScreen() {
 		? null
 		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
 	// The title's accessory: under the large title on iOS, pinned under the bar
-	// on Android, where the bar's frost washed out a line placed in the page.
-	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine });
+	// on Android.
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, resetKey: boardIdentityKey });
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
@@ -265,9 +284,10 @@ export default function FleetScreen() {
 			    tracking a view that was gone, so it stayed expanded over the rows. */}
 			<WorkerBoardList
 				onScroll={largeTitle.onScroll}
-				key={boardIdentityKey}
-				// Held here, above the key, so the board rebuilt for a new filter
-				// starts its rows at the width the last board's rows measured.
+				// Not keyed by the filters: rows on both boards stay as they are,
+				// and the board starts over for a new identity (see identityKey).
+				// Held here so the rows a new filter adds start at the width the
+				// board's rows measured.
 				rowWidths={rowWidths}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
@@ -284,7 +304,7 @@ export default function FleetScreen() {
 				refreshing={refreshing}
 				onRefresh={onRefresh}
 				ListHeaderComponent={listHeader}
-				onEmptyChange={setBoardEmpty}
+				onEmptyChange={onEmptyChange}
 				ListEmptyComponent={
 					emptyView === "unpaired" ? (
 						<UnpairedState />

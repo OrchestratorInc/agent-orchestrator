@@ -267,6 +267,73 @@ func TestDoctorWarnsWhenHarnessMissing(t *testing.T) {
 	}
 }
 
+// The daemon launches agents, so one it reports installed passes even when this
+// shell's PATH has no binary for it, as with the built-in agent. An agent that
+// neither finds still warns.
+func TestDoctorTrustsDaemonForInstalledHarness(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		case "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, readinessAgentsJSON("unreal-agent", "installed", "unauthorized"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+	c.deps.ProcessAlive = func(int) bool { return true }
+	checks := c.runDoctor(context.Background())
+
+	if check := findDoctorCheck(t, checks, "unreal-agent"); check.Level != doctorPass || !strings.Contains(check.Message, "installed according to the running daemon") {
+		t.Fatalf("unreal-agent check = %+v, want PASS from the daemon's inventory", check)
+	}
+	if check := findDoctorCheck(t, checks, "codex"); check.Level != doctorWarn || !strings.Contains(check.Message, "not found in PATH") {
+		t.Fatalf("codex check = %+v, want WARN missing binary", check)
+	}
+}
+
+// When a ready daemon cannot give its agent list, doctor says so instead of
+// presenting this shell's PATH as the whole answer.
+func TestDoctorSaysWhenDaemonAgentListIsUnavailable(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		default:
+			http.Error(w, `{"error":"internal","code":"AGENTS_FAILED","message":"agent list failed"}`, http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+	c.deps.ProcessAlive = func(int) bool { return true }
+	checks := c.runDoctor(context.Background())
+
+	if check := findDoctorCheck(t, checks, "agent-inventory"); check.Level != doctorWarn || !strings.Contains(check.Message, "this shell's PATH only") {
+		t.Fatalf("agent-inventory check = %+v, want WARN naming the fallback", check)
+	}
+	if check := findDoctorCheck(t, checks, "unreal-agent"); check.Level != doctorWarn {
+		t.Fatalf("unreal-agent check = %+v, want the PATH fallback", check)
+	}
+}
+
 func TestDoctorWarnsWhenHarnessVersionFails(t *testing.T) {
 	setConfigEnv(t)
 	c := doctorContext(t, map[string]string{"git": "/bin/git", "codex": "/bin/codex"}, func(_ context.Context, name string, _ ...string) ([]byte, error) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // oauthPersonal is Antigravity's "Log in with Google" ACP auth method.
@@ -23,21 +24,53 @@ const oauthPersonal = "oauth-personal"
 // hanging, so AO never waits on it indefinitely.
 const authTimeout = 20 * time.Second
 
+// cliProbeTimeout bounds the one-time `agy models` sign-in check.
+const cliProbeTimeout = 15 * time.Second
+
 // authBootstrap selects Antigravity's Google sign-in for the ACP server when
 // the user is already signed in but the server has no auth method configured.
 //
 // Without a configured method, session/new answers "Authentication required".
-// ACP authenticate can start a browser OAuth flow, so AO calls it only when
-// GEMINI_HOME already records an active Google account; the agent then reuses
-// that sign-in and persists the choice to its own settings. In every other
-// case AO leaves auth to the user and surfaces the ordinary sign-in error.
+// ACP authenticate can start a browser OAuth flow, so AO calls it only with
+// evidence of a sign-in: an active Google account in GEMINI_HOME, or an agy CLI
+// that is signed in. The agy login lives outside GEMINI_HOME and records no
+// account there. The agent then reuses that sign-in and persists the choice to
+// its own settings. In every other case AO leaves auth to the user and surfaces
+// the ordinary sign-in error.
 type authBootstrap struct {
-	geminiHome func(map[string]string) (string, error)
-	timeout    time.Duration
+	geminiHome  func(map[string]string) (string, error)
+	cliSignedIn func(context.Context, map[string]string) bool
+	timeout     time.Duration
 }
 
-func newAuthBootstrap(geminiHome func(map[string]string) (string, error)) authBootstrap {
-	return authBootstrap{geminiHome: geminiHome, timeout: authTimeout}
+func newAuthBootstrap(
+	geminiHome func(map[string]string) (string, error),
+	cliSignedIn func(context.Context, map[string]string) bool,
+) authBootstrap {
+	return authBootstrap{geminiHome: geminiHome, cliSignedIn: cliSignedIn, timeout: authTimeout}
+}
+
+// cliSignedIn reports whether `agy models` works, which it refuses to do until
+// the CLI is signed in. It has no status command, and listing starts no login.
+func cliSignedIn(agyCLI func(context.Context) (string, error)) func(context.Context, map[string]string) bool {
+	return func(ctx context.Context, env map[string]string) bool {
+		if agyCLI == nil {
+			return false
+		}
+		path, err := agyCLI(ctx)
+		if err != nil {
+			return false
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, cliProbeTimeout)
+		defer cancel()
+		cmd := aoprocess.CommandContext(probeCtx, path, "models")
+		cmd.Env = os.Environ()
+		for key, value := range env {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+		cmd.WaitDelay = time.Second
+		return cmd.Run() == nil
+	}
 }
 
 func (b authBootstrap) run(ctx context.Context, conn *acpsdk.ClientSideConnection, init acpsdk.InitializeResponse, cfg acpdriver.LaunchConfig) error {
@@ -62,7 +95,10 @@ func (b authBootstrap) bootstrap(
 	if err != nil {
 		return nil
 	}
-	if authConfigured(home) || !googleSignedIn(home) {
+	if authConfigured(home) {
+		return nil
+	}
+	if !googleSignedIn(home) && (b.cliSignedIn == nil || !b.cliSignedIn(ctx, env)) {
 		return nil
 	}
 	authCtx, cancel := context.WithTimeout(ctx, b.timeout)

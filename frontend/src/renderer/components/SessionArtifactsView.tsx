@@ -15,6 +15,7 @@ import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
+import { ArtifactScrollMemory, ArtifactScrollMemoryContext, useArtifactScrollRestore } from "../lib/artifact-scroll-memory";
 import { ArtifactZoomContext, ArtifactZoomController, MAX_ARTIFACT_ZOOM, MIN_ARTIFACT_ZOOM, ZOOM_CONTROLS_REVEAL_PX, applyZoomShortcut, useArtifactZoomState, useArtifactZoomTarget, wheelZoomFactor, zoomShortcut } from "../lib/artifact-zoom";
 import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
@@ -22,12 +23,16 @@ import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
+import { mediaPlaybackKey } from "../lib/media-playback";
 import { cn } from "../lib/utils";
+import { useUiStore, type RememberedArtifactsView, type ScrollPosition } from "../stores/ui-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
 import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
-import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks, useShareAvailable } from "./ShareArtifactPopover";
+import { ArtifactCommentsButton, ArtifactCommentsWorkspace, artifactCommentsKind } from "./artifact-comments/ArtifactComments";
+import { sharedArtifactLinkId } from "../../../../packages/shared/artifacts/shared-artifact-link";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -50,6 +55,54 @@ function sortedArtifacts(artifacts: SessionArtifact[]): SessionArtifact[] {
 	return [...artifacts].sort(
 		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
 	);
+}
+
+/** What the view shows when it mounts. */
+type InitialArtifactsView = {
+	path: string | null;
+	awaited: boolean;
+	htmlSource: boolean;
+	previewVersion: number | null;
+	zoom?: number;
+	scroll?: ScrollPosition;
+	requestKey?: number;
+	/** The file was kept unlisted because the list was still loading: it shows once listed, or goes when the list settles without it. */
+	untilListed?: boolean;
+};
+
+/**
+ * The view as the session last left it, so the tab and the session come back
+ * as they were: the same file, page or source, version, zoom and scroll. An
+ * open request made while the view was away (a Summary or chat link) wins. A
+ * file renamed meanwhile is found by the path it had; one deleted meanwhile
+ * leaves the list showing, unless the list is still loading.
+ */
+export function initialArtifactsView(
+	memory: RememberedArtifactsView | undefined,
+	request: ArtifactOpenRequest | null | undefined,
+	files: readonly SessionArtifact[] | undefined,
+	listPending: boolean,
+): InitialArtifactsView {
+	if (request && request.key !== memory?.requestKey) {
+		return { path: request.path, awaited: true, htmlSource: false, previewVersion: null, requestKey: request.key };
+	}
+	const list: InitialArtifactsView = { path: null, awaited: false, htmlSource: false, previewVersion: null, requestKey: memory?.requestKey };
+	if (!memory) return list;
+	if (memory.path === null) return { ...list, scroll: memory.scroll };
+	const listed = artifactAtPath(files, memory.path);
+	if (!listed && !memory.awaited && !listPending) return list;
+	const renamed = listed !== undefined && listed.path !== memory.path;
+	return {
+		path: listed?.path ?? memory.path,
+		awaited: Boolean(memory.awaited) && !listed,
+		htmlSource: Boolean(memory.htmlSource),
+		// A saved version belongs to the path it was saved under.
+		previewVersion: renamed ? null : memory.previewVersion ?? null,
+		zoom: memory.zoom,
+		scroll: memory.scroll,
+		requestKey: memory.requestKey,
+		untilListed: !listed && !memory.awaited,
+	};
 }
 
 function fileManagerName(): string {
@@ -409,6 +462,7 @@ function ArtifactViewerFrame({
  * an edit in progress survives a look at an earlier version.
  */
 function ArtifactViewerBody({
+	active,
 	artifact,
 	artifactRoot,
 	cloud = false,
@@ -431,6 +485,8 @@ function ArtifactViewerBody({
 	menuActions,
 	zoomController,
 }: {
+	/** False while the view is hidden: a video pauses then. */
+	active: boolean;
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
 	artifactRoot?: string;
@@ -486,6 +542,7 @@ function ArtifactViewerBody({
 				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactZoomContext.Provider value={previewing || showingPage ? null : zoomController}>
 					<ArtifactFileView
+						active={active}
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
 						artifactRoot={artifactRoot}
@@ -537,6 +594,7 @@ function ArtifactViewerBody({
 				) : null}
 				{previewing ? (
 					<ArtifactVersionPreview
+						active={active}
 						artifactOrigin={artifactOrigin}
 						cloud={cloudVersions}
 						hostId={hostId}
@@ -664,11 +722,14 @@ function CloudHtmlArtifactView({
  * with isolated inline HTML previews and an optional full-screen view.
  */
 export function SessionArtifactsView({
+	active = true,
 	hostId,
 	onRequestConsumed,
 	request,
 	session,
 }: {
+	/** False while the inspector is closed or on another tab: a video pauses then. */
+	active?: boolean;
 	hostId?: string;
 	onRequestConsumed?: (key: number) => void;
 	request?: ArtifactOpenRequest | null;
@@ -697,23 +758,42 @@ export function SessionArtifactsView({
 			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [listedArtifacts, cloud, remote]);
-	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	const uiKey = sessionUiKey(session.id, hostId);
+	// The view is keyed per session and mounts again with each return to the
+	// tab or the session, so it starts as it was left, from the first frame.
+	const [initial] = useState(() => initialArtifactsView(
+		useUiStore.getState().inspectorSessions[uiKey]?.artifactsView,
+		request,
+		session.artifactFiles,
+		Boolean(session.artifactFilesPending),
+	));
+	const [selectedPath, setSelectedPath] = useState<string | null>(initial.path);
 	// A file a request opened before the session listed it, until the list has
 	// it. Only that file gets the not-listed-yet note: one that leaves the list
 	// later (deleted here or by the agent) is gone, not on its way.
-	const [awaitedPath, setAwaitedPath] = useState<string | null>(null);
+	const [awaitedPath, setAwaitedPath] = useState<string | null>(initial.awaited ? initial.path : null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	// Share hides while the open file is being edited.
 	const [editingFile, setEditingFile] = useState(false);
-	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
+	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(initial.htmlSource ? initial.path : null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
-	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
-	const [zoomController] = useState(() => new ArtifactZoomController());
+	const [previewVersion, setPreviewVersion] = useState<number | null>(initial.previewVersion);
+	// Comments show the published page in place of the local file, and close with the file.
+	const [commentsOpen, setCommentsOpen] = useState(false);
+	// The published link whose page has appeared: until then the local file
+	// stays in view while the page loads, unseen, over it.
+	const [commentsShownFor, setCommentsShownFor] = useState<string | null>(null);
+	const [publishedOutdated, setPublishedOutdated] = useState(false);
+	const shareAvailable = useShareAvailable();
+	const [zoomController] = useState(() => new ArtifactZoomController(initial.zoom));
+	const [scrollMemory] = useState(() => new ArtifactScrollMemory(initial.scroll));
+	// The open request this view last acted on; a return to the view does not act on it again.
+	const handledRequestKey = useRef(initial.requestKey);
 	// The shown file view's actions, which its name menu lists.
 	const fileMenuActions = useRef<ArtifactMenuAction[]>([]);
-	const contentRef = useRef<HTMLDivElement>(null);
-	const uiKey = sessionUiKey(session.id, hostId);
+	const [content, setContent] = useState<HTMLDivElement | null>(null);
+	const [listPanel, setListPanel] = useState<HTMLDivElement | null>(null);
 	// Who each published card's link opens for, so it is marked as on the Artifacts page.
 	const shareAccess = useReconciledShareLinks();
 	// A remote host's daemon lists no links: this computer's records mark its files.
@@ -751,11 +831,49 @@ export function SessionArtifactsView({
 		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
 	}, [cloudClient, cloudOrgId, session.id, t]);
 
-	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
-	// History is per file: opening another one starts on its live content.
-	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
-	// Every file, and each look at its page or source, opens at fit.
-	useEffect(() => zoomController.reset(), [htmlSourcePath, previewVersion, selectedPath, uiKey, zoomController]);
+	// History and comments are per file: opening another one starts on its live
+	// content, comments closed. The
+	// view never changes session (it is keyed per session), so these reset only
+	// when the reader moves on, never as it mounts with the view it was left at.
+	const shownFile = useRef(selectedPath);
+	useEffect(() => {
+		if (shownFile.current === selectedPath) return;
+		shownFile.current = selectedPath;
+		setPreviewVersion(null);
+		setCommentsOpen(false);
+		setCommentsShownFor(null);
+		setPublishedOutdated(false);
+	}, [selectedPath]);
+	// Every file, and each look at its page, source or a version, opens at fit and at its top.
+	const shownView = useRef(`${selectedPath}\n${htmlSourcePath}\n${previewVersion}`);
+	useEffect(() => {
+		const view = `${selectedPath}\n${htmlSourcePath}\n${previewVersion}`;
+		if (shownView.current === view) return;
+		shownView.current = view;
+		zoomController.reset();
+		scrollMemory.clear();
+	}, [htmlSourcePath, previewVersion, scrollMemory, selectedPath, zoomController]);
+	// Remembered as the view goes, for the next time it is shown. A layout
+	// effect's cleanup runs before the file views' own effects let go of the
+	// zoom, so it still reads the zoom they were showing.
+	const leftAs = useRef({ selectedPath, awaitedPath, htmlSourcePath, previewVersion });
+	useLayoutEffect(() => {
+		leftAs.current = { selectedPath, awaitedPath, htmlSourcePath, previewVersion };
+	});
+	useLayoutEffect(() => () => {
+		const { selectedPath: path, awaitedPath: awaited, htmlSourcePath: source, previewVersion: version } = leftAs.current;
+		const zoom = zoomController.getZoom();
+		const scroll = scrollMemory.current();
+		useUiStore.getState().setArtifactsView(uiKey, {
+			path,
+			...(path !== null && awaited === path ? { awaited: true } : {}),
+			...(path !== null && source === path ? { htmlSource: true } : {}),
+			...(path !== null && version !== null ? { previewVersion: version } : {}),
+			...(path !== null && zoom !== 1 ? { zoom } : {}),
+			...(scroll ? { scroll } : {}),
+			...(handledRequestKey.current !== undefined ? { requestKey: handledRequestKey.current } : {}),
+		});
+	}, [scrollMemory, uiKey, zoomController]);
 	const onViewerKeyDown = useCallback((event: KeyboardEvent) => {
 		const action = zoomShortcut(event, isMacPlatform());
 		if (!action || event.defaultPrevented || !zoomController.hasTarget()) return;
@@ -788,13 +906,18 @@ export function SessionArtifactsView({
 		};
 	}, [reportEngaged, zoomController]);
 	const exitFullscreen = useMemo(() => () => setFullscreen(false), []);
+	// A file left open whose session's list was still loading on return, until the list settles.
+	const untilListed = useRef(Boolean(initial.untilListed));
 	useEffect(() => {
-		if (request) {
-			setEditingPath(null);
-			setHtmlSourcePath(null);
-			setSelectedPath(request.path);
-			setAwaitedPath(request.path);
-		}
+		if (!request || request.key === handledRequestKey.current) return;
+		handledRequestKey.current = request.key;
+		// The requested file replaces one left open, so a list that settles in
+		// the same render does not let go of the request in its place.
+		untilListed.current = false;
+		setEditingPath(null);
+		setHtmlSourcePath(null);
+		setSelectedPath(request.path);
+		setAwaitedPath(request.path);
 	}, [request]);
 
 	// A file renamed while it is open, or opened by a link from before its
@@ -806,6 +929,15 @@ export function SessionArtifactsView({
 	useEffect(() => {
 		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
 	}, [listed, selectedPath]);
+	// A file left open whose session's list was still loading on return: once
+	// the list is in without it, it was deleted meanwhile, and the list stays,
+	// even if a file by that name comes back later.
+	const listPending = Boolean(session.artifactFilesPending);
+	useEffect(() => {
+		if (!untilListed.current || (!listed && listPending)) return;
+		untilListed.current = false;
+		if (!listed && selectedPath !== null && selectedPath !== awaitedPath) setSelectedPath(null);
+	}, [awaitedPath, listPending, listed, selectedPath]);
 	// An open cloud file keeps the URL it opened with while the access prefix
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
@@ -829,8 +961,10 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(session, Boolean(selected) && !hostId);
+	// Follow a requested file before it appears in the list too: the stream's
+	// ready event rereads files written before the view opened, and later file
+	// changes refresh the list so the pending path can resolve.
+	useArtifactFileChanges(session, Boolean(selected || (awaitedPath !== null && selectedPath === awaitedPath)) && !hostId);
 	// Versions are read back as text or, from a daemon that can, by the media
 	// viewers, so a cloud media file and any other binary file, such as an
 	// archive, get no History. This shares the viewer's cached read of the file, which for a
@@ -867,9 +1001,7 @@ export function SessionArtifactsView({
 	}, [selected]);
 	// A trackpad pinch arrives as a wheel event with ctrlKey: it zooms the
 	// artifact, never the app. A page's own pinch comes through its frame.
-	const hasSelection = Boolean(selected);
 	useEffect(() => {
-		const content = contentRef.current;
 		if (!content) return;
 		const onWheel = (event: WheelEvent) => {
 			if (!event.ctrlKey) return;
@@ -878,17 +1010,30 @@ export function SessionArtifactsView({
 		};
 		content.addEventListener("wheel", onWheel, { passive: false });
 		return () => content.removeEventListener("wheel", onWheel);
-	}, [hasSelection, zoomController]);
+	}, [content, zoomController]);
+	const hasHtmlPreview = Boolean(selected && selected.kind === "html" && (cloud || (remote ? Boolean(selected.rawUrl) : selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl))));
+	const showingHtmlSource = selected !== undefined && htmlSourcePath === selected.path;
+	// A page scrolls inside its frame, which reports and restores its own
+	// scroll; the file view, a PDF and the list scroll here. A saved version is
+	// a passing look and opens at its top.
+	const showingPage = hasHtmlPreview && !showingHtmlSource && previewVersion === null;
+	useArtifactScrollRestore(content, scrollMemory, Boolean(selected) && !showingPage && previewVersion === null);
+	useArtifactScrollRestore(listPanel, scrollMemory, selectedPath === null);
 	// Only the cards in view and near it are built; the list itself scrolls.
 	const grid = useVirtualGridRows(listedArtifacts.length);
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
-		const hasHtmlPreview = selected.kind === "html" && (cloud || (remote ? Boolean(selected.rawUrl) : selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
-		const showingHtmlSource = htmlSourcePath === selected.path;
 		// The page also opens in the session's Browser, the same target as
 		// `ao preview` on its path; full screen is left first since it covers it.
 		const browserUrl = openInBrowser && !cloud && previewVersion === null ? selected.previewUrl : undefined;
+		// Comments: a published Markdown or HTML file, for whoever sees its Publish button (its owner).
+		const shareOwner = !editingFile && !session.cloud?.shared && (!session.cloud || cloudOwner);
+		const publishedUrl = cloud || !hostId ? selected.shareUrl : findHostShareLink(hostShareLinks, hostId, session.id, selected)?.url;
+		const commentsKind = artifactCommentsKind(selected.path);
+		const commentsSlug = shareOwner && shareAvailable && commentsKind && publishedUrl ? sharedArtifactLinkId(publishedUrl) : null;
+		const showingComments = commentsOpen && commentsSlug !== null && commentsKind !== null && previewVersion === null && !showingHtmlSource;
+		const commentsCover = showingComments && commentsShownFor === commentsSlug;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onEngagedChange={onViewerEngagedChange} onExitFullscreen={exitFullscreen} onKeyDown={onViewerKeyDown}>
 				{/* One header row: back, the file's name menu (its view and file actions), an edit's Save, Share, and full screen. */}
@@ -902,7 +1047,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} viewingHistoricalVersion={previewVersion !== null} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
 						<ArtifactViewMenuItems
 							fileActions={fileMenuActions}
 							history={(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (
@@ -924,6 +1069,7 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
+								onOutdatedChange={setPublishedOutdated}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
@@ -931,6 +1077,7 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
+								onOutdatedChange={setPublishedOutdated}
 							/>
 						) : (
 							// Downloaded from the host through its proxy, then uploaded from here.
@@ -939,8 +1086,21 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(findHostShareLink(hostShareLinks, hostId, session.id, selected))}
 								revision={listed?.updatedAt}
+								onOutdatedChange={setPublishedOutdated}
 							/>
 						)}
+						{commentsSlug ? (
+							<ArtifactCommentsButton
+								onToggle={() => {
+									setPreviewVersion(null);
+									setHtmlSourcePath(null);
+									setCommentsOpen(!showingComments);
+									setCommentsShownFor(null);
+								}}
+								open={showingComments}
+								slug={commentsSlug}
+							/>
+						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
@@ -958,8 +1118,8 @@ export function SessionArtifactsView({
 						</Tooltip>
 					</div>
 				</div>
-				<div className="relative min-h-0 flex-1" ref={contentRef}>
-					{cloud && !selected.rawUrl ? (
+				<div className="relative min-h-0 flex-1" ref={setContent}>
+					{commentsCover ? null : cloud && !selected.rawUrl ? (
 						cloudAccess.isError ? (
 							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
 						) : (
@@ -980,7 +1140,9 @@ export function SessionArtifactsView({
 							/>
 						</ArtifactZoomContext.Provider>
 					) : (
+						<ArtifactScrollMemoryContext.Provider value={showingPage && !remote ? scrollMemory : null}>
 						<ArtifactViewerBody
+							active={active}
 							artifact={selected}
 							htmlSource={showingHtmlSource}
 							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated}
@@ -1003,7 +1165,22 @@ export function SessionArtifactsView({
 							zoomController={zoomController}
 							menuActions={fileMenuActions}
 						/>
+						</ArtifactScrollMemoryContext.Provider>
 					)}
+					{showingComments && commentsSlug && commentsKind ? (
+						<div className={cn("absolute inset-0 bg-background", !commentsCover && "invisible")} data-testid="artifact-comments-layer">
+							<ArtifactCommentsWorkspace
+								kind={commentsKind}
+								mediaKey={mediaPlaybackKey(session.id, selected.path, hostId)}
+								onClose={() => { setCommentsOpen(false); setCommentsShownFor(null); }}
+								onShown={() => setCommentsShownFor(commentsSlug)}
+								outdated={publishedOutdated}
+								sendTarget={{ session, hostId, path: selected.path, name: selected.name }}
+								slug={commentsSlug}
+								title={selected.name}
+							/>
+						</div>
+					) : null}
 					<ArtifactZoomControls controller={zoomController} />
 				</div>
 			</ArtifactViewerFrame>
@@ -1011,7 +1188,7 @@ export function SessionArtifactsView({
 	}
 
 	return (
-		<div className="flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
+		<div className="flex h-full min-h-0 min-w-0 flex-col" ref={setListPanel} role="tabpanel">
 			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
@@ -1028,7 +1205,7 @@ export function SessionArtifactsView({
 			) : artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul ref={grid.listRef} className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
+				<ul ref={grid.listRef} data-artifact-scroll="" className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
 					<GridSpacer height={grid.before} />
 					{listedArtifacts.slice(grid.start, grid.end).map((artifact) => {
 						const row = artifactRow(artifact);

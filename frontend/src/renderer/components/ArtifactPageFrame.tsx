@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
+import { useArtifactScrollMemory } from "../lib/artifact-scroll-memory";
 import { useArtifactZoomTarget, wheelZoomFactor, ZOOM_CONTROLS_REVEAL_PX } from "../lib/artifact-zoom";
+import { readRenderLinkRequest } from "../lib/render-frame";
+import { AppBrowserLinkContext } from "./AppLink";
 
 type ZoomRequest = { action?: unknown; deltaMode?: unknown; deltaY?: unknown; reveal?: unknown; x?: unknown; y?: unknown };
 
@@ -10,16 +13,50 @@ function readZoomRequest(data: unknown): ZoomRequest | undefined {
 	return typeof message.params === "object" && message.params !== null ? message.params as ZoomRequest : undefined;
 }
 
+/** Where the page reports it is scrolled (`ao/scroll`), if the message is one. */
+function readScrollReport(data: unknown): { x: number; y: number } | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const message = data as Record<string, unknown>;
+	if (message.jsonrpc !== "2.0" || message.method !== "ao/scroll") return undefined;
+	const params = message.params as Record<string, unknown> | null | undefined;
+	const x = params?.x, y = params?.y;
+	return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
+}
+
 /**
  * An HTML artifact on its isolated inline origin. The page is cross-origin, so
  * its pinch and zoom keys reach the viewer through the render bootstrap
  * (render_bootstrap.js), and the viewer's zoom goes back to it to apply as
  * browser zoom, around the pinch point. The page also reports the pointer
  * nearing its bottom edge, where the zoom controls float, to bring them back.
+ * A link the reader clicks in the page is cancelled there and handed to the
+ * viewer, which opens it in the session's Browser tab, as other links in a
+ * session do, or in the OS browser where no session is in view. In the
+ * artifact viewer the page reports where it is scrolled, and a page shown
+ * again (on a return to its session or tab) is scrolled back there.
  */
-export function ArtifactPageFrame({ src, title }: { src: string; title: string }) {
+export function ArtifactPageFrame({ src, title, className = "absolute inset-0 h-full w-full border-0 bg-background" }: { src: string; title: string; className?: string }) {
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const { controller } = useArtifactZoomTarget();
+	const scrollMemory = useArtifactScrollMemory();
+	const openInAppBrowser = useContext(AppBrowserLinkContext);
+	const openInAppBrowserRef = useRef(openInAppBrowser);
+	openInAppBrowserRef.current = openInAppBrowser;
+
+	useEffect(() => {
+		const onMessage = (event: MessageEvent) => {
+			const frame = frameRef.current;
+			if (!frame || event.source !== frame.contentWindow) return;
+			const url = readRenderLinkRequest(event.data);
+			if (!url) return;
+			// Only while the reader is using this frame: a page can post on load.
+			if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
+			if (openInAppBrowserRef.current) openInAppBrowserRef.current(url);
+			else window.open(url, "_blank", "noopener,noreferrer");
+		};
+		window.addEventListener("message", onMessage);
+		return () => window.removeEventListener("message", onMessage);
+	}, []);
 
 	useEffect(() => {
 		const frame = frameRef.current;
@@ -65,9 +102,35 @@ export function ArtifactPageFrame({ src, title }: { src: string; title: string }
 		};
 	}, [controller]);
 
+	useEffect(() => {
+		const frame = frameRef.current;
+		if (!frame || !scrollMemory) return;
+		// After the zoom effect's load handler, so the page is at its zoom before it scrolls.
+		const onLoad = () => {
+			const scrollTo = scrollMemory.pendingPosition();
+			scrollMemory.settle();
+			frame.contentWindow?.postMessage({
+				jsonrpc: "2.0",
+				method: "ui/notifications/host-context-changed",
+				params: { scrollReport: true, ...(scrollTo ? { scrollTo } : {}) },
+			}, "*");
+		};
+		const onMessage = (event: MessageEvent) => {
+			if (event.source !== frame.contentWindow) return;
+			const position = readScrollReport(event.data);
+			if (position) scrollMemory.record(position);
+		};
+		frame.addEventListener("load", onLoad);
+		window.addEventListener("message", onMessage);
+		return () => {
+			frame.removeEventListener("load", onLoad);
+			window.removeEventListener("message", onMessage);
+		};
+	}, [scrollMemory]);
+
 	return (
 		<iframe
-			className="absolute inset-0 h-full w-full border-0 bg-background"
+			className={className}
 			ref={frameRef}
 			sandbox="allow-scripts allow-same-origin"
 			src={src}

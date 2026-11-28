@@ -10,6 +10,8 @@ import (
 )
 
 var (
+	// ErrTerminalMessageNotReady refuses a paste into native decisions or drafts.
+	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
@@ -268,6 +270,31 @@ type AgentLaunchAuthValidator interface {
 	ValidateLaunchAuth(ctx context.Context, workingDir string, env map[string]string) (AgentAuthStatus, error)
 }
 
+// AgentSkillRequest describes the session an agent's skills are asked about.
+type AgentSkillRequest struct {
+	WorkspacePath string
+	Env           map[string]string
+	// Chat is true for a chat session, false for a terminal one.
+	Chat bool
+}
+
+// AgentSkillSupport is how an agent finds the user's skills.
+type AgentSkillSupport struct {
+	// Native are the folders of user skills the agent loads itself, whatever
+	// its workspace.
+	Native []string
+	// Layout is where the agent looks for skills in a directory its adapter
+	// adds to one session, as a skillbridge layout. Empty means the adapter
+	// adds none, and the session is pointed at a list of skills instead.
+	Layout string
+}
+
+// AgentSkillSource is the optional capability of an adapter that knows where
+// its agent finds skills.
+type AgentSkillSource interface {
+	SkillSupport(context.Context, AgentSkillRequest) AgentSkillSupport
+}
+
 // AgentBinaryResolver is the optional capability adapters expose when their
 // binary can be checked without constructing a real session launch command.
 type AgentBinaryResolver interface {
@@ -295,6 +322,22 @@ type AgentTerminalVersionRefresher interface {
 // durable conversation id accepted by their resume command.
 type AgentNativeSessionResolver interface {
 	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
+}
+
+// AgentTerminalReplyReader is an optional capability for a Terminal UI harness
+// whose Stop hook omits the turn's reply. The daemon reads the reply from the
+// adapter's native history when a stop arrives without one, so the hook CLI
+// never opens agent storage itself. It returns "" when no reply is available.
+type AgentTerminalReplyReader interface {
+	TerminalTurnReply(ctx context.Context, cfg TerminalReplyConfig) string
+}
+
+// TerminalReplyConfig locates one AO session's adapter-owned native history.
+// NativeSessionID is the hook's native thread, or "" when it reported none.
+type TerminalReplyConfig struct {
+	DataDir         string
+	SessionID       domain.SessionID
+	NativeSessionID string
 }
 
 // NativeSessionResolveConfig identifies one supervised agent launch. DataDir
@@ -646,11 +689,44 @@ type TranscriptTurnFailureDetector interface {
 	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
 }
 
+// NativeMessage is one message a harness recorded: a user prompt, or an
+// assistant reply when Assistant is set.
+type NativeMessage struct {
+	Assistant bool
+	Text      string
+	At        time.Time
+}
+
+// NativeSessionSnapshot is what a harness reports about one live top-level session.
+type NativeSessionSnapshot struct {
+	WorkspacePath  string
+	AgentSessionID string
+	TranscriptPath string
+	StartedAt      time.Time
+	// Working is the harness's own report that a turn is running.
+	Working bool
+	// Messages are the user and assistant messages from the transcript's tail,
+	// oldest first, so turns that finished between polls can all be replayed.
+	Messages []NativeMessage
+}
+
+// NativeSessionObserver is implemented by adapters whose harness can't call AO's
+// hooks but reports its live sessions itself. ok is false when the installed
+// version doesn't need it, so hook signals aren't doubled.
+type NativeSessionObserver interface {
+	ObserveNativeSessions(ctx context.Context, dataDir string) (sessions []NativeSessionSnapshot, ok bool, err error)
+}
+
 // TerminalActivityOptions lets an adapter declare how the shared observer
 // should read its terminal and which native decision states it can report.
 type TerminalActivityOptions struct {
 	PreferStyledOutput bool
-	SupportsBlocked    bool
+	// RawOutputFallback lets a PreferStyledOutput adapter keep reconciling
+	// from raw output when the runtime reports
+	// ErrStyledTerminalOutputUnavailable (older ConPTY pty-hosts). Adapters
+	// whose detection is only sound on the rendered screen leave it false.
+	RawOutputFallback bool
+	SupportsBlocked   bool
 }
 
 // TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.
@@ -927,6 +1003,20 @@ type RestoreConfig struct {
 	// Env is the environment the runtime layers over the daemon's own for the
 	// resumed process, as LaunchConfig.Env is for a launch.
 	Env map[string]string
+}
+
+// NativeRestoreVerifier is required by CLIs whose resume command can silently
+// open fresh history. AO checks current-generation native evidence and a
+// rendered viewport before publishing the replacement runtime.
+type NativeRestoreVerifier interface {
+	VerifyNativeRestore(context.Context, RestoreConfig, string, string) (bool, error)
+}
+
+// TerminalMessageInputGuard opts a harness into serialized pane input and
+// validates pasted messages against the current rendered composer. Raw user
+// keystrokes remain available for native decisions and editing drafts.
+type TerminalMessageInputGuard interface {
+	ValidateTerminalMessage(output, message string) error
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

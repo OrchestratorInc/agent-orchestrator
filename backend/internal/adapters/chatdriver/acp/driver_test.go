@@ -907,6 +907,10 @@ type legacyKimiAgent struct {
 	mode               string
 	modeCalls          int
 	configCalls        int
+	// acceptConfig makes session/set_config_option succeed and record the
+	// applied value in configs instead of answering method-not-found.
+	acceptConfig bool
+	configs      map[string]string
 }
 
 func fakeLegacyKimiSpawn(agent *legacyKimiAgent) spawnFunc {
@@ -1006,10 +1010,23 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    any    `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.acceptConfig {
+				if agent.configs == nil {
+					agent.configs = make(map[string]string)
+				}
+				agent.configs[params.ConfigID] = fmt.Sprint(params.Value)
+				result = map[string]any{"configOptions": []any{}}
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -1603,6 +1620,87 @@ waitForCompletion:
 			}
 			break
 		}
+	}
+}
+
+// Stop pressed again while the provider is still winding the turn down is the
+// same request. It used to fail with "session/cancel is already in progress",
+// which reached the user as a 500 although their first Stop was working.
+func TestACPRepeatedInterruptWhileCancellingIsIdempotent(t *testing.T) {
+	cancelReceived := make(chan struct{}, 1)
+	promptReceived := make(chan struct{}, 1)
+	completePrompt := make(chan struct{})
+	responseSent := make(chan error, 1)
+	driver := New(Config{
+		Harness: domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true,
+			ports.ChatCapabilityInterrupt: true,
+		},
+		Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(delayedCancelSpawn(promptReceived, cancelReceived, completePrompt, responseSent))
+
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conversation.Close()
+	_ = nextEvent(t, conversation.Events()) // controller.ready
+	ref, err := conversation.SendTurn(context.Background(), ports.ChatUserMessage{Text: "wait"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conversation.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	select {
+	case <-promptReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP prompt request")
+	}
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-cancelReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP cancel notification")
+	}
+
+	for range 3 {
+		if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+			t.Fatalf("repeated Interrupt while cancelling = %v, want nil", err)
+		}
+	}
+	if err := conversation.Interrupt(context.Background(), ""); err != nil {
+		t.Fatalf("repeated untargeted Interrupt while cancelling = %v, want nil", err)
+	}
+
+	close(completePrompt)
+	if err := <-responseSent; err != nil {
+		t.Fatalf("provider prompt response: %v", err)
+	}
+	for {
+		event := nextEvent(t, conversation.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateInterrupted {
+				t.Fatalf("turn state = %q, want interrupted", event.TurnState)
+			}
+			break
+		}
+	}
+	select {
+	case <-cancelReceived:
+		t.Fatal("repeated Stop sent the provider a second session/cancel")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Once the turn has settled there is genuinely nothing to stop.
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); !errors.Is(err, ports.ErrChatNoActiveTurn) {
+		t.Fatalf("Interrupt after settlement = %v, want ErrChatNoActiveTurn", err)
 	}
 }
 
@@ -2520,6 +2618,64 @@ func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t
 	}
 }
 
+func TestHistoricalUserContentDropsPlainStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
+	standing := PlainStandingInstructionsBlock("AO standing instructions")
+	// Antigravity replays the preamble and the first prompt as one message.
+	joined := acpsdk.TextBlock(standing.Text.Text + "\n\nFix the failing test")
+	if got := historicalUserContent(joined); got != "Fix the failing test" {
+		t.Fatalf("replayed first message = %q, want only what the user typed", got)
+	}
+	if got := historicalUserContent(standing); got != "" {
+		t.Fatalf("replayed preamble alone = %q, want empty", got)
+	}
+	quoted := acpsdk.TextBlock("Explain </ao_standing_instructions> in the docs")
+	if got := historicalUserContent(quoted); got != quoted.Text.Text {
+		t.Fatalf("message quoting the tag = %q, want it unchanged", got)
+	}
+}
+
+// Antigravity 1.5.14 replays the first prompt as two id-less user chunks: the
+// standing-instructions preamble, then what the user typed. The merged first
+// message must be only the user's text, or the ao_high_water checkpoint
+// never matches.
+func TestACPHistoryReplayDropsPlainStandingInstructionsChunkBeforeTheFirstPrompt(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+		loadUpdates: []acpsdk.SessionUpdate{
+			acpsdk.UpdateUserMessage(PlainStandingInstructionsBlock("AO standing instructions")),
+			acpsdk.UpdateUserMessageText("Fix the failing test"),
+			acpsdk.UpdateAgentMessageText("Fixed."),
+		},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "sess1", WorkspacePath: t.TempDir(), ProviderConversationID: "provider-session-1",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conv.Close()
+	events, err := conv.(ports.ChatHistoryReader).ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	var users []string
+	for _, event := range events {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			users = append(users, event.Text)
+		}
+	}
+	if want := []string{"Fix the failing test"}; !reflect.DeepEqual(users, want) {
+		t.Fatalf("replayed user messages = %q, want %q", users, want)
+	}
+}
+
 func TestHistoricalUserContentSuppressesOnlyMarkedInternalReplayResources(t *testing.T) {
 	resource := acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
 		TextResourceContents: &acpsdk.TextResourceContents{
@@ -2959,6 +3115,271 @@ func TestACPDriverParksAndResolvesStructuredElicitation(t *testing.T) {
 	agent.mu.Unlock()
 	if response.Accept == nil || response.Accept.Content["choice"] != "native" {
 		t.Fatalf("elicitation response = %#v", response)
+	}
+}
+
+// Stop closes an open question even when the provider ignores session/cancel
+// (ACP leaves answering it to the client), so the turn can end.
+func TestACPInterruptCancelsQuestionTheProviderKeepsOpen(t *testing.T) {
+	request := acpsdk.NewUnstableCreateElicitationRequestForm(acpsdk.UnstableElicitationSchema{
+		Type:       acpsdk.UnstableElicitationSchemaTypeObject,
+		Properties: map[string]any{"choice": map[string]any{"type": "string"}},
+	})
+	request.Form.Message = "Which approach?"
+	agent := &fakeAgent{elicitation: &request}
+	driver := New(Config{
+		Harness: domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true,
+		},
+		Probe:  func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+	_ = nextEvent(t, conv.Events())
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "ask me"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var requestID string
+	for requestID == "" {
+		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventInputRequested {
+			requestID = event.RequestID
+		}
+	}
+	if err := conv.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	resolved := false
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventInputResolved && event.RequestID == requestID {
+			resolved = true
+		}
+		if event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if !resolved {
+		t.Fatal("question was not marked resolved after Stop")
+	}
+	agent.mu.Lock()
+	response := agent.elicitationResponse
+	agent.mu.Unlock()
+	if response.Accept != nil || response.Decline != nil {
+		t.Fatalf("elicitation response = %#v, want cancel", response)
+	}
+	if err := conv.(ports.ChatInputResponder).ResolveInput(context.Background(), requestID,
+		ports.ChatInputResponse{Action: "accept", Content: map[string]any{"choice": "late"}}); !errors.Is(err, ports.ErrChatRequestNotPending) {
+		t.Fatalf("late answer error = %v, want ErrChatRequestNotPending", err)
+	}
+}
+
+// A question that reaches AO after Stop already closed the turn's questions is
+// cancelled at once instead of waiting with no deadline.
+func TestACPQuestionAfterStopIsCancelled(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cancelErr error
+		wantPark  bool
+	}{
+		{name: "cancel sent", wantPark: false},
+		{name: "cancel failed", cancelErr: errors.New("closed pipe"), wantPark: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done := make(chan struct{})
+			close(done)
+			c := &conversation{
+				log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+				pendingInputs: make(map[string]*parkedInput),
+				events:        make(chan ports.ChatEvent, 16),
+				activeTurn:    "turn-1",
+				interrupt:     &interruptAttempt{turnID: "turn-1", done: done, err: tc.cancelErr},
+			}
+			result := make(chan ports.ChatInputResponse, 1)
+			go func() {
+				response, _ := c.RequestInput(context.Background(), ports.ChatInputRequest{
+					Mode: ports.ChatInputModeForm, Message: "Which approach?",
+				})
+				result <- response
+			}()
+			if !tc.wantPark {
+				select {
+				case response := <-result:
+					if response.Action != ports.ChatInputActionCancel {
+						t.Fatalf("response = %#v, want cancel", response)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("question after Stop is still waiting")
+				}
+				select {
+				case event := <-c.Events():
+					t.Fatalf("unexpected event %s for a question Stop already closed", event.Kind)
+				default:
+				}
+				return
+			}
+			if event := nextEvent(t, c.Events()); event.Kind != ports.ChatEventInputRequested {
+				t.Fatalf("event = %s, want the question", event.Kind)
+			}
+			c.failPendingInputs()
+			<-result
+		})
+	}
+}
+
+// Stop never reports a question resolved before it was reported requested.
+func TestACPStopResolvesQuestionAfterItIsRequested(t *testing.T) {
+	c := &conversation{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		pendingInputs: make(map[string]*parkedInput),
+		events:        make(chan ports.ChatEvent, 16),
+	}
+	parked := &parkedInput{
+		turnID: "turn-1", result: make(chan ports.ChatInputResponse, 1), ready: make(chan struct{}),
+	}
+	c.pendingInputs["q1"] = parked
+	finished := make(chan struct{})
+	go func() {
+		c.cancelTurnInputs("turn-1")
+		close(finished)
+	}()
+	select {
+	case event := <-c.Events():
+		t.Fatalf("%s emitted before the question was requested", event.Kind)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(parked.ready)
+	if event := nextEvent(t, c.Events()); event.Kind != ports.ChatEventInputResolved || event.RequestID != "q1" {
+		t.Fatalf("event = %#v, want q1 resolved", event)
+	}
+	<-finished
+	if response := <-parked.result; response.Action != ports.ChatInputActionCancel {
+		t.Fatalf("response = %#v, want cancel", response)
+	}
+}
+
+// An answer that could not be recorded puts its question back only while the
+// question's turn is still running; otherwise nothing would ever close it.
+func TestACPUnrecordedAnswerRestoresOnlyALiveTurnsQuestion(t *testing.T) {
+	interrupted := make(chan struct{})
+	close(interrupted)
+	for _, tc := range []struct {
+		name       string
+		activeTurn string
+		interrupt  *interruptAttempt
+		restored   bool
+	}{
+		{name: "turn still running", activeTurn: "turn-1", restored: true},
+		{name: "turn stopped", activeTurn: "turn-1",
+			interrupt: &interruptAttempt{turnID: "turn-1", done: interrupted}},
+		{name: "turn ended", activeTurn: ""},
+		{name: "next turn running", activeTurn: "turn-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The host cannot be written to, so recording the answer fails, but the
+			// connection stays open and events still flow.
+			hostIn, toHost := io.Pipe()
+			_ = hostIn.CloseWithError(errors.New("host gone"))
+			fromHost, hostOut := io.Pipe()
+			t.Cleanup(func() { _ = hostOut.Close() })
+			conn := acpsdk.NewClientSideConnection(nil, toHost, fromHost)
+			parked := &parkedInput{
+				request: ports.ChatInputRequest{Mode: ports.ChatInputModeURL},
+				turnID:  "turn-1", result: make(chan ports.ChatInputResponse, 1), ready: make(chan struct{}),
+			}
+			close(parked.ready)
+			c := &conversation{
+				conn: conn, proc: &process{terminate: func() error { return nil }},
+				log:           slog.New(slog.DiscardHandler),
+				pendingInputs: map[string]*parkedInput{"q1": parked},
+				events:        make(chan ports.ChatEvent, 16),
+				activeTurn:    tc.activeTurn, interrupt: tc.interrupt,
+			}
+			if err := c.ResolveInput(context.Background(), "q1",
+				ports.ChatInputResponse{Action: ports.ChatInputActionAccept}); err == nil {
+				t.Fatal("ResolveInput succeeded without recording the answer")
+			}
+			if tc.restored {
+				if c.pendingInputs["q1"] != parked {
+					t.Fatal("question of a running turn was not put back")
+				}
+				select {
+				case event := <-c.Events():
+					t.Fatalf("unexpected event %s for a question still open", event.Kind)
+				case response := <-parked.result:
+					t.Fatalf("question still open was answered: %#v", response)
+				default:
+				}
+				return
+			}
+			if _, pending := c.pendingInputs["q1"]; pending {
+				t.Fatal("question of a stopped or ended turn was put back")
+			}
+			if event := nextEvent(t, c.Events()); event.Kind != ports.ChatEventInputResolved || event.RequestID != "q1" {
+				t.Fatalf("event = %#v, want q1 resolved", event)
+			}
+			if response := <-parked.result; response.Action != ports.ChatInputActionCancel {
+				t.Fatalf("response = %#v, want cancel", response)
+			}
+		})
+	}
+}
+
+// A question has no deadline: answers given after the approval deadline still
+// reach the agent, instead of an empty form that reads as "no answers".
+func TestACPQuestionWaitsPastTheApprovalDeadline(t *testing.T) {
+	expired := make(chan time.Time)
+	close(expired)
+	restore := timeAfter
+	timeAfter = func(time.Duration) <-chan time.Time { return expired }
+	t.Cleanup(func() { timeAfter = restore })
+
+	c := &conversation{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		pendingInputs: make(map[string]*parkedInput),
+		events:        make(chan ports.ChatEvent, 16),
+	}
+	result := make(chan ports.ChatInputResponse, 1)
+	go func() {
+		response, _ := c.RequestInput(context.Background(), ports.ChatInputRequest{
+			Mode: ports.ChatInputModeForm, Message: "Which approach?",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{"choice": map[string]any{"type": "string"}}},
+		})
+		result <- response
+	}()
+	requested := nextEvent(t, c.Events())
+	if requested.Kind != ports.ChatEventInputRequested {
+		t.Fatalf("first event = %#v, want the question", requested)
+	}
+	select {
+	case response := <-result:
+		t.Fatalf("question closed before it was answered: %#v", response)
+	case event := <-c.Events():
+		t.Fatalf("question closed before it was answered: %s", event.Kind)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	answer := ports.ChatInputResponse{Action: ports.ChatInputActionAccept, Content: map[string]any{"choice": "native"}}
+	if err := c.ResolveInput(context.Background(), requested.RequestID, answer); err != nil {
+		t.Fatalf("ResolveInput: %v", err)
+	}
+	select {
+	case response := <-result:
+		if !reflect.DeepEqual(response, answer) {
+			t.Fatalf("agent got %#v, want %#v", response, answer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("answer never reached the agent")
 	}
 }
 
@@ -3749,12 +4170,8 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	air, _ := jetbrains["air"].(map[string]any)
 	version, versionOK := number(air["version"])
 	capabilities, _ := air["capabilities"].([]any)
-	capability := ""
-	if len(capabilities) == 1 {
-		capability, _ = capabilities[0].(string)
-	}
-	if !versionOK || version != 1 || capability != "sessionFailure" {
-		t.Fatalf("session failure capability = %#v", air)
+	if !versionOK || version != 1 || len(capabilities) != 1 || capabilities[0] != "sessionFailure" {
+		t.Fatalf("session failure and async-task capabilities = %#v", air)
 	}
 
 	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
@@ -4125,6 +4542,136 @@ func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testi
 	agent.mu.Unlock()
 	if model != "composer-2.5[fast=false]" || calls != 1 {
 		t.Fatalf("legacy model setter = %q across %d calls, want advertised non-fast value", model, calls)
+	}
+}
+
+func TestACPDriverKeepsItsDefaultForAnOptionalModelItDoesNotOffer(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash-high",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash-high", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "claude-opus-4-6-thinking",
+	})
+	if err != nil {
+		t.Fatalf("Start with a model the session lacks: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 {
+		t.Fatalf("session/set_model called %d times, want the default kept", agent.modelCalls)
+	}
+}
+
+func startLegacyVariant(t *testing.T, agent *legacyKimiAgent) {
+	t.Helper()
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			return strings.TrimSuffix(model, "-medium"), SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, true
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	conv.Close()
+
+}
+
+func TestACPDriverSplitsAModelTheSessionOffersOnlyAsAVariant(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+		acceptConfig:       true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want the variant set as its own option", agent.modelCalls, agent.configCalls)
+	}
+	if got := agent.configs["thinking_level"]; got != "medium" {
+		t.Fatalf("thinking_level applied = %q, want medium (configs %v)", got, agent.configs)
+	}
+}
+
+func TestACPDriverToleratesAVariantSetterTheSessionLacks(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want one tolerated config attempt", agent.modelCalls, agent.configCalls)
+	}
+	if len(agent.configs) != 0 {
+		t.Fatalf("configs = %v, want nothing applied", agent.configs)
+	}
+}
+
+func TestACPDriverSplitsAVariantOnTheModernModelSelector(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-3.8-flash", "gemini-3.8-flash"),
+		selectConfigOption("thinking_level", "Thinking", "thought_level", "low", "low", "medium", "high"),
+	}}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			base, ok := strings.CutSuffix(model, "-medium")
+			return base, SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, ok
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["thinking_level"] != "medium" || agent.options["model"] != "" {
+		t.Fatalf("options set = %#v, want only thinking_level=medium on the offered base model", agent.options)
 	}
 }
 
@@ -5279,13 +5826,15 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 	}
 
 	// Drain events and verify compaction event
-	var compactedEvent *ports.ChatEvent
+	var compactedEvent, runningEvent *ports.ChatEvent
 	for {
 		ev := nextEvent(t, opened.Events())
 		if ev.Kind == ports.ChatEventMessageDelta {
 			t.Fatalf("unexpected message delta emitted during compaction turn: %q", ev.Delta)
 		}
-		if ev.Kind == ports.ChatEventCompacted {
+		if ev.Kind == ports.ChatEventCompacted && ev.ActivityStatus == domain.ActivityStatusRunning {
+			runningEvent = &ev
+		} else if ev.Kind == ports.ChatEventCompacted {
 			compactedEvent = &ev
 		}
 		if ev.Kind == ports.ChatEventTurnCompleted {
@@ -5295,6 +5844,12 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 
 	if compactedEvent == nil {
 		t.Fatal("ChatEventCompacted was not emitted")
+	}
+	if runningEvent == nil || runningEvent.ProviderItemID == "" || runningEvent.ProviderItemID != compactedEvent.ProviderItemID {
+		t.Fatalf("running row = %+v, want one under way before the settled row, on the same item", runningEvent)
+	}
+	if compactedEvent.ActivityStatus == domain.ActivityStatusRunning {
+		t.Fatal("the last compaction row is still running")
 	}
 	if !strings.Contains(compactedEvent.Summary, "15.0k tokens") {
 		t.Errorf("summary = %q, want 15.0k tokens named", compactedEvent.Summary)
@@ -5355,21 +5910,38 @@ func compactionStatusPrompt(agent *fakeAgent, statuses ...map[string]any) func(c
 }
 
 type compactionTurnResult struct {
-	turn      ports.ChatEvent
+	turn ports.ChatEvent
+	// running is whether the compaction's row was reported under way first.
+	running bool
+	// compacted is whether the row settled as a finished compaction.
 	compacted bool
-	// timelineError is the turn's error row, the only timeline item a failed
-	// compaction has. Without one the timeline leaves the turn out.
+	// failure is the reason a failed compaction's row carries.
+	failure string
+	// rows are the compaction rows reported, by provider item id.
+	rows map[string]bool
+	// timelineError is a separate error row, which a compaction only needs for
+	// an account problem.
 	timelineError error
+	last          ports.ChatEvent
 }
 
 func awaitCompactionTurn(t *testing.T, opened ports.ChatConversation) compactionTurnResult {
 	t.Helper()
-	var result compactionTurnResult
+	result := compactionTurnResult{rows: map[string]bool{}}
 	for {
 		ev := nextEvent(t, opened.Events())
 		switch ev.Kind {
 		case ports.ChatEventCompacted:
-			result.compacted = true
+			result.rows[ev.ProviderItemID] = true
+			result.last = ev
+			switch ev.ActivityStatus {
+			case domain.ActivityStatusRunning:
+				result.running = true
+			case domain.ActivityStatusFailed:
+				result.failure = ev.Summary
+			default:
+				result.compacted = true
+			}
 		case ports.ChatEventError:
 			result.timelineError = ev.Err
 		case ports.ChatEventTurnCompleted:
@@ -5419,8 +5991,12 @@ func TestACPCompactionReportedFailedFailsTheTurn(t *testing.T) {
 			if result.turn.Err == nil || result.turn.Err.Error() != test.want {
 				t.Fatalf("turn error = %v, want %q", result.turn.Err, test.want)
 			}
-			if result.timelineError == nil || result.timelineError.Error() != test.want {
-				t.Fatalf("timeline error = %v, want %q", result.timelineError, test.want)
+			if !result.running || result.failure != test.want || len(result.rows) != 1 {
+				t.Fatalf("compaction row = running %v, failure %q, %d rows; want one row that ran and failed with %q",
+					result.running, result.failure, len(result.rows), test.want)
+			}
+			if result.timelineError != nil {
+				t.Fatalf("timeline error = %v, want the failure on the compaction row only", result.timelineError)
 			}
 		})
 	}
@@ -5448,7 +6024,7 @@ func TestACPCompactionFailureDoesNotCarryIntoTheNextCompaction(t *testing.T) {
 		t.Fatalf("second Compact: %v", err)
 	}
 	result := awaitCompactionTurn(t, opened)
-	if result.turn.TurnState != domain.TurnStateCompleted || !result.compacted || result.timelineError != nil {
+	if result.turn.TurnState != domain.TurnStateCompleted || !result.compacted || result.failure != "" || result.timelineError != nil {
 		t.Fatalf("second compaction = %+v, want completed and compacted with no error", result)
 	}
 }
@@ -5464,8 +6040,34 @@ func TestACPCompactionPromptErrorReachesTheTimeline(t *testing.T) {
 		t.Fatalf("Compact: %v", err)
 	}
 	result := awaitCompactionTurn(t, opened)
-	if result.turn.TurnState != domain.TurnStateFailed || result.timelineError == nil {
-		t.Fatalf("compaction = %+v, want failed with a timeline error", result)
+	if result.turn.TurnState != domain.TurnStateFailed || !strings.Contains(result.failure, "provider refused") || result.timelineError != nil {
+		t.Fatalf("compaction = %+v, want failed with the reason on its row", result)
+	}
+}
+
+// A compaction still open when its turn ends normally never said how it went
+// (an older Qwen whose closing line AO does not recognize): its row says so,
+// rather than settling as a finished compaction.
+func TestACPCompactionTheTurnLeftOpenSaysNoResult(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent, map[string]any{"status": "started"})
+	agent.mu.Unlock()
+
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
+		t.Fatalf("turn = %+v, want completed and not compacted", result)
+	}
+	if !result.running || len(result.rows) != 1 || result.failure != "No result reported" {
+		t.Fatalf("compaction = running %v, %d rows, failure %q; want one row that ran and says no result came",
+			result.running, len(result.rows), result.failure)
 	}
 }
 
@@ -5482,8 +6084,592 @@ func TestACPAutomaticCompactionFailureLeavesANormalTurnCompleted(t *testing.T) {
 	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatalf("StartDeferredTurn: %v", err)
 	}
-	if result := awaitCompactionTurn(t, opened); result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
 		t.Fatalf("turn = %+v, want completed and not compacted", result)
+	}
+	if result.failure != "Compaction failed" || len(result.rows) != 1 {
+		t.Fatalf("compaction rows = %v, failure %q; want one failed row", result.rows, result.failure)
+	}
+}
+
+// On AO's own /compact turn, the figures Claude gives at the compaction's
+// boundary beat the token bracket.
+func TestACPCompactionPrefersTheAgentsOwnFigures(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent,
+		map[string]any{"status": "started"},
+		map[string]any{"status": "completed"},
+		map[string]any{"status": "completed", "tokensBefore": 110559.0, "tokensAfter": 56805.0},
+	)
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if !result.compacted || len(result.rows) != 1 {
+		t.Fatalf("compaction = %+v, want one settled row", result)
+	}
+	if !strings.Contains(string(result.last.Detail), `"tokensReclaimed":53754`) || !strings.Contains(string(result.last.Detail), `"tokensAfter":56805`) {
+		t.Fatalf("detail = %s, want Claude's own figures", result.last.Detail)
+	}
+}
+
+// A compaction that finished with no newer token report settles when the agent
+// moves on, claiming no figures it does not have.
+func TestACPFinishedCompactionSettlesWhenTheAgentWritesOn(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	session := acpsdk.SessionId(opened.ProviderConversationID())
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+			UsageUpdate: &acpsdk.SessionUsageUpdate{Used: 180000, Size: 200000},
+		}})
+		for _, value := range []string{"started", "completed"} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+				SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+					SessionUpdate: "session_info_update",
+					Meta:          map[string]any{"ao/compaction": map[string]any{"status": value}},
+				},
+			}})
+		}
+		_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+			AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Picking up where I left off.")},
+		}})
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var settledBeforeReply bool
+	result := compactionTurnResult{rows: map[string]bool{}}
+	for {
+		ev := nextEvent(t, opened.Events())
+		if ev.Kind == ports.ChatEventCompacted {
+			result.rows[ev.ProviderItemID] = true
+			result.last = ev
+		}
+		if ev.Kind == ports.ChatEventMessageDelta && !settledBeforeReply {
+			settledBeforeReply = result.last.ActivityStatus != domain.ActivityStatusRunning && len(result.rows) == 1
+		}
+		if ev.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if !settledBeforeReply {
+		t.Fatal("the compaction row was still running when the agent wrote on")
+	}
+	if strings.Contains(string(result.last.Detail), "tokensReclaimed") || strings.Contains(string(result.last.Detail), "tokensAfter") {
+		t.Fatalf("detail = %s, want no figure the agent never reported", result.last.Detail)
+	}
+}
+
+// An agent that reports compaction as reply text (Qwen) gets the same row: the
+// recognized chunks never reach the reply, and the agent's own figures win.
+func TestACPCompactionMessageDrivesTheRowInsteadOfTheReply(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+			switch text {
+			case "Compressing context...":
+				return CompactionReport{Status: "started"}, true
+			case "Context compressed (48231 -> 9874).":
+				return CompactionReport{Status: "completed", TokensBefore: 48231, TokensAfter: 9874}, true
+			}
+			return CompactionReport{}, false
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events()) // controller.ready
+
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		for _, text := range []string{"Compressing context...", "Context compressed (48231 -> 9874).", "Done."} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+				AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+			}})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "/compress"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+
+	reply := ""
+	result := compactionTurnResult{rows: map[string]bool{}}
+	for {
+		ev := nextEvent(t, opened.Events())
+		if ev.Kind == ports.ChatEventMessageDelta {
+			reply += ev.Delta
+		}
+		if ev.Kind == ports.ChatEventCompacted {
+			result.rows[ev.ProviderItemID] = true
+			result.last = ev
+			result.running = result.running || ev.ActivityStatus == domain.ActivityStatusRunning
+		}
+		if ev.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if reply != "Done." {
+		t.Fatalf("reply = %q, want only the text that is not a compaction report", reply)
+	}
+	if !result.running || len(result.rows) != 1 || result.last.ActivityStatus == domain.ActivityStatusRunning {
+		t.Fatalf("compaction = running %v, %d rows, last %q; want one row that ran and settled",
+			result.running, len(result.rows), result.last.ActivityStatus)
+	}
+	if !strings.Contains(string(result.last.Detail), `"tokensReclaimed":38357`) {
+		t.Fatalf("detail = %s, want Qwen's own figures", result.last.Detail)
+	}
+}
+
+// An agent that starts, then finds nothing to compact (Qwen's "noop"), records
+// no compaction: a row it opened says so, and with none open its words stay in
+// the reply.
+func TestACPSkippedCompactionRecordsNoCompaction(t *testing.T) {
+	for name, test := range map[string]struct {
+		texts     []string
+		wantRows  int
+		wantReply string
+	}{
+		"after progress": {texts: []string{"Compressing context...", "Nothing to compress."}, wantRows: 1},
+		"on its own":     {texts: []string{"Nothing to compress."}, wantReply: "Nothing to compress."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:      domain.HarnessQwen,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+					switch text {
+					case "Compressing context...":
+						return CompactionReport{Status: "started"}, true
+					case "Nothing to compress.":
+						return CompactionReport{Status: "skipped"}, true
+					}
+					return CompactionReport{}, false
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			t.Cleanup(func() { _ = opened.Close() })
+			_ = nextEvent(t, opened.Events()) // controller.ready
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				for _, text := range test.texts {
+					_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+						AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+					}})
+				}
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "/compress"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			reply := ""
+			rows := map[string]domain.ActivityStatus{}
+			var last ports.ChatEvent
+			for {
+				ev := nextEvent(t, opened.Events())
+				if ev.Kind == ports.ChatEventMessageDelta {
+					reply += ev.Delta
+				}
+				if ev.Kind == ports.ChatEventCompacted {
+					rows[ev.ProviderItemID] = ev.ActivityStatus
+					last = ev
+				}
+				if ev.Kind == ports.ChatEventTurnCompleted {
+					break
+				}
+			}
+			if reply != test.wantReply {
+				t.Fatalf("reply = %q, want %q", reply, test.wantReply)
+			}
+			if len(rows) != test.wantRows {
+				t.Fatalf("compaction rows = %v, want %d", rows, test.wantRows)
+			}
+			if test.wantRows > 0 && (last.ActivityStatus != domain.ActivityStatusFailed || last.Summary != "Nothing to compact") {
+				t.Fatalf("row settled as %q %q, want failed with \"Nothing to compact\"", last.ActivityStatus, last.Summary)
+			}
+		})
+	}
+}
+
+// On AO's own compaction turn, an agent that finds nothing to compact leaves the
+// history as it was: the turn's row says so, and claims no compaction.
+func TestACPCompactionTurnWithNothingToCompactSaysSo(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityCompaction: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+			switch text {
+			case "Compressing context...":
+				return CompactionReport{Status: "started"}, true
+			case "Nothing to compress.":
+				return CompactionReport{Status: "skipped"}, true
+			}
+			return CompactionReport{}, false
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events()) // controller.ready
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		for _, text := range []string{"Compressing context...", "Nothing to compress."} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+				AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+			}})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted {
+		t.Fatalf("turn state = %v, want completed", result.turn.TurnState)
+	}
+	if result.compacted || len(result.rows) != 1 || result.failure != "Nothing to compact" {
+		t.Fatalf("compaction = compacted %v, %d rows, failure %q; want one row saying there was nothing to compact",
+			result.compacted, len(result.rows), result.failure)
+	}
+}
+
+// An agent that reports only that a compaction finished, with no start and no
+// figures, gets a row that waits for a newer context figure, so it never shows
+// the one from before the compaction as what is left.
+func TestACPCompactionOutcomeOnlyWaitsForANewerFigure(t *testing.T) {
+	for name, test := range map[string]struct {
+		// usageAfter is the context figure the agent reports once it finished.
+		usageAfter int
+		wantAfter  int64
+	}{
+		"newer figure":    {usageAfter: 24000, wantAfter: 24000},
+		"agent writes on": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					UsageUpdate: &acpsdk.SessionUsageUpdate{Used: 180000, Size: 200000},
+				}})
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": map[string]any{"status": "completed"}},
+					},
+				}})
+				if test.usageAfter > 0 {
+					_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+						UsageUpdate: &acpsdk.SessionUsageUpdate{Used: test.usageAfter, Size: 200000},
+					}})
+				}
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Picking up where I left off.")},
+				}})
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			result := awaitCompactionTurn(t, opened)
+			if !result.compacted || len(result.rows) != 1 {
+				t.Fatalf("compaction = compacted %v, %d rows; want one settled row", result.compacted, len(result.rows))
+			}
+			var detail struct {
+				TokensAfter int64 `json:"tokensAfter"`
+			}
+			if err := json.Unmarshal(result.last.Detail, &detail); err != nil {
+				t.Fatalf("unmarshal detail: %v", err)
+			}
+			if detail.TokensAfter != test.wantAfter {
+				t.Fatalf("tokensAfter = %d, want %d (detail %s)", detail.TokensAfter, test.wantAfter, result.last.Detail)
+			}
+		})
+	}
+}
+
+// An attachment that reconnects to a running turn gets that turn's updates
+// replayed, but not a context figure from an earlier turn. Each update must
+// still emit the same events as it did the first time, since the store knows a
+// replayed event by its update and its place among that update's events.
+func TestACPReplayedCompactionUpdatesEmitTheSameEvents(t *testing.T) {
+	type step struct {
+		usage  int64
+		report CompactionReport
+	}
+	steps := []step{
+		{report: CompactionReport{Status: "started"}},
+		{usage: 24000},
+		{report: CompactionReport{Status: "completed"}},
+		{report: CompactionReport{Status: "started"}},
+		{report: CompactionReport{Status: "failed", Reason: "Conversation too long"}},
+	}
+	replay := func(c *conversation) [][]string {
+		var updates [][]string
+		for _, step := range steps {
+			var events []string
+			emit := func(event ports.ChatEvent) {
+				events = append(events, event.ProviderItemID+" "+string(event.ActivityStatus))
+			}
+			if step.usage > 0 {
+				// As the client handles a token report.
+				c.trackContext("running", step.usage, 200000)
+				c.settleFinishedCompaction(emit)
+			} else {
+				c.reportCompaction("running", step.report, emit)
+			}
+			updates = append(updates, events)
+		}
+		return updates
+	}
+	first := &conversation{}
+	first.trackContext("earlier", 180000, 200000)
+	live := replay(first)
+	replayed := replay(&conversation{})
+	if !reflect.DeepEqual(replayed, live) {
+		t.Fatalf("replayed updates emit %q, want %q as they did live", replayed, live)
+	}
+	if last := live[len(live)-1]; len(last) != 1 || last[0] != "compaction:running:2 failed" {
+		t.Fatalf("failure settled %q, want the second compaction's row", last)
+	}
+}
+
+// A compaction that starts while a finished one still waits for its figure is a
+// second compaction: the first settles, and the second runs on its own row.
+func TestACPNextCompactionStartSettlesTheFinishedOne(t *testing.T) {
+	for name, first := range map[string][]string{
+		"outcome only":     {"completed"},
+		"started finished": {"started", "completed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			status := func(ctx context.Context, value map[string]any) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": value},
+					},
+				}})
+			}
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				for _, value := range first {
+					status(ctx, map[string]any{"status": value})
+				}
+				status(ctx, map[string]any{"status": "started"})
+				status(ctx, map[string]any{"status": "completed", "tokensBefore": 120000.0, "tokensAfter": 30000.0})
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			var order []string
+			ran := map[string]bool{}
+			settled := map[string]ports.ChatEvent{}
+			for {
+				ev := nextEvent(t, opened.Events())
+				if ev.Kind == ports.ChatEventCompacted {
+					if _, seen := settled[ev.ProviderItemID]; !seen && !ran[ev.ProviderItemID] {
+						order = append(order, ev.ProviderItemID)
+					}
+					if ev.ActivityStatus == domain.ActivityStatusRunning {
+						ran[ev.ProviderItemID] = true
+					} else {
+						settled[ev.ProviderItemID] = ev
+					}
+				}
+				if ev.Kind == ports.ChatEventTurnCompleted {
+					break
+				}
+			}
+			if len(order) != 2 || len(settled) != 2 {
+				t.Fatalf("compaction rows = %v, settled %d; want two rows, both settled", order, len(settled))
+			}
+			firstRow, second := settled[order[0]], settled[order[1]]
+			if strings.Contains(string(firstRow.Detail), "tokensAfter") {
+				t.Fatalf("first row detail = %s, want no figure it never got", firstRow.Detail)
+			}
+			if !ran[order[1]] || !strings.Contains(string(second.Detail), `"tokensReclaimed":90000`) {
+				t.Fatalf("second row = ran %v, detail %s; want it to run, then settle on its own figures", ran[order[1]], second.Detail)
+			}
+		})
+	}
+}
+
+// Compactions are numbered per turn. An attachment that reconnects to a running
+// turn gets that turn's updates replayed, so it names the turn's compactions as
+// the attachment before it did, however many earlier turns had: a replayed one
+// reaches its stored row, and a new one gets a row of its own.
+func TestACPProviderCompactionIDsAreCountedPerTurn(t *testing.T) {
+	var ids []string
+	record := func(event ports.ChatEvent) { ids = append(ids, event.ProviderItemID) }
+	earlier := &conversation{}
+	earlier.reportCompaction("before", CompactionReport{Status: "failed"}, record)
+	earlier.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	// The next attachment gets only the running turn's updates, then more.
+	next := &conversation{}
+	next.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	next.reportCompaction("running", CompactionReport{Status: "failed"}, record)
+	next.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	want := []string{
+		"compaction:before:1",
+		"compaction:running:1",
+		"compaction:running:1", "compaction:running:1",
+		"compaction:running:2",
+	}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("compaction rows = %v, want %v", ids, want)
+	}
+}
+
+// Claude (through AO's patched adapter) and OpenCode report a compaction they
+// start on their own as status. It gets one row that runs, then settles with
+// what the token reports either side of it show.
+func TestACPProviderCompactionRunsThenSettlesOneRow(t *testing.T) {
+	for name, test := range map[string]struct {
+		key string
+		// usageLast sends the smaller context after "completed": the row
+		// waits for it instead of settling with nothing freed.
+		usageLast bool
+		// figures sends Claude's boundary report (a second "completed" with
+		// its own figures) between the bare "completed" and the usage.
+		figures bool
+		// figuresLast sends that report after the usage instead.
+		figuresLast bool
+	}{
+		"opencode":                {key: "opencode/compaction"},
+		"usage before completion": {key: "ao/compaction"},
+		"usage after completion":  {key: "opencode/compaction", usageLast: true},
+		"claude":                  {key: "ao/compaction", usageLast: true, figures: true},
+		// A usage report that lands between the bare "completed" and the
+		// boundary's figures settles the row; the figures still reach it.
+		"figures after usage": {key: "ao/compaction", usageLast: true, figuresLast: true},
+	} {
+		key := test.key
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			usage := func(ctx context.Context, used int) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					UsageUpdate: &acpsdk.SessionUsageUpdate{Used: used, Size: 200000},
+				}})
+			}
+			statusWith := func(ctx context.Context, value map[string]any) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{key: value},
+					},
+				}})
+			}
+			status := func(ctx context.Context, value string) { statusWith(ctx, map[string]any{"status": value}) }
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				usage(ctx, 180000)
+				status(ctx, "started")
+				// Claude repeats the status while it works.
+				status(ctx, "started")
+				if test.usageLast {
+					status(ctx, "completed")
+					if test.figures {
+						statusWith(ctx, map[string]any{"status": "completed", "tokensBefore": 180000.0, "tokensAfter": 24000.0})
+						// The usage after it repeats what the figures said.
+						usage(ctx, 24000)
+					} else {
+						usage(ctx, 24000)
+						if test.figuresLast {
+							statusWith(ctx, map[string]any{"status": "completed", "tokensBefore": 180000.0, "tokensAfter": 24000.0})
+						}
+					}
+				} else {
+					usage(ctx, 24000)
+					status(ctx, "completed")
+				}
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			result := awaitCompactionTurn(t, opened)
+			if result.turn.TurnState != domain.TurnStateCompleted {
+				t.Fatalf("turn state = %v, want completed", result.turn.TurnState)
+			}
+			if !result.running || !result.compacted || len(result.rows) != 1 {
+				t.Fatalf("compaction = running %v, compacted %v, %d rows; want one row that ran and settled",
+					result.running, result.compacted, len(result.rows))
+			}
+			var detail struct {
+				TokensBefore    int64 `json:"tokensBefore"`
+				TokensAfter     int64 `json:"tokensAfter"`
+				TokensReclaimed int64 `json:"tokensReclaimed"`
+				ContextWindow   int64 `json:"contextWindow"`
+			}
+			if err := json.Unmarshal(result.last.Detail, &detail); err != nil {
+				t.Fatalf("unmarshal detail: %v", err)
+			}
+			if detail.TokensBefore != 180000 || detail.TokensAfter != 24000 || detail.TokensReclaimed != 156000 || detail.ContextWindow != 200000 {
+				t.Fatalf("detail = %+v, want 180000 -> 24000 of 200000", detail)
+			}
+		})
 	}
 }
 
@@ -5680,8 +6866,9 @@ func TestACPCompactionCancelledDoesNotSettle(t *testing.T) {
 
 	for {
 		ev := nextEvent(t, opened.Events())
-		if ev.Kind == ports.ChatEventCompacted {
-			t.Fatal("ChatEventCompacted emitted on cancelled prompt")
+		if ev.Kind == ports.ChatEventCompacted && ev.ActivityStatus != domain.ActivityStatusRunning {
+			// The running row settles with the interrupted turn.
+			t.Fatalf("compaction settled as %q on a cancelled prompt", ev.ActivityStatus)
 		}
 		if ev.Kind == ports.ChatEventTurnCompleted {
 			if ev.TurnState != domain.TurnStateInterrupted {
@@ -6392,5 +7579,25 @@ func TestACPEarlyHiddenCompactKeepsCompactionInStart(t *testing.T) {
 	skills := awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
 	if skills[0].Name != "goal" {
 		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+}
+
+func TestACPAsyncTasksRequiresBindingOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		agent := &fakeAgent{}
+		driver := New(Config{Harness: domain.HarnessClaudeCode, AsyncTasks: enabled, Probe: func(context.Context) error { return nil }, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent.mu.Lock()
+		air := nestedMap(nestedMap(agent.initParams.ClientCapabilities.Meta, "jetbrains"), "air")
+		capabilities, _ := air["capabilities"].([]any)
+		agent.mu.Unlock()
+		if got := len(capabilities) == 2 && capabilities[1] == "asyncTasks"; got != enabled {
+			t.Fatalf("enabled=%v capabilities=%v", enabled, capabilities)
+		}
+		_ = conv.Close()
 	}
 }

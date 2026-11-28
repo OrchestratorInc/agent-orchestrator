@@ -188,12 +188,13 @@ describe("collapsed and expanded composer", () => {
 });
 
 describe("composer chips", () => {
-	// The session's PR, what it changed, the context meter and the account's
+	// The session's PR, what it changed, its device, the context meter and the account's
 	// quota sit over the composer, open or not.
 	it("shows the session's state as chips that say where they lead", () => {
-		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter || quotaChip ?");
-		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
+		expect(composer).toContain("const chips = prChip || changes || device || contextMeter || quotaChip ?");
+		expect(composer).toContain(`accessibilityHint={prChip.rows.length > 1 ? "Lists this worker's pull requests" : "Opens the pull request review"} onPress={openPullRequests}`);
 		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		expect(composer).toContain('accessibilityHint="Opens the device screen" onPress={device.onOpen}');
 		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
 	});
 
@@ -206,7 +207,7 @@ describe("composer chips", () => {
 			return index;
 		};
 		const quota = at("{quotaChip ? <ComposerChip");
-		expect(quota).toBeLessThan(at("{activeReviewPR ? <ComposerChip"));
+		expect(quota).toBeLessThan(at("{prChip ? <ComposerChip"));
 		expect(quota).toBeLessThan(at("{changes ? <ComposerChip"));
 		expect(quota).toBeLessThan(at("{contextMeter ? <View"));
 	});

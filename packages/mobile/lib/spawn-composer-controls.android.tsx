@@ -1,5 +1,4 @@
 import {
-	Button,
 	Column,
 	DropdownMenu,
 	DropdownMenuItem,
@@ -7,17 +6,13 @@ import {
 	HorizontalDivider,
 	Icon,
 	IconButton,
-	RNHostView,
-	Row,
-	Spacer,
 	Text,
 	TextButton,
 } from "@expo/ui/jetpack-compose";
-import { fillMaxWidth, height, padding, semantics, testID, weight } from "@expo/ui/jetpack-compose/modifiers";
+import { fillMaxWidth, padding, semantics, testID } from "@expo/ui/jetpack-compose/modifiers";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
-import { COMPOSER_DISC } from "./chat/composerStyles";
-import { HarnessMark, KEEP_KEYBOARD, MenuRow, SUBMENU, useCloseMenuOnBack } from "./composeMenu.android";
+import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "./composeMenu.android";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortSliderOpen } from "./useEffortSlider";
@@ -28,9 +23,9 @@ import { defaultModelChoice, listedModels } from "./spawnModel";
 import type { Theme } from "./theme";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
-import { font, iconSize, space, touchTarget } from "./tokens";
+import { font, iconSize, space } from "./tokens";
 
-type OpenMenu = "host" | "project" | "account" | "approval" | "harness";
+type OpenMenu = "host" | "project" | "approval" | "harness";
 
 type MenuOption = { id: string; label: string; leading?: ReactNode; sectionBreakBefore?: boolean };
 
@@ -51,9 +46,6 @@ export function SpawnComposerControls({
 	projects,
 	projectId,
 	onSelectProject,
-	accounts = [],
-	accountId,
-	onSelectAccount,
 	agents,
 	harness,
 	agentModels,
@@ -73,6 +65,7 @@ export function SpawnComposerControls({
 	voice,
 	prompt,
 	onChangePrompt,
+	onLoadSkills,
 	placeholder,
 	attachments,
 	onSpawn,
@@ -96,7 +89,6 @@ export function SpawnComposerControls({
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
-	const accountLabel = accounts.find((account) => account.id === accountId)?.label ?? "Default account";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const approvalOption = approvalModes.find((mode) => mode.id === approvalMode);
 	// The model the task runs: the one picked or pinned, else the catalog's own
@@ -152,18 +144,6 @@ export function SpawnComposerControls({
 						onSelect={choose(projectId, onSelectProject)}
 						testTag="spawn-project"
 					/>
-					{accounts.length > 1 && onSelectAccount ? (
-						<SelectorMenu
-							{...menu("account")}
-							label={accountLabel}
-							accessibilityLabel={`Account, ${accountLabel}`}
-							leading={<Icon source={materialDrawable("account_circle")} size={iconSize.lg} tint={t.textSecondary} />}
-							options={accounts}
-							selectedId={accountId ?? null}
-							onSelect={choose(accountId ?? null, onSelectAccount)}
-							testTag="spawn-account"
-						/>
-					) : null}
 				</Column>
 			</Host>
 
@@ -175,6 +155,7 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					attachments={attachments}
 					onChangePrompt={onChangePrompt}
+					onLoadSkills={onLoadSkills}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
 					onChooseFile={onChooseFile}
@@ -184,92 +165,77 @@ export function SpawnComposerControls({
 					busy={busy}
 					disabled={disabled}
 					settings={
-						<Host matchContents={{ vertical: true }} colorScheme={scheme}>
-							<Row verticalAlignment="center" modifiers={[fillMaxWidth(), height(touchTarget)]}>
-								{/* Who runs the task: the harness's mark and the model it runs,
-								    in a capsule the circles' height, filled in the card colour
-								    as the plus's circle is, so it reads on the composer's sheet. */}
-								<DropdownMenu expanded={openMenu === "harness"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
-									<DropdownMenu.Trigger>
-										<Button
-											onClick={() => setOpenMenu("harness")}
-											colors={{ containerColor: t.bgElevated, contentColor: t.textPrimary }}
-											contentPadding={{ start: space.md, end: space.xs }}
-											enabled={!busy}
-											// The capsule shows the model alone; TalkBack hears the agent too, as VoiceOver does.
-											modifiers={[height(COMPOSER_DISC), testID("spawn-harness"), semantics({ contentDescription: agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}` })]}
-										>
-											<HarnessMark harness={harness} />
-											<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(space.sm, 0, space.xxs, 0)]}>
-												{agentTitle}
-											</Text>
-											<Icon source={materialDrawable("unfold_more")} size={iconSize.md} tint={t.textTertiary} />
-										</Button>
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Items>
-										{agents.map((agent) => (
-											<DropdownMenu key={agent.id} expanded={openAgent === agent.id} properties={SUBMENU} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
-												<DropdownMenu.Trigger>
-													<DropdownMenuItem onClick={() => { setOlderOpen(null); setOpenAgent((current) => current === agent.id ? null : agent.id); }} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
-														<DropdownMenuItem.Text>
-															<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{agent.label}</Text>
-														</DropdownMenuItem.Text>
-														<DropdownMenuItem.LeadingIcon><HarnessMark harness={agent.id} /></DropdownMenuItem.LeadingIcon>
-														<DropdownMenuItem.TrailingIcon>
-															<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />
-														</DropdownMenuItem.TrailingIcon>
-													</DropdownMenuItem>
-												</DropdownMenu.Trigger>
-												<DropdownMenu.Items>
-													{/* The default first, named when the catalog says which it is;
-													    then the newest of each family, older versions one level
-													    down as in chat; then the whole catalog. */}
-													{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map(modelRow(agent.id))}
-													{agentModels[agent.id]?.older?.length ? (
-														<>
-															<HorizontalDivider color={t.borderDefault} />
-															<DropdownMenu expanded={olderOpen === agent.id} properties={KEEP_KEYBOARD} onDismissRequest={() => setOlderOpen(null)} color={t.bgElevated}>
-																<DropdownMenu.Trigger>
-																	<MenuRow
-																		label="Older models"
-																		trailing={<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />}
-																		onClick={() => setOlderOpen(agent.id)}
-																	/>
-																</DropdownMenu.Trigger>
-																<DropdownMenu.Items>
-																	{agentModels[agent.id]!.older!.map(modelRow(agent.id))}
-																</DropdownMenu.Items>
-															</DropdownMenu>
-														</>
-													) : null}
-													{(agentModels[agent.id]?.total ?? 0) > listedModels(agentModels[agent.id]) ? (
-														<>
-															<HorizontalDivider color={t.borderDefault} />
-															<MenuRow
-																label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`}
-																leading={<Icon source={materialDrawable("search")} size={iconSize.xl} tint={t.textSecondary} />}
-																onClick={() => { close(); onBrowseModels(agent.id); }}
-															/>
-														</>
-													) : null}
-												</DropdownMenu.Items>
-											</DropdownMenu>
-										))}
-									</DropdownMenu.Items>
-								</DropdownMenu>
-
-								{/* The effort as a speedometer lit to the chosen level; a tap
-								    opens the effort slider above the composer. */}
-								{effortChoices.length ? (
-									<RNHostView matchContents>
-										<EffortGaugeButton choices={effortChoices} open={effortSlider.open} onPress={() => { close(); effortSlider.toggle(); }} disabled={busy} testID="spawn-effort" />
-									</RNHostView>
-								) : null}
-
-								<Spacer modifiers={[weight(1)]} />
-
-								{/* The approval mode as its symbol alone, as the chat's; the
-								    menu and TalkBack name it. */}
+						<ComposerControlsRow
+							// Who runs the task: the harness's mark and the model it runs.
+							// Each agent in its menu opens one level down onto its models.
+							capsule={
+								<ModelCapsuleMenu
+									expanded={openMenu === "harness"}
+									onDismiss={close}
+									harness={harness}
+									title={agentTitle}
+									onClick={() => setOpenMenu("harness")}
+									enabled={!busy}
+									testTag="spawn-harness"
+									// The capsule shows the model alone; TalkBack hears the agent too, as VoiceOver does.
+									contentDescription={agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}`}
+								>
+									{agents.map((agent) => (
+										<DropdownMenu key={agent.id} expanded={openAgent === agent.id} properties={SUBMENU} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
+											<DropdownMenu.Trigger>
+												<DropdownMenuItem onClick={() => { setOlderOpen(null); setOpenAgent((current) => current === agent.id ? null : agent.id); }} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
+													<DropdownMenuItem.Text>
+														<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{agent.label}</Text>
+													</DropdownMenuItem.Text>
+													<DropdownMenuItem.LeadingIcon><HarnessMark harness={agent.id} /></DropdownMenuItem.LeadingIcon>
+													<DropdownMenuItem.TrailingIcon>
+														<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />
+													</DropdownMenuItem.TrailingIcon>
+												</DropdownMenuItem>
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Items>
+												{/* The default first, named when the catalog says which it is;
+												    then the newest of each family, older versions one level
+												    down as in chat; then the whole catalog. */}
+												{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map(modelRow(agent.id))}
+												{agentModels[agent.id]?.older?.length ? (
+													<>
+														<HorizontalDivider color={t.borderDefault} />
+														<DropdownMenu expanded={olderOpen === agent.id} properties={KEEP_KEYBOARD} onDismissRequest={() => setOlderOpen(null)} color={t.bgElevated}>
+															<DropdownMenu.Trigger>
+																<MenuRow
+																	label="Older models"
+																	trailing={<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />}
+																	onClick={() => setOlderOpen(agent.id)}
+																/>
+															</DropdownMenu.Trigger>
+															<DropdownMenu.Items>
+																{agentModels[agent.id]!.older!.map(modelRow(agent.id))}
+															</DropdownMenu.Items>
+														</DropdownMenu>
+													</>
+												) : null}
+												{(agentModels[agent.id]?.total ?? 0) > listedModels(agentModels[agent.id]) ? (
+													<>
+														<HorizontalDivider color={t.borderDefault} />
+														<MenuRow
+															label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`}
+															leading={<Icon source={materialDrawable("search")} size={iconSize.xl} tint={t.textSecondary} />}
+															onClick={() => { close(); onBrowseModels(agent.id); }}
+														/>
+													</>
+												) : null}
+											</DropdownMenu.Items>
+										</DropdownMenu>
+									))}
+								</ModelCapsuleMenu>
+							}
+							// The effort as a speedometer lit to the chosen level; a tap
+							// opens the effort slider above the composer.
+							effort={effortChoices.length ? <EffortGaugeButton choices={effortChoices} open={effortSlider.open} onPress={() => { close(); effortSlider.toggle(); }} disabled={busy} testID="spawn-effort" /> : null}
+							// The approval mode as its symbol alone, as the chat's; the menu
+							// and TalkBack name it.
+							end={
 								<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
 									<DropdownMenu.Trigger>
 										<IconButton onClick={() => setOpenMenu("approval")} enabled={!busy} colors={{ contentColor: t.textSecondary }} modifiers={[testID("spawn-approval")]}>
@@ -282,8 +248,8 @@ export function SpawnComposerControls({
 										))}
 									</DropdownMenu.Items>
 								</DropdownMenu>
-							</Row>
-						</Host>
+							}
+						/>
 					}
 				/>
 			</View>

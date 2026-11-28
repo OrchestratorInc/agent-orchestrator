@@ -86,6 +86,7 @@ const (
 	TargetDeepSeek        Target = "deepseek-harness"
 	TargetOpenHands       Target = "openhands"
 	TargetCommandCode     Target = "command-code"
+	TargetMastraCode      Target = "mastra-code"
 	TargetDockerAgent     Target = "docker-agent"
 	TargetMemcode         Target = "memcode"
 	TargetHermes          Target = "hermes"
@@ -108,7 +109,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetMiniMaxCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter, TargetTau,
+	TargetCommandCode, TargetMastraCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter, TargetTau,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -347,7 +348,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status    `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string    `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string    `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -355,7 +356,10 @@ type Job struct {
 	Output              string    `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. Published while the command runs."`
 	Progress            *Progress `json:"progress,omitempty" description:"While installing, the phase and percentage the installer's output reports. Absent in every other status."`
 	Error               string    `json:"error,omitempty" description:"Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message."`
-	Notice              string    `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
+	// FailureCause is derived from Error and Output and carries none of
+	// their text, so the desktop may send it as analytics.
+	FailureCause FailureCause `json:"failureCause,omitempty" enum:"timeout,not_found_after_install,verify_failed,node_missing,npm_missing,brew_missing,tool_missing,xcode_tools_missing,disk_full,permission_denied,network,locked,exit_nonzero,other" description:"Set only when status is failed: why, from a closed list read from the error and output."`
+	Notice       string       `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
 	// Pointers, not time.Time: omitempty has no effect on a struct, so a bare
 	// time.Time always serializes (as the zero value's "0001-01-01..."
 	// timestamp) even when nothing has happened yet. A nil pointer actually
@@ -1063,6 +1067,27 @@ func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool)
 	return gate.RUnlock, true
 }
 
+// TryBeginHarnessUseNow lets background recovery skip an active installer
+// without waiting or claiming a stopped session that the installer will resume.
+func (s *Service) TryBeginHarnessUseNow(harness domain.AgentHarness) (func(), bool) {
+	gate := s.harnessGate(harness)
+	if !gate.TryRLock() {
+		return nil, false
+	}
+	s.mu.Lock()
+	job := s.jobs[Target(harness)]
+	installing := job != nil && activeStatus(job.Status) && job.Status != StatusWaitingForIdle
+	s.mu.Unlock()
+	if installing {
+		gate.RUnlock()
+		return nil, false
+	}
+	if IsAgentTarget(Target(harness)) {
+		s.forgetReplacedBinary(Target(harness))
+	}
+	return gate.RUnlock, true
+}
+
 // Status returns the current or last known Job for target. A target that has
 // never been started returns a plan preview: Idle when the daemon can run it,
 // or Unsupported with a manual command/reason when it cannot. An error is
@@ -1322,6 +1347,7 @@ func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	if ctx.Err() == context.DeadlineExceeded {
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("install timed out after %s", s.installTimeout)
+		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
 		s.mu.Unlock()
 		return
 	}
@@ -1334,12 +1360,14 @@ func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	if runErr != nil {
 		job.Status = StatusFailed
 		job.Error = runErr.Error()
+		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
 		s.mu.Unlock()
 		return
 	}
 	if !found {
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("install command finished but %s is still not in PATH", job.Target)
+		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
 		s.mu.Unlock()
 		return
 	}
@@ -1500,6 +1528,12 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
 			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
 		}
+		// winget reports "no package found" for an ID its catalog dropped, and
+		// also when its local source data is stale. Suggest refreshing the
+		// sources first; if it still fails, the package is gone from the catalog.
+		if plan.Method == "winget" && wingetPackageNotFound(runErr) {
+			message = fmt.Sprintf("winget could not find package %s. Run `winget source update` and retry. If it still fails, the package is no longer in the winget catalog, so install it another way, then choose Verify again. (%v)", plan.Package, runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
@@ -1516,6 +1550,18 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		updaterReport = lastOutputLine(out.String())
 	}
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
+}
+
+// wingetNoApplicationsFound is APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND,
+// winget's exit code for an ID its catalog does not have. Matching the code,
+// not winget's "No package found" text, keeps this working in every locale.
+const wingetNoApplicationsFound uint32 = 0x8A150014
+
+func wingetPackageNotFound(err error) bool {
+	var exited interface{ ExitCode() int }
+	// Go reports Windows exit codes unsigned; compare the low 32 bits so a
+	// signed report of the same code matches too.
+	return errors.As(err, &exited) && uint32(exited.ExitCode()) == wingetNoApplicationsFound //nolint:gosec // exit codes are 32-bit
 }
 
 // maxUpdaterReportRunes keeps the updater line quoted in a failed update
@@ -1628,6 +1674,7 @@ func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessa
 	job.Status = status
 	job.Output = combineOutput(job.Output, output)
 	job.Error = errorMessage
+	job.FailureCause = classifyFailure(status, errorMessage, job.Output)
 	if resolvedPath != "" {
 		job.ExpectedDestination = resolvedPath
 	}
@@ -1643,6 +1690,7 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	job.Status = status
 	job.Output = combineOutput(job.Output, output)
 	job.Error = errorMessage
+	job.FailureCause = classifyFailure(status, errorMessage, job.Output)
 	if resolvedPath != "" {
 		job.ExpectedDestination = resolvedPath
 	}
@@ -1662,6 +1710,7 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 		s.mu.Lock()
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("persist terminal operation state: %v", err)
+		job.FailureCause = FailureOther
 		s.mu.Unlock()
 		return
 	}
@@ -1710,6 +1759,8 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 		Command: record.Command, ExpectedDestination: record.ExpectedDestination,
 		Output: record.Output, Error: record.Error, StartedAt: &startedAt,
 		FinishedAt: record.FinishedAt, UpdatedAt: &updatedAt,
+		// Not stored: read again from the error and output it came from.
+		FailureCause: classifyFailure(Status(record.Status), record.Error, record.Output),
 	}
 }
 
@@ -2199,9 +2250,10 @@ func (s *Service) planWinget(target Target, id string) Plan {
 		}
 		return plan
 	}
-	command := []string{"winget", "install", "-e", "--id", id}
+	// Pin the community source so a fresh Windows profile never opens msstore's
+	// interactive source-agreement prompt in this background process.
+	command := []string{"winget", "install", "-e", "--id", id, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 	if IsAgentTarget(target) {
-		command = append(command, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
 		return Plan{Target: target, Command: command, Method: "winget", Package: id}
 	}
 	return Plan{Target: target, Command: command}

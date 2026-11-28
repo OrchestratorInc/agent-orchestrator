@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: () => "#888888" }),
 	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	return {
@@ -63,7 +64,9 @@ vi.mock("./pr-filter-control", () => ({ PRFilterControl: "PRFilterControl" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
 vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
-vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}) }));
+vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}), useBoardFailureKind: () => "unreachable" }));
+// Its own focus effect would replace the screen's in this file's single-callback focus fixture.
+vi.mock("./telemetry/useErrorShown", () => ({ useErrorShown: () => {} }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries: (targets: unknown[]) => {
 	fixture.summaryTargets.push(targets);
@@ -149,6 +152,25 @@ it("redraws only the card whose rich summary has loaded", () => {
 	expect(fixture.cardRenders).toHaveLength(1);
 	expect(fixture.cardRenders[0]).toContain("Rich PR title");
 });
+// The app drops a machine's verified connection on every app switch, and the
+// cards read their detail through it: they fell back to their thin version
+// until the connection was verified again.
+it("keeps a card's rich summary while its machine's connection is away", () => {
+	fixture.summaries.set("mac", { number: 7, state: "open", title: "Rich PR title", changedFiles: 0, additions: 0, deletions: 0 } as SessionPRSummary);
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.cardRenders.some((label) => label.includes("Rich PR title"))).toBe(true);
+	fixture.cardRenders = [];
+	const connected = fixture.configForHost.getMockImplementation()!;
+	try {
+		fixture.configForHost.mockImplementation(((hostId: string) => hostId === "mac" ? null : connected()) as never);
+		fixture.hostStates = fixture.hostStates.map((host) => host.hostId === "mac" ? { ...host, connection: "closed" } : host);
+		act(() => renderer!.update(<PRsScreen />));
+		expect(fixture.cardRenders.filter((label) => !label.includes("Rich PR title") && label.includes("Task on mac"))).toEqual([]);
+	} finally {
+		fixture.configForHost.mockImplementation(connected);
+	}
+});
+
 it("scopes PRs to the requested host and project", () => {
 	fixture.params = { hostId: "windows", projectId: "same-project" };
 	act(() => { renderer = create(<PRsScreen />); });
@@ -270,32 +292,63 @@ it("keeps the plain empty state when a machine fails but Orchestrator Cloud answ
 	}
 });
 
-// The poll carries live workers only, so a PR merged by a session that has
-// ended comes from the machine's archive, read when Merged (or All) opens.
-it("lists the merged PRs of ended sessions once Merged is open", async () => {
+// The poll carries live workers only, so a PR merged or closed by a session
+// that has ended comes from the machine's archive, read as the page opens.
+it("lists the merged PRs of ended sessions, read before Merged is opened", async () => {
 	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 5, byProject: {} } } : host);
 	const ended: HostedSession = { ...session("mac"), id: "ended", isTerminated: true, pr: undefined, prs: [{ number: 3, url: "https://github.com/ao/test/pull/3", state: "merged" }] };
-	let release!: (page: PRStatePage) => void;
-	fixture.getArchivedPRSessions.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
-	act(() => { renderer = create(<PRsScreen />); });
-	expect(fixture.getArchivedPRSessions).not.toHaveBeenCalled();
+	const release = new Map<string, (page: PRStatePage) => void>();
+	fixture.getArchivedPRSessions.mockImplementation((_config: unknown, options: { prState: string }) => new Promise((resolve) => { release.set(options.prState, resolve); }));
+	await act(async () => { renderer = create(<PRsScreen />); });
+	// Only the machine with an archive is asked, for both states, while Open is shown.
+	expect(fixture.getArchivedPRSessions.mock.calls.map((call) => call[1])).toEqual([
+		expect.objectContaining({ prState: "merged", cursor: null }),
+		expect.objectContaining({ prState: "closed", cursor: null }),
+	]);
 
 	// The filter heads the list, which this mock does not render.
 	const control = () => {
 		const header = renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } };
 		return header.props.children.find((child) => child?.type === "PRFilterControl")!;
 	};
+	await act(async () => {
+		release.get("merged")!({ sessions: [ended], nextCursor: null, total: 1, version: "v1" });
+		release.get("closed")!({ sessions: [], nextCursor: null, total: 0, version: "v1" });
+	});
 	await act(async () => (control().props.onChange as (filter: string) => void)("merged"));
-	// Only the machine with an archive is asked.
-	expect(fixture.getArchivedPRSessions).toHaveBeenCalledTimes(1);
-	expect(fixture.getArchivedPRSessions.mock.calls[0]?.[1]).toMatchObject({ prState: "merged", cursor: null });
-
-	await act(async () => release({ sessions: [ended], nextCursor: null, total: 1, version: "v1" }));
+	expect(fixture.getArchivedPRSessions).toHaveBeenCalledTimes(2);
 	const sections = renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
 	expect(sections.map((section) => section.key)).toEqual(["merged"]);
 	expect(sections[0]?.data.map((item) => `${item.session.hostId}/${item.session.id}`)).toEqual(["mac/ended"]);
 	expect(control().props.counts).toMatchObject({ open: 2, merged: 1, all: 3 });
 	expect(fixture.summaryTargets.at(-1)).toContainEqual(expect.objectContaining({ sessionId: "ended" }));
+});
+
+// Merged and All counted only live workers until their filter was first
+// opened, then jumped to include the archive (Merged 19 became Merged 153).
+// The daemon's totals count sessions, and one session can own several PRs, so
+// the counts come from the read rows, the same PRs the list shows.
+it("counts ended sessions' PRs, not their sessions, before any filter opens", async () => {
+	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 3, byProject: {} } } : host);
+	fixture.allSessions = [session("mac"), { ...session("windows"), pr: { number: 8, url: "https://github.com/ao/test/pull/8", state: "merged" } }];
+	const ended = (id: string, prs: { number: number; state: "merged" | "closed" }[]): HostedSession =>
+		({ ...session("mac"), id, isTerminated: true, pr: undefined, prs: prs.map((pr) => ({ ...pr, url: `https://github.com/ao/test/pull/${pr.number}` })) });
+	fixture.getArchivedPRSessions.mockImplementation(async (_config: unknown, options: { prState: string }) => (options.prState === "merged"
+		? { sessions: [ended("stack", [{ number: 20, state: "merged" }, { number: 21, state: "merged" }]), ended("single", [{ number: 22, state: "merged" }])], nextCursor: null, total: 2, version: "v1" }
+		: { sessions: [ended("gave-up", [{ number: 30, state: "closed" }])], nextCursor: null, total: 1, version: "v1" }));
+	await act(async () => { renderer = create(<PRsScreen />); });
+	await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
+	const control = () => (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } })
+		.props.children.find((child) => child?.type === "PRFilterControl")!;
+	expect(control().props.filter).toBe("open");
+	// Live: open #7, merged #8. Archive: merged #20, #21 (one session) and #22, closed #30.
+	expect(control().props.counts).toEqual({ open: 1, merged: 4, all: 6 });
+	// The Open list shows no archived row, and opening a filter changes no count.
+	const sections = () => renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
+	expect(sections().flatMap((section) => section.data.map((item) => item.session.id))).toEqual(["mac"]);
+	await act(async () => (control().props.onChange as (filter: string) => void)("all"));
+	expect(control().props.counts).toEqual({ open: 1, merged: 4, all: 6 });
+	expect(fixture.getArchivedPRSessions).toHaveBeenCalledTimes(2);
 });
 
 it("adds the closed PRs of ended sessions under All", async () => {

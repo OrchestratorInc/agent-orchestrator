@@ -37,6 +37,9 @@ import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { EffortSliderOverlay } from "../effort-slider";
+import { PullRequestPickerOverlay } from "../pull-request-picker";
+import type { SessionPullRequests } from "../sessionPullRequests";
+import { usePullRequestPickerOpen } from "../usePullRequestPicker";
 import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
@@ -48,7 +51,7 @@ import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
 import { queuedConversationMessages } from "./timelineModel";
 import { userFacingError } from "../connectionError";
-import type { DashboardPR, SessionPRSummary } from "../api";
+import type { DashboardPR } from "../api";
 import { PRChipContent, prChipAccessibilityLabel } from "./PRChip";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
@@ -105,14 +108,15 @@ export function ChatComposer(props: ComponentProps<typeof Composer>) {
 function Composer({
 	quoteRequest,
 	onQuoteHandled,
-	reviewPR,
-	reviewPRSummary,
-	onOpenReview,
+	pullRequests,
+	onOpenPullRequest,
+	pullRequestListRequest,
 	onExpandedChange,
 	sessionId,
 	config,
 	machine,
 	changes,
+	device,
 	snapshot,
 	skills,
 	filePaths,
@@ -154,10 +158,12 @@ function Composer({
 }: {
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
-	reviewPR?: DashboardPR;
-	reviewPRSummary?: SessionPRSummary;
-	/** Opens the PR's review, from its chip. */
-	onOpenReview?(): void;
+	/** Every PR the session raised, for its chip and the list the chip opens. */
+	pullRequests?: SessionPullRequests;
+	/** Opens one PR's review: the chip's with one PR, a picked row's with several. */
+	onOpenPullRequest?(pr: DashboardPR): void;
+	/** Bumped by the screen (its ⋯ menu) to open the PR list; the first value opens nothing. */
+	pullRequestListRequest?: number;
 	/** Told as the pill opens and closes, so the screen can clear what floats over it. */
 	onExpandedChange?(expanded: boolean): void;
 	sessionId: string;
@@ -166,6 +172,8 @@ function Composer({
 	machine: string;
 	/** What this session changed, from git. Present only when it changed something. */
 	changes?: { files: number; additions: number; deletions: number; onOpen(): void };
+	/** The simulator or emulator this session holds, when it holds one; opens its screen. */
+	device?: { name: string; onOpen(): void };
 	snapshot: ConversationSnapshot;
 	skills: ChatSkill[];
 	filePaths: string[];
@@ -241,7 +249,6 @@ function Composer({
 	// The keyboard's own progress, 0 closed to 1 open. This is the same value the
 	// keyboard is animating with, so the dock moves in lockstep with it.
 	const keyboard = useReanimatedKeyboardAnimation();
-	const reviewPromptAvailable = Boolean(reviewPR && onOpenReview);
 	// The dock gives back its resting inset as the keyboard goes. Android's
 	// keyboard height spans the navigation bar, so there it gives the inset back
 	// over that hidden last stretch alone and rests as soon as the keys are gone.
@@ -613,12 +620,36 @@ function Composer({
 	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
-	useEffect(() => { if (effort.open) setPillHeight(latestPillHeight.current); }, [effort.open]);
+	// The PR list floats where the effort slider does; one closes the other.
+	const prList = usePullRequestPickerOpen(onOpenPullRequest ? pullRequests?.rows.length ?? 0 : 0, Boolean(requestCard));
+	useEffect(() => { if (effort.open || prList.open) setPillHeight(latestPillHeight.current); }, [effort.open, prList.open]);
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
 	const closeEffort = effort.close;
+	const closePRList = prList.close;
 	useEffect(() => { closeEffort(); }, [text, closeEffort]);
+	useEffect(() => { closePRList(); }, [text, closePRList]);
+	const { show: showPRList } = prList;
+	const toggleEffort = () => { closePRList(); effort.toggle(); };
+	const openPullRequests = () => {
+		if (!pullRequests || !onOpenPullRequest) return;
+		if (pullRequests.rows.length < 2) return onOpenPullRequest(pullRequests.lead);
+		// The keyboard closing is not a tap outside: the list stays up as it goes.
+		Keyboard.dismiss();
+		closeEffort();
+		showPRList();
+	};
+	// The screen's ⋯ menu asks for the list by bumping the request; the value it
+	// starts at asks for nothing. Each request is consumed as it is handled, so
+	// the PRs or the busy state changing later (a new showPRList) never replays it.
+	const handledListRequest = useRef(pullRequestListRequest);
+	useEffect(() => {
+		if (pullRequestListRequest === undefined || pullRequestListRequest === handledListRequest.current) return;
+		handledListRequest.current = pullRequestListRequest;
+		closeEffort();
+		showPRList();
+	}, [pullRequestListRequest, closeEffort, showPRList]);
 	const placeholder = stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder;
-	const activeReviewPR = reviewPromptAvailable ? reviewPR : undefined;
+	const prChip = pullRequests && onOpenPullRequest ? pullRequests : undefined;
 	const sendBlocked = Boolean(disabled || stopped || pending || submitting || (draftKey && !draftLoaded));
 	const nothingToSend = !hasDraft && attachments.length === 0;
 	// A full touch target around a compact tinted disc, so the controls row keeps
@@ -699,6 +730,10 @@ function Composer({
 		// Not while the keyboard moves: nothing is typed then.
 		const progress = keyboard.progress.value;
 		if (progress > 0 && progress < 1) return;
+		// Nor while a request card stands in for the row. The unmounted row reads
+		// null here, and measure() passes that to the native side (it only checks
+		// for -1), which throws on the UI thread and takes the whole app down.
+		if (!fieldRow()) return;
 		const layout = measure(fieldRow);
 		if (layout) takeFieldRow(layout.y, layout.height);
 	}, false);
@@ -740,9 +775,9 @@ function Composer({
 		};
 	});
 	// The session's state as chips over the composer, open or not: the account's
-	// quota once that matters, its PR, what it changed, and how full the context
-	// is once that matters.
-	const chips = activeReviewPR || changes || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
+	// quota once that matters, its PR, what it changed, the device it holds, and
+	// how full the context is once that matters.
+	const chips = prChip || changes || device || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
 		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
 			{/* First: the row scrolls with no indicator, and this is the only quota
 			    warning, so it must not start off screen behind the PR and changes chips. */}
@@ -750,14 +785,18 @@ function Composer({
 				<AppSymbol name="warning" size={iconSize.xs} color={quotaChip.severity === "critical" ? t.red : t.amber} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, styles.tabular, { color: quotaChip.severity === "critical" ? t.red : t.amber }]}>{quotaChip.label}</Text>
 			</ComposerChip> : null}
-			{activeReviewPR ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(activeReviewPR, reviewPRSummary)} accessibilityHint="Opens the pull request review" onPress={onOpenReview}>
-				<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />
+			{prChip ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(prChip.lead, prChip.leadSummary, prChip.badge)} accessibilityHint={prChip.rows.length > 1 ? "Lists this worker's pull requests" : "Opens the pull request review"} onPress={openPullRequests}>
+				<PRChipContent pr={prChip.lead} summary={prChip.leadSummary} more={prChip.badge.more > 0 ? { count: prChip.badge.more, tone: prChip.badge.moreTone } : undefined} />
 			</ComposerChip> : null}
 			{changes ? <ComposerChip accessibilityLabel={changesAccessibilityLabel(changes)} accessibilityHint="Opens the changed files" onPress={changes.onOpen}>
 				<AppSymbol name="diff" size={iconSize.xs} color={t.textSecondary} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.chipText}>{changes.files}</Text>
 				{changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
 				{changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
+			</ComposerChip> : null}
+			{device ? <ComposerChip accessibilityLabel={`Open ${device.name}`} accessibilityHint="Opens the device screen" onPress={device.onOpen}>
+				<AppSymbol name="phone" size={iconSize.xs} color={t.textSecondary} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.chipText}>{device.name}</Text>
 			</ComposerChip> : null}
 			{contextMeter ? <View accessible accessibilityRole="progressbar" accessibilityLabel="Context window" accessibilityValue={contextMeter.accessibilityValue} style={styles.chip}>
 				<ComposerGlass radius={CHIP_HEIGHT / 2} />
@@ -863,7 +902,7 @@ function Composer({
 			    pill focuses it and the pill opens. */}
 			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
 				latestPillHeight.current = event.nativeEvent.layout.height;
-				if (effort.open) setPillHeight(latestPillHeight.current);
+				if (effort.open || prList.open) setPillHeight(latestPillHeight.current);
 			}}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
@@ -918,7 +957,7 @@ function Composer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, open: effort.open, onToggle: toggleEffort }} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -931,6 +970,8 @@ function Composer({
 				</View>
 				{/* The effort slider floats just above the pill, over the conversation. */}
 				{effort.open && pillHeight ? <EffortSliderOverlay choices={effort.choices} onChoose={effort.choose} onRelease={effort.release} bottom={pillHeight} /> : null}
+				{/* The session's PR list floats in the same place, over the chips. */}
+				{prList.open && pillHeight && pullRequests && onOpenPullRequest ? <PullRequestPickerOverlay bottom={pillHeight} rows={pullRequests.rows} onChoose={(pr) => { closePRList(); onOpenPullRequest(pr); }} /> : null}
 			</View>}
 		</Animated.View>
 	);

@@ -1,7 +1,7 @@
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { useSharedValue } from "react-native-reanimated";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
@@ -28,10 +28,14 @@ import { headerBackOptions } from "../headerBack";
 import { HeaderPill, HeaderPillButton, pillBackOptions } from "../headerPill";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type ForkOptions } from "./api";
+import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, resolveWorkspacePath, type ForkOptions } from "./api";
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
+import { useComposerSnapshot } from "./composerSnapshot";
+import { useChatPushTiming } from "./chatPushTiming";
+import { useKeepUnchanged } from "../keepUnchanged";
+import { useStableFunctionProps } from "../useStableFunctionProps";
 import { KeyboardFollower } from "./KeyboardFollower";
 import { KeyboardMotionScope } from "./keyboardMotion";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -41,6 +45,7 @@ import { McpServerNotice } from "./McpServerNotice";
 import { ProviderSwitchLine } from "./ProviderSwitchMarker";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
+import { conversationProjectLabel } from "./conversationHeaderModel";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type CloudConversationMenuAction, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { shouldAutoResume } from "./autoResume";
@@ -58,26 +63,32 @@ import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
+import { useSessionDevice } from "../useSessionDevice";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
-import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
-import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
+import { reviewRouteForPR } from "../reviewView";
+import { pullRequestMenuAction } from "../sessionPullRequests";
+import { useSessionPullRequests } from "../useSessionPullRequests";
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { useValueFeed } from "../useValueFeed";
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { isAbsoluteFileReference, matchBareFile } from "./fileLinks";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
 import { TurnRecoveryContext, type TurnRecovery } from "./UsageLimitNotice";
 import { usageLimitedTurn } from "./usageLimit";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
+import { rememberChatSkills } from "./rememberedSkills";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -117,10 +128,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, machine, session.id);
-	// See `awaitingConversation`: only a conversation the page opened without is held.
-	const pushSettled = usePushSettled();
-	const [openedWithSnapshot] = useState(() => Boolean(conversation.snapshot));
-	const holdArrivingSnapshot = !pushSettled && !openedWithSnapshot && Boolean(conversation.snapshot);
+	// When the conversation may draw during the push: an uncached one is held
+	// until the slide settles (see `awaitingConversation`), a small cached one
+	// mounts its timeline a frame after the push starts, a large cached one once
+	// the slide settles. See useChatPushTiming.
+	const { holdArrivingSnapshot, timelineMounted } = useChatPushTiming(conversation.snapshot);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -154,6 +166,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
 	const [filePaths, setFilePaths] = useState<string[]>([]);
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
+	// Whether `filePaths` has been read: a bare file name in a reply waits for it.
+	const [filePathsLoaded, setFilePathsLoaded] = useState(false);
+	const loadFilePaths = useRef<() => void>(() => {});
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
@@ -202,15 +217,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Agent switching, from the model menu's "Other agents" (the new task's
 	// menu). As on desktop, a pick only records the agent the next message goes
-	// to; the send then switches and sends in one request. Not offered to
-	// orchestrators or terminated sessions, which desktop leaves out too.
-	const isWorker = !("projectName" in session);
+	// to; the send then switches and sends in one request. Orchestrators switch
+	// too, as on desktop, including once their agent has stopped at a usage
+	// limit: the daemon wakes it to hand over. Not offered to terminated
+	// sessions, which must be restored first.
 	const currentHarness = conversation.snapshot?.harness || "";
 	const agentSwitchMenu = useAgentSwitchMenu({
 		cfg: config,
 		current: currentHarness,
 		projectId: session.projectId,
-		enabled: isWorker && !terminated && Boolean(currentHarness),
+		enabled: !terminated && Boolean(currentHarness),
 	});
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
 	const pendingSwitch = pendingSwitchFor(chosenSwitch, currentHarness || undefined);
@@ -255,6 +271,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// stopping. Until then (`draining` lasts as long as the agent's turn) the
 	// conversation stays readable behind a banner, dismissed requests included.
 	const switchCardShown = mobileInterfaceTransitionStoppingSource(interfaceSwitch.transition) || handoff.pending;
+	// Opening the session is timed until its messages are drawn and not covered by the switch card.
+	useSessionContentShown(Boolean(conversation.snapshot) && !holdArrivingSnapshot && timelineMounted && !conversation.unavailable && !switchCardShown);
 	// The usage sheet follows the conversation while it is up: the numbers move
 	// with every turn.
 	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);
@@ -302,8 +320,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Loaded again when the provider comes up: a chat opened while hibernated or
 	// connecting has no catalog to give, and the composer would otherwise keep the
-	// empty one until the screen was reopened.
-	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
+	// empty one until the screen was reopened. A page saved on the phone says
+	// nothing of the provider now (savedPageView shows a busy one as ready), so the
+	// load waits for the live read: one made from it was never asked again.
+	const providerLive = conversation.snapshot && !conversation.saved ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
 		const load = turnOptionsLoadFor(turnOptionsRequestedFor.current, session.id, providerLive);
 		if (!load) return;
@@ -313,29 +333,65 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
+	// A file action placed by the daemon lands only if it is still the latest one
+	// and the reader is still on this chat: a newer tap, or leaving, drops it.
+	const fileOpenRequest = useRef(0);
+	const fileOpenStillHere = useStillHere(`${currentHostId ?? ""}|${session.id}`, () => navigation.isFocused?.() !== false);
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
-		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
-		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
-	}), [currentHostId, router, session.id, sessionName]);
+		openChanges: () => {
+			fileOpenRequest.current++;
+			router.push(filesRoute(session.id, currentHostId, sessionName));
+		},
+		openFile: (path, previousPath, line) => {
+			const request = ++fileOpenRequest.current;
+			// Agents also cite absolute paths (`/…/worktree/src/a.ts:12`): the
+			// daemon places those, in the worktree or among the session's artifacts.
+			if (!config || !isAbsoluteFileReference(path)) {
+				router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+				return;
+			}
+			const here = fileOpenStillHere();
+			const current = () => request === fileOpenRequest.current && here();
+			void resolveWorkspacePath(config, session.id, path).then((resolved) => {
+				if (!current()) return;
+				if (resolved.kind === "workspace" && resolved.path) router.push(fileRoute(session.id, resolved.path, currentHostId, previousPath, line));
+				else if (resolved.kind === "artifact" && resolved.path) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: session.id, path: resolved.path, hostId: currentHostId } });
+				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
+			}, () => {
+				if (current()) router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+			});
+		},
+		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths, !filePathsTruncated) : undefined,
+		// One list answers every bare name, so any name loads all of it once.
+		wantBareFile: () => loadFilePaths.current(),
+	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, filePathsTruncated, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
-	const changeSummary = useChangeSummary(config, session.id, changeSignal);
+	const changeSummary = useChangeSummary(config, machine, session.id, changeSignal);
 	// Desktop derives one name from the session (useWorkspaceQuery: displayName ??
 	// issueId ?? id) and its chat header prefers it over the conversation's own
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
 	// had that precedence inverted, so renaming from the board changed the row but
 	// left this header on the agent's auto-generated conversation title.
 	const title = sessionName || conversation.snapshot?.title || session.id;
-	const projectName = "projectName" in session
-		? session.projectName
-		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
+	const projectName = conversationProjectLabel(session, projects);
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
+	// What this chat's agent offers on "/", kept for the New task page's list
+	// (see rememberedSkills), so a task started next lists the same skills.
+	const skillsHarness = conversation.snapshot?.harness || session.harness || undefined;
+	useEffect(() => {
+		rememberChatSkills(currentHostId ?? undefined, skillsHarness, session.projectId || undefined, conversation.skills);
+	}, [conversation.skills, currentHostId, session.projectId, skillsHarness]);
 	const headerState = conversation.snapshot?.controller.state;
-	// The PR ready for review, as a chip over the composer that opens it.
-	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	// Every PR the worker raised, as a chip over the composer: one opens its
+	// review, several open a list of them. An orchestrator has none.
+	const workerSession = "projectName" in session ? undefined : session;
+	const hasPullRequests = Boolean(workerSession && (workerSession.prs?.length || workerSession.pr));
+	// The ⋯ menu's "Pull requests" asks the composer for the list by bumping this.
+	const [pullRequestListRequest, setPullRequestListRequest] = useState(0);
 	// Session fork: offered when the daemon supports it.
 	const [forkOptions, setForkOptions] = useState<ForkOptions | null>(null);
 	const forkTurnCount = conversation.snapshot?.turns.length ?? 0;
@@ -361,17 +417,19 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}, [config, router, session.id, session.projectId]);
 	// Fetched only over the live connection; read through the last verified one
 	// too, so the card stays put while an app switch has the connection down.
-	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
+	const reviewSummaries = usePRSummaries(config && hasPullRequests ? [{ config, sessionId: session.id }] : []);
 	const summaryConfig = useLastVerifiedConfig(config, machine);
-	const reviewPromptSummary = summaryConfig && reviewPromptPR ? reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number) : undefined;
+	const pullRequests = useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined);
 
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
 	// and cannot sit after this screen's early returns.
-	const request = requestDockModel(conversation.snapshot, {
+	// Kept by identity while its data is the same, so the composer (which shows
+	// it) is not re-rendered by every snapshot.
+	const request = useKeepUnchanged(requestDockModel(conversation.snapshot, {
 		approval: conversation.pendingActions.includes("approval"),
 		input: conversation.pendingActions.includes("input"),
-	});
+	}));
 	const requestDismissed = request ? dismissedRequest === request.sequence : false;
 	// The timeline collapses a request the card is answering to a record of what
 	// was asked — one live set of controls, never two.
@@ -393,7 +451,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				const heading = (
 					<ConversationTitle
 						title={title}
-						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+						subtitle={projectName}
 						harness={headerHarness}
 						state={headerState}
 					/>
@@ -440,6 +498,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			.then((result) => {
 				setFilePaths(result.paths);
 				setFilePathsTruncated(result.truncated);
+				setFilePathsLoaded(true);
 				return result;
 			})
 			.catch(() => ({ paths: filePaths, truncated: filePathsTruncated }))
@@ -447,6 +506,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		filePathsRequest.current = request;
 		return request;
 	}, [config, conversation.snapshot, filePaths, filePathsTruncated, session.id]);
+	loadFilePaths.current = () => { void loadWorkspaceFiles(); };
 
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;
@@ -506,6 +566,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		[conversation.snapshot, session],
 	);
 	const startupShown = startupVisible(startupView, conversation.snapshot);
+	// The composer's view of the conversation: unchanged while a reply streams,
+	// so the composer does not re-render with every word (see composerSnapshot).
+	const composerSnapshot = useComposerSnapshot(conversation.snapshot, startupView?.openingTurnId);
+	const composerChanges = useMemo(
+		() => changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined,
+		[changeSummary, filesNavigation.openChanges],
+	);
 	// The agent coming up is not a conversation event, so over the direct link
 	// nothing tells the screen. With an opening brief the turn's own events cover
 	// it; a promptless start stayed on "Connecting to the agent…". Once
@@ -602,6 +669,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuArtifactCount = "projectName" in session ? undefined : deliverableArtifacts(session.artifacts ?? []).length;
 	const menuHasPullRequest = !("projectName" in session) && Boolean(session.prs?.length || session.pr);
 	const previewReady = useSessionPreview(config, session.id);
+	// Only a local worker can hold a simulator or emulator.
+	const menuDeviceName = useSessionDevice("projectName" in session ? undefined : config, session.id)?.device.name;
 	// Offered only where the agent can carry the conversation on in Terminal UI.
 	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
 	const menuSwitching = interfaceSwitch.starting || switchingToTerminal;
@@ -613,6 +682,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
 	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	// The account sheet follows the accounts while it is up (see `AccountPickerEntry`).
+	const accountPicker = useMemo(() => ({ options: agentAccountOptions(agentAccounts.accounts), selected: agentAccounts.current ?? "" }), [agentAccounts.accounts, agentAccounts.current]);
+	const subscribeAccountPicker = useValueFeed(accountPicker);
 	const limitedTurnId = useMemo(() => conversation.snapshot ? usageLimitedTurn(conversation.snapshot)?.id : undefined, [conversation.snapshot]);
 	const { retryTurn, setTurnAutoResume } = conversation;
 	const turnRecovery = useMemo((): TurnRecovery => ({
@@ -626,6 +698,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}), [agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
+		deviceName: menuDeviceName,
 		artifactCount: menuArtifactCount,
 		hasPullRequest: menuHasPullRequest,
 		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
@@ -640,7 +713,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
 		account: menuAccountName ? { name: menuAccountName, moving: accountMoving, canMove: menuAccountCanMove } : undefined,
-	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
+	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuDeviceName, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
 	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -659,16 +732,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// A local chat's sheet never offers the cloud-only actions (see conversationMenuSections).
 	const menuActions: Record<Exclude<ConversationMenuAction, CloudConversationMenuAction>, () => void> = {
 		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+		device: () => router.push({ pathname: "/device/[id]", params: { id: session.id, hostId: currentHostId } }),
 		shell: () => void openShell(),
 		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
 		pull_requests: () => {
-			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
-				? reviewRouteForSession(session, currentHostId)
-				: undefined;
-			if (route) openPage(route);
-			// Several PRs open Pull Requests over this page, so closing it
-			// returns here.
-			else openPage("/prs");
+			const action = pullRequestMenuAction(pullRequests?.rows.length ?? 0);
+			if (action === "review" && pullRequests) openPage(reviewRouteForPR(session.id, pullRequests.lead, currentHostId));
+			// Several open the same list the PR chip does, over this chat.
+			else if (action === "list") setPullRequestListRequest((request) => request + 1);
 		},
 		pin: () => {
 			if ("projectName" in session) return;
@@ -688,6 +759,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				subtitle: "The agent resumes this conversation on the account you choose.",
 				options: agentAccountOptions(accounts),
 				selected: current ?? "",
+				subscribe: subscribeAccountPicker,
 				onSelect: (accountId) => {
 					if (!turnActive) return move(accountId, false);
 					const target = accounts.find((account) => account.id === accountId);
@@ -743,6 +815,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		});
 		return () => navigation.setOptions({ headerRight: undefined });
 	}, [menuReady, navigation, openActions]);
+	// The device the session holds opens from its chip over the composer and from
+	// the actions sheet, like the PR and the changed files.
+	const openDevice = useCallback(() => router.push({ pathname: "/device/[id]", params: { id: session.id, hostId: currentHostId } }), [currentHostId, router, session.id]);
 	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
@@ -803,7 +878,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// A conversation that arrives while the page is still sliding in waits for
 	// the slide to finish: mounting the timeline mid-push stalled the UI thread
 	// for hundreds of milliseconds, so the slide froze and then jumped to its
-	// end. One already cached renders with the page, before the slide starts.
+	// end. One already cached renders the page at once and its timeline after:
+	// a frame later if small, once the slide settles if large (see
+	// useChatPushTiming).
 	const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;
 	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
@@ -912,7 +989,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<TurnArtifactsContext.Provider value={turnArtifacts}>
 				<TurnRecoveryContext.Provider value={turnRecovery}>
-				<ChatTimeline
+				{timelineMounted ? <ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
 					onLoadOlder={conversation.loadOlder}
@@ -920,10 +997,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					inputPending={conversation.pendingActions.includes("input")}
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
-					onRollback={conversation.rollback}
-					onFork={forkOptions?.allowed ? forkTurn : undefined}
+					// A page saved on the phone is a record until the live read lands: its
+					// turns may have moved on, so none can be rolled back, forked or edited.
+					onRollback={conversation.saved ? undefined : conversation.rollback}
+					onFork={forkOptions?.allowed && !conversation.saved ? forkTurn : undefined}
 					forkAnyTurn={forkOptions?.anyTurn === true}
-					onEditMessage={conversation.editMessage}
+					onEditMessage={conversation.saved ? undefined : conversation.editMessage}
 					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}
 					onJumpHandled={clearJumpToSequence}
@@ -935,7 +1014,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					keyboardOffset={chatKeyboard.listKeyboardOffset}
 					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
-				/>
+				/> : null}
 				</TurnRecoveryContext.Provider>
 				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
@@ -990,19 +1069,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			    transcript; the daemon's own marker replaces it once it lands. */}
 			{agentSwitchSending ? <View style={styles.switchingLine}><ProviderSwitchLine switching /></View> : null}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
-				<ChatComposer
+				<StableChatComposer
 					key={composerKey}
 					quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
 					onQuoteHandled={quoteHandled}
-					reviewPR={reviewPromptPR}
-					reviewPRSummary={reviewPromptSummary}
-					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+					pullRequests={pullRequests}
+					onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}
+					pullRequestListRequest={pullRequestListRequest}
 					onExpandedChange={composerOpen.set}
 					sessionId={session.id}
 					config={config}
 					machine={machine}
-					snapshot={snapshot}
-					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
+					snapshot={composerSnapshot ?? snapshot}
+					changes={composerChanges}
+					device={menuDeviceName ? { name: menuDeviceName, onOpen: openDevice } : undefined}
 					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}
@@ -1044,6 +1124,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		</View>
 		</KeyboardMotionScope>
 	);
+}
+
+const MemoChatComposer = memo(ChatComposer);
+
+/**
+ * The composer, rendered again only when something it shows changes. Its
+ * handlers are passed as stable forwarders to the newest ones, so the screen's
+ * inline handlers neither force a render nor go stale.
+ */
+function StableChatComposer(props: ComponentProps<typeof ChatComposer>) {
+	return <MemoChatComposer {...useStableFunctionProps(props)} />;
 }
 
 function ConversationBanners({ snapshot, startFailure, starting, resuming, resumeError, terminated, onResume, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; starting: boolean; resuming: boolean; resumeError?: string; terminated: boolean; onResume(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {

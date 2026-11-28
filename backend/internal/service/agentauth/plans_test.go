@@ -19,6 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
+		{"mastra-code", "Log in to Mastra Code", "mastracode", "Choose an OAuth account or Add an API key in Mastra's native provider chooser. After adding a key, open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode", "", ActionLogin, []string{"mastracode", "login"}},
 		{"docker-agent", "Set up Docker Agent", "docker-agent", "Native model setup: connect Anthropic, OpenAI or Google and Docker Agent saves the key in its own env file, which Orchestrator's default configuration uses. To use your own YAML, set AO_DOCKER_AGENT_CONFIG to its absolute path. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/getting-started/quickstart/", "", ActionSetup, []string{"docker-agent", "setup"}},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
@@ -48,7 +49,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"kilocode", "Log in to Kilo Code", "kilo", "Native browser flow", "https://kilo.ai/docs/code-with-ai/platforms/cli", "", ActionLogin, []string{"kilo", "auth", "login"}},
 		{"vibe", "Set up Vibe", "vibe", "Native provider setup; Orchestrator forwards terminal input without persisting or logging the raw input, while Vibe controls credential storage", "https://github.com/mistralai/mistral-vibe", "", ActionSetup, []string{"vibe", "--setup"}},
 		{"muse", "Log in to Muse", "muse", "Native login flow", "https://ai.meta.com/llama/", "", ActionLogin, []string{"muse", "login"}},
-		{"agy", "Log in to Agy", "agy", "Native first-run browser sign-in", "https://github.com/google-antigravity/antigravity-cli", "", ActionLogin, []string{"agy"}},
+		{"agy", "Log in to Agy", "agy", "Choose Google account or Google Cloud project", "https://github.com/google-antigravity/antigravity-cli", "", ActionLogin, []string{"agy"}},
 		{"autohand", "Log in to Autohand", "autohand", "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference", "", ActionLogin, []string{"autohand", "login"}},
 		{"kimchi", "Log in to Kimchi", "kimchi", "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi"}},
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},

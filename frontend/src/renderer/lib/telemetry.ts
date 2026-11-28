@@ -1,4 +1,5 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
+import { setAnalyticsOptedOut } from "./analytics-opt-out";
 import { aoBridge } from "./bridge";
 import {
 	ARTIFACT_LINK_COPY_SURFACES,
@@ -7,11 +8,12 @@ import {
 	ARTIFACT_SESSION_SCOPES,
 	ARTIFACT_SIGN_IN_PROMPT_REASONS,
 } from "./artifact-telemetry";
-import { isLoopbackHostname } from "./loopback";
-import { ONBOARDING_STEPS } from "./onboarding-steps";
+import { sanitizeSensitiveString } from "../../shared/telemetry-text";
+import { ONBOARDING_EVENTS, onboardingRateLimitKey, sanitizeOnboardingProperties } from "./onboarding-telemetry-schema";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { IMPORTABLE_AGENTS } from "./session-import-agents";
 import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
+import { isUiUsageEvent, sanitizeUiUsageProperties } from "./ui-usage-registry";
 import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -19,19 +21,21 @@ import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 import { reserveException } from "./reported-errors";
 import { installRendererErrorHandlers } from "../../shared/renderer-error-handlers";
+import { launchProperties, takeLaunchStart } from "./launch-telemetry";
+import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
+import { DAEMON_EXIT_REASONS } from "../../shared/daemon-exit-reason";
+import { EXIT_FEEDBACK_EVENTS, sanitizeExitFeedbackProperties } from "../../shared/exit-feedback";
+
+export { sanitizeExitFeedbackProperties };
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
 const RELEASE_TAG = "2026-01-30";
 // 3 marks the renamed events; 2 used the ao.v2.* names. Matches the daemon.
 const TELEMETRY_SCHEMA_VERSION = 3;
-const REDACTED_LOCAL_URL = "[redacted-local-url]";
-const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
-const EMBEDDED_LOCAL_URL_PATTERN =
-	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 // session_management_summary keeps its shipped exported name; every other
 // event is exported under the name it is captured with.
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -117,6 +121,11 @@ export function reserveCapture(name: string, now = Date.now()): boolean {
 	if (!reserveWindow(minuteWindows, name, now, MINUTE_MS, EVENTS_PER_NAME_PER_MINUTE)) return false;
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
 }
+
+// The caller already sends these at most once per slot per day (a surface, a
+// feature), so several can land in the same minute at launch. Only the daily
+// ceiling applies to them.
+const DAILY_SLOT_EVENTS = new Set(["ao.surfaces.viewed", "ao.features.first_used", "ao.ui.rage_clicked"]);
 
 type PendingUpdateDay = { day: string; failure_count: number };
 
@@ -375,6 +384,13 @@ let identifiedId: string | null = null;
 let identifyCalledFor: string | null = null;
 let posthogReady = false;
 let analyticsOptedOut = false;
+/** Counts opt-outs, so work measured before one is never sent after a later opt-in. */
+let optOutGeneration = 0;
+
+/** Whether Share usage analytics is off, so local counters are neither kept nor written. */
+export function isAnalyticsOptedOut(): boolean {
+	return analyticsOptedOut;
+}
 
 function registerBaseProperties(): void {
 	posthog.register({
@@ -496,7 +512,9 @@ export function resumePostHogAfterOptIn(client: PostHogFlagControls): void {
 
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
+	setAnalyticsOptedOut(optedOut);
 	if (optedOut) {
+		optOutGeneration += 1;
 		// A website visit not linked yet is dropped, not kept for a later opt-in.
 		pendingWebVisitor = null;
 		// Updater failures counted before the opt-out must not be exported
@@ -786,16 +804,6 @@ export function startDailyActiveHeartbeat({
 	};
 }
 
-function normalizeException(reason: unknown): Error {
-	if (reason instanceof Error) return reason;
-	if (typeof reason === "string") return new Error(reason);
-	try {
-		return new Error(JSON.stringify(reason));
-	} catch {
-		return new Error("Unknown renderer exception");
-	}
-}
-
 function routeSurface(pathname: string): string {
 	if (pathname === "/") return "home";
 	if (/^\/settings(?:\/|$)/.test(pathname)) return "global_settings";
@@ -842,39 +850,15 @@ async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
 	return sha256Hex(trimmed);
 }
 
-function isLocalURL(value: string): boolean {
-	try {
-		const url = new URL(value);
-		return (
-			url.protocol === "file:" ||
-			(url.protocol === "app:" && url.host === "renderer") ||
-			isLoopbackHostname(url.hostname)
-		);
-	} catch {
-		return false;
-	}
-}
-
-function redactEmbeddedLocalURLs(value: string): string {
-	return value.replace(EMBEDDED_LOCAL_URL_PATTERN, REDACTED_LOCAL_URL);
-}
-
-function redactEmbeddedAbsolutePaths(value: string): string {
-	return value
-		.replace(/(?:\/Users\/|\/home\/|\/tmp\/|\/private\/var\/|\/var\/folders\/)\S+/g, REDACTED_LOCAL_PATH)
-		.replace(/\b[A-Za-z]:\\[^\s)]+/g, REDACTED_LOCAL_PATH);
-}
-
-function sanitizeSensitiveString(value: string): string {
-	const trimmed = value.trim();
-	if (!trimmed) return trimmed;
-	if (isLocalURL(trimmed)) return REDACTED_LOCAL_URL;
-	return redactEmbeddedAbsolutePaths(redactEmbeddedLocalURLs(trimmed));
-}
-
 function sanitizePostHogValue(value: unknown): unknown {
 	if (typeof value === "string") return sanitizeSensitiveString(value);
 	if (Array.isArray(value)) return value.map((item) => sanitizePostHogValue(item));
+	// The SDK stamps every event with a Date. Rebuilding it gives {}, and an
+	// immediately sent event such as $identify then goes out with "timestamp": {},
+	// which PostHog does not store. A Date serializes to an ISO string, no path
+	// or URL. Any other object keeps the rebuild, which reads only its own
+	// enumerable values (a URL instance would otherwise serialize its href).
+	if (value instanceof Date) return value;
 	if (value && typeof value === "object") {
 		return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, sanitizePostHogValue(nested)]));
 	}
@@ -925,7 +909,7 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 // reported as "other" so a free-form string can never leak through.
 const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
 const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
-const CLOUD_SIGN_IN_SOURCES = new Set(["artifact_publish", "other"]);
+const CLOUD_SIGN_IN_SOURCES = new Set(["artifact_publish", "onboarding", "other"]);
 const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
 const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
 const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
@@ -949,7 +933,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 	switch (event) {
 		case "ao.renderer.cloud_signed_in":
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
-			// Whether Publish's Sign in started it (artifact_publish) or anything else.
+			// Whether Publish's Sign in (artifact_publish) or onboarding's started it, or anything else.
 			if (typeof properties?.source === "string" && CLOUD_SIGN_IN_SOURCES.has(properties.source)) safe.source = properties.source;
 			// Signing in again as the account already signed in; absent on events sent before it was counted.
 			if (typeof properties?.same_account === "boolean") safe.same_account = properties.same_account;
@@ -1083,6 +1067,8 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 	return safe;
 }
 
+const EXIT_FEEDBACK_EVENT_SET = new Set<string>(EXIT_FEEDBACK_EVENTS);
+
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
@@ -1094,6 +1080,9 @@ export async function sanitizeRendererProperties(
 	properties?: TelemetryProperties,
 ): Promise<TelemetryProperties> {
 	if (CLOUD_FUNNEL_EVENTS.has(event)) return sanitizeCloudFunnelProperties(event, properties);
+	if (ONBOARDING_EVENTS.has(event)) return sanitizeOnboardingProperties(event, properties);
+	if (PERFORMANCE_EVENTS.has(event)) return sanitizePerformanceProperties(event, properties);
+	if (isUiUsageEvent(event)) return sanitizeUiUsageProperties(event, properties);
 	const safe: TelemetryProperties = {};
 	switch (event) {
 		case "ao.app.active":
@@ -1104,12 +1093,12 @@ export async function sanitizeRendererProperties(
 				safe.surface = properties.surface;
 			}
 			break;
-		case "ao.onboarding.step_viewed":
-		case "ao.onboarding.step_completed":
-		case "ao.onboarding.step_abandoned":
-			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
-			break;
 		case "ao.app.loaded":
+			break;
+		case "ao.exit_feedback.shown":
+		case "ao.exit_feedback.answered":
+		case "ao.exit_feedback.dismissed":
+			Object.assign(safe, sanitizeExitFeedbackProperties(event, properties));
 			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
@@ -1129,12 +1118,6 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.agents.install_clicked":
 			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
-			break;
-		case "ao.onboarding.first_run_experiment_exposed":
-			if (properties?.variant === "prompt" || properties?.variant === "control") safe.variant = properties.variant;
-			break;
-		case "ao.onboarding.first_run_prompt_action":
-			if (properties?.action === "clone" || properties?.action === "local_folder" || properties?.action === "standalone" || properties?.action === "import" || properties?.action === "dismissed") safe.action = properties.action;
 			break;
 		case "ao.projects.added":
 		case "ao.projects.removed":
@@ -1253,6 +1236,8 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.code === "string") safe.code = properties.code;
 			if (typeof properties?.exit_code === "number") safe.exit_code = properties.exit_code;
 			if (typeof properties?.signal === "string") safe.signal = properties.signal;
+			// Read from the daemon's last output line in main; only the fixed reason is sent.
+			if (typeof properties?.exit_reason === "string" && (DAEMON_EXIT_REASONS as readonly string[]).includes(properties.exit_reason)) safe.exit_reason = properties.exit_reason;
 			break;
 		case "ao.requests.failed":
 			if (typeof properties?.operation === "string") safe.operation = properties.operation;
@@ -1424,7 +1409,7 @@ export async function sanitizeRendererExceptionProperties(
 export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
-	installRendererErrorHandlers((error, source) => { void captureRendererException(error, { source, unhandled: true }); });
+	installRendererErrorHandlers((error, source, event) => { void captureRendererException(error, { source, unhandled: true }, event); });
 }
 
 type PostHogClient = typeof posthogModule;
@@ -1484,7 +1469,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			distinctID: distinctId,
 			isIdentifiedID: identified,
 		},
-		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
+		before_send: (event) => {
+			if (!event) return event;
+			const safe = sanitizePostHogCaptureResult(event);
+			return handOffExitFeedbackEvent(safe as unknown as Record<string, unknown>) ? null : safe;
+		},
 		session_recording: {
 			maskCapturedNetworkRequestFn: (request) => {
 				if (request.name) {
@@ -1494,6 +1483,44 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			},
 		},
 	};
+}
+
+// Set by before_send when it hands an exit feedback event to main.
+let exitFeedbackHandedOff = false;
+
+/**
+ * The exit feedback events are captured right before the app quits, where the
+ * SDK's batch would die with the window. The SDK still builds each event
+ * (identity, context, cleanup); main posts it and holds the quit until it is
+ * delivered or 2 s pass. Serialized here, so the timestamp leaves as ISO text.
+ */
+export function handOffExitFeedbackEvent(event: Record<string, unknown>): boolean {
+	if (typeof event.event !== "string" || !EXIT_FEEDBACK_EVENT_SET.has(event.event)) return false;
+	try {
+		aoBridge.telemetry.sendExitFeedbackEvent(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+		exitFeedbackHandedOff = true;
+		return true;
+	} catch {
+		// Let the SDK try instead.
+		return false;
+	}
+}
+
+/**
+ * Whether the exit feedback prompt may show: usage analytics on and none of its
+ * events silenced by the kill switch. Waits at most 1 s for telemetry to start.
+ */
+export async function exitFeedbackAllowed(): Promise<boolean> {
+	if (analyticsOptedOut) return false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const ready = await Promise.race([
+		initTelemetry().catch(() => false),
+		new Promise<boolean>((resolve) => {
+			timeout = setTimeout(() => resolve(false), 1_000);
+		}),
+	]);
+	clearTimeout(timeout);
+	return ready && !analyticsOptedOut && !EXIT_FEEDBACK_EVENTS.some((event) => isDeniedEvent(event));
 }
 
 export async function initTelemetry(): Promise<boolean> {
@@ -1571,6 +1598,17 @@ export async function initTelemetry(): Promise<boolean> {
 				withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded")),
 			);
 		}
+		// Launch timings are their own event, sent once the window is usable, so a
+		// crash during that wait never costs ao.app.loaded. A reload has no start,
+		// and an opt-out during the wait discards the measurement.
+		const launchGeneration = optOutGeneration;
+		const sendLaunchOnClose = (launch: Record<string, unknown>) => {
+			if (launchGeneration === optOutGeneration) captureRendererEventOnUnload("ao.launches.timed", launch);
+		};
+		void takeLaunchStart()
+			.then((start) => (start ? launchProperties(start, bootstrap.appVersion, sendLaunchOnClose) : undefined))
+			.then((launch) => (launch && launchGeneration === optOutGeneration ? captureRendererEvent("ao.launches.timed", launch) : undefined))
+			.catch(() => undefined);
 		return true;
 	})().catch(() => {
 		// A thrown error is transient (the bridge not ready yet, or a hiccup in
@@ -1597,6 +1635,24 @@ export function clearRendererTelemetryQueues(): void {}
 // independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
+/**
+ * Sends an onboarding or performance event from a `pagehide` listener. PostHog flushes its
+ * queue from its own pagehide handler, registered at init and so before any
+ * of ours; an event queued after it dies with the page. This path sanitizes
+ * synchronously and sends at once with sendBeacon, which outlives the page.
+ */
+export function captureRendererEventOnUnload(event: string, properties?: Record<string, unknown>): boolean {
+	const isPerformanceEvent = PERFORMANCE_EVENTS.has(event);
+	if (analyticsOptedOut || !posthogReady || !(ONBOARDING_EVENTS.has(event) || isPerformanceEvent) || isDeniedEvent(event)) return false;
+	const sanitizedProperties = isPerformanceEvent ? sanitizePerformanceProperties(event, properties) : sanitizeOnboardingProperties(event, properties);
+	if (!reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) return false;
+	try {
+		return Boolean(posthog.capture(postHogEventName(event), withTelemetryContext(sanitizedProperties), { send_instantly: true, transport: "sendBeacon" }));
+	} catch {
+		return false;
+	}
+}
+
 export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
 	// An opted-out renderer must not touch rate-limit slots or the persisted
 	// updater counts, which would otherwise be exported after an opt-in.
@@ -1613,7 +1669,9 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	if (event === "ao.routes.viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
 		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return false;
-	} else if (event !== "ao.updates.failed" && !reserveCapture(event)) {
+	} else if (DAILY_SLOT_EVENTS.has(event)) {
+		if (!reserveWindow(dayWindows, event, Date.now(), DAY_MS, EVENTS_PER_NAME_PER_DAY)) return false;
+	} else if (event !== "ao.updates.failed" && !reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) {
 		return false;
 	}
 	if (!(await initTelemetry()) || analyticsOptedOut) return false;
@@ -1654,7 +1712,8 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	const safeProperties = withTelemetryContext(sanitizedProperties);
 	let captured = false;
 	try {
-		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		exitFeedbackHandedOff = false;
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties)) || exitFeedbackHandedOff;
 		if (captured && LIFETIME_SESSION_REFRESH_EVENTS.has(event)) void refreshLifetimeSessions();
 		return captured;
 	} finally {
@@ -1662,7 +1721,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	}
 }
 
-export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
+export async function captureRendererException(error: unknown, properties?: Record<string, unknown>, event?: ErrorEvent): Promise<void> {
 	if (!reserveException(error)) return;
 	try {
 		await initTelemetry();
@@ -1674,11 +1733,16 @@ export async function captureRendererException(error: unknown, properties?: Reco
 	// Electron main samples and budgets it per install on the final scrubbed
 	// fingerprint. Renderer exceptions no longer enter the PostHog path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
-	captureExceptionToSentry(normalizeException(error), {
-		category: source === "react-error-boundary" ? "render_crash" : undefined,
+	captureExceptionToSentry(error, {
+		category: source === "react-error-boundary" || source === "route-error" ? "render_crash"
+			: source === "window-error" || source === "script-load" ? "renderer_exception"
+			: source === "unhandledrejection" ? "renderer_rejection" : undefined,
+		code: source === "window-error" ? "WINDOW_ERROR"
+			: source === "script-load" ? "RENDERER_SCRIPT_LOAD_FAILED"
+			: source === "unhandledrejection" ? "UNHANDLED_REJECTION" : undefined,
 		operation: typeof properties?.operation === "string" ? properties.operation : undefined,
 		unhandled: properties?.unhandled === true,
-	});
+	}, event);
 }
 
 export async function addRendererExceptionStep(message: string, properties?: Record<string, unknown>): Promise<void> {

@@ -21,7 +21,7 @@ import { hasMenuIcon } from "./harnessMenuIcons";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortSliderOpen } from "./useEffortSlider";
-import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
+import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice, listedModels } from "./spawnModel";
@@ -45,9 +45,6 @@ export function SpawnComposerControls({
 	projects,
 	projectId,
 	onSelectProject,
-	accounts = [],
-	accountId,
-	onSelectAccount,
 	agents,
 	harness,
 	onSelectHarness,
@@ -68,6 +65,7 @@ export function SpawnComposerControls({
 	voice,
 	prompt,
 	onChangePrompt,
+	onLoadSkills,
 	placeholder,
 	attachments,
 	onSpawn,
@@ -83,7 +81,6 @@ export function SpawnComposerControls({
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
-	const accountLabel = accounts.find((account) => account.id === accountId)?.label ?? "Default account";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
@@ -151,17 +148,6 @@ export function SpawnComposerControls({
 						<Spacer minLength={0} />
 					</HStack>
 
-					{accounts.length > 1 && onSelectAccount ? (
-						<HStack>
-							<Menu
-								label={<SelectorLabel icon={<SelectorGlyph name="person.crop.circle" />} title={accountLabel} />}
-								modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Account, ${accountLabel}`), accessibilityIdentifier("spawn-account")]}
-							>
-								{accounts.map((account) => <Choice key={account.id} label={account.label} selected={account.id === accountId} onChoose={() => onSelectAccount?.(account.id)} />)}
-							</Menu>
-							<Spacer minLength={0} />
-						</HStack>
-					) : null}
 				</VStack>
 			</Host>
 
@@ -173,6 +159,7 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					attachments={attachments}
 					onChangePrompt={onChangePrompt}
+					onLoadSkills={onLoadSkills}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
 					onChooseFile={onChooseFile}
@@ -186,7 +173,7 @@ export function SpawnComposerControls({
 						// and its effort at the start beside attach, how freely at the
 						// end beside the round button; the space between gives way first.
 						<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
-							<HStack spacing={space.none}>
+							<HStack spacing={space.none} modifiers={[controlsRowTypeSize()]}>
 								{/* The harness's mark and the model it runs (the harness's
 								    name only when the catalog names no default). Each agent in
 								    its menu opens one level down onto its models, so this is

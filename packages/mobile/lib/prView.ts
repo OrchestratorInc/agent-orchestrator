@@ -319,6 +319,19 @@ type PRPromptFacts = {
 	review: { decision: string; hasUnresolvedHumanComments: boolean };
 };
 
+/**
+ * The one lifecycle a PR reads as when both the live PR row and a cached
+ * summary are at hand. An ended PR stays ended: the row's merged or closed
+ * wins, then a summary that saw it end first; otherwise the summary's richer
+ * state (it knows drafts), else the row's. Its icon and its status both read
+ * this, so a merged icon never sits beside "Mergeable".
+ */
+export function prResolvedLifecycle(pr: DashboardPR, summary?: SessionPRSummary): PRLifecycle {
+	const own = prLifecycle(pr);
+	if (own === "merged" || own === "closed") return own;
+	return summary?.state ?? own;
+}
+
 function prPromptFacts(pr: DashboardPR, summary?: SessionPRSummary): PRPromptFacts {
 	const ci = summary?.ci.state ?? (pr.ciStatus === "none" || !pr.ciStatus ? "unknown" : pr.ciStatus);
 	const mergeability = summary?.mergeability.state ?? pr.mergeability?.state ?? (
@@ -334,7 +347,7 @@ function prPromptFacts(pr: DashboardPR, summary?: SessionPRSummary): PRPromptFac
 		pr.reviewDecision === "pending" ? "review_required" : pr.reviewDecision ?? "none"
 	);
 	return {
-		state: summary?.state ?? prLifecycle(pr),
+		state: prResolvedLifecycle(pr, summary),
 		ci: { state: ci },
 		mergeability: { state: mergeability },
 		review: { decision: review, hasUnresolvedHumanComments: summary?.review.hasUnresolvedHumanComments ?? Boolean(pr.unresolvedThreads) },

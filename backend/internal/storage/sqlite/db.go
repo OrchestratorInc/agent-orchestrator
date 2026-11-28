@@ -2182,11 +2182,40 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// The Mastra development branch previously used 0213 for its harness
+	// constraint. Preserve that ledger while restoring main's physical 0213
+	// effects before later migrations and generated session reads execute.
+	{version: 213, table: "sessions", column: "stale_binary_since",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_since TIMESTAMP`},
+	{version: 213, table: "sessions", column: "stale_binary_version",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_version TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_launch",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_launch TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_switch_failed_at",
+		addDDL:  `ALTER TABLE sessions ADD COLUMN stale_binary_switch_failed_at TIMESTAMP`,
+		postAdd: []string{staleBinaryCDCTrigger}},
 	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
 	// another migration first, and generated message reads select this column.
 	{version: 199, table: "conversation_messages", column: "continuation",
 		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
 }
+
+// staleBinaryCDCTrigger is 0213's change_log trigger. Its columns are each
+// added by their own statement, so a stop between the last ALTER and this
+// trigger leaves every column present and the trigger missing; reconcileSchema
+// therefore recreates it whenever all four columns exist.
+const staleBinaryCDCTrigger = `CREATE TRIGGER IF NOT EXISTS sessions_stale_binary_cdc_update
+AFTER UPDATE OF stale_binary_since, stale_binary_launch, stale_binary_switch_failed_at ON sessions
+WHEN OLD.stale_binary_since IS NOT NEW.stale_binary_since
+    OR OLD.stale_binary_launch IS NOT NEW.stale_binary_launch
+    OR OLD.stale_binary_switch_failed_at IS NOT NEW.stale_binary_switch_failed_at
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    VALUES (NEW.project_id, NEW.id, 'session_updated',
+        json_object('id', NEW.id, 'conversationId',
+            (SELECT id FROM conversations WHERE current_session_id = NEW.id LIMIT 1)),
+        CURRENT_TIMESTAMP);
+END`
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
 // and replays the skipped migration's effects for any that are missing. It is
@@ -2215,6 +2244,16 @@ func reconcileSchema(db *sql.DB) error {
 			if _, err := db.Exec(stmt); err != nil {
 				return fmt.Errorf("schema repair: replay skipped migration effects for %s.%s: %w", rc.table, rc.column, err)
 			}
+		}
+	}
+	var staleBinaryColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN
+		('stale_binary_since', 'stale_binary_version', 'stale_binary_launch', 'stale_binary_switch_failed_at')`).Scan(&staleBinaryColumns); err != nil {
+		return fmt.Errorf("schema verification: inspect stale-binary columns: %w", err)
+	}
+	if staleBinaryColumns == 4 {
+		if _, err := db.Exec(staleBinaryCDCTrigger); err != nil {
+			return fmt.Errorf("schema repair: restore sessions_stale_binary_cdc_update: %w", err)
 		}
 	}
 	if err := reconcileHarnessConstraint(db); err != nil {
@@ -2288,7 +2327,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
 	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
 	needsTau := !strings.Contains(schema, "'tau'")
-	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
+	needsMastraCode := !strings.Contains(schema, "'mastra-code'")
+	if !needsMastraCode && !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2346,6 +2386,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Tau constraint: %w", err)
 		}
 		needsTau = true
+	}
+	if !needsMastraCode {
+		// Mastra Code's migration runs after Tau's, so it is last before
+		// 'fake' on a fresh database. Remove it the same way and append it
+		// again after Tau.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''mastra-code'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Mastra Code constraint: %w", err)
+		}
+		needsMastraCode = true
 	}
 	type replacement struct {
 		old string
@@ -2488,6 +2537,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsTau {
 		repairs = append(repairs, replacement{"'fake'))", "'tau', 'fake'))"})
 	}
+	// Mastra Code's migration runs after Tau's, so it follows it.
+	if needsMastraCode {
+		repairs = append(repairs, replacement{"'fake'))", "'mastra-code', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2560,6 +2613,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'tau'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Tau")
+	}
+	if !strings.Contains(schema, "'mastra-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Mastra Code")
 	}
 	return nil
 }

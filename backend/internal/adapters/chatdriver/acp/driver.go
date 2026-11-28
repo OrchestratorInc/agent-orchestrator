@@ -53,10 +53,15 @@ type LaunchConfig struct {
 	// a binding can migrate provider-side history into a fresh process home.
 	// Empty on first start.
 	ProviderConversationID string
+	// SkillSessionID is the session whose shared skills the agent gets; a side
+	// conversation's host uses its session's.
+	SkillSessionID domain.SessionID
 }
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
+	// AsyncTasks advertises the Air extension only for bindings verified to use it.
+	AsyncTasks   bool
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
@@ -123,8 +128,16 @@ type Config struct {
 	// agent that sandboxes file access to its declared roots must NOT set
 	// this.
 	ImplicitWorkspaceDirectories bool
+	// OptionalDirectories lists folders to add to the session when the agent
+	// supports additional directories. They are left out when it does not,
+	// where a workspace project's own directories would fail the start.
+	OptionalDirectories func(LaunchConfig) []string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// SplitModelVariant maps a model id the session does not offer onto the base
+	// model it may offer instead, plus the option that selects the variant. Set
+	// it for agents that moved a suffix of their model ids into its own option.
+	SplitModelVariant func(model string) (base string, variant SessionOption, ok bool)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -192,6 +205,10 @@ type Config struct {
 	// reply text or tool call. A nil result keeps the generic error, and an
 	// authentication refusal never reaches it.
 	PromptErrorFailure func(err error, answered bool) error
+	// CompactionMessage recognizes reply text an agent sends to report its own
+	// compaction (Qwen Code), given the chunk's text and `_meta`. A recognized
+	// chunk is kept out of the reply and drives the turn's compaction row.
+	CompactionMessage func(text string, meta map[string]any) (CompactionReport, bool)
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
@@ -205,10 +222,22 @@ type Config struct {
 	// assigned, so an identical provider replay stays identical after the same
 	// rewrite. See hermesacp for the motivating shape.
 	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// NativeHistoryReplay reads authoritative provider state when a resume-only
+	// ACP implementation does not replay session/update. It runs only AFTER a
+	// successful native resume, never as a fresh-session or missing-state fallback.
+	// available=false preserves ordinary resume-only history behavior.
+	NativeHistoryReplay func(context.Context, LaunchConfig, string) ([]acpsdk.SessionNotification, bool, error)
 	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
 	PlansSpanTurns bool
+	// ToolsOutliveTurn marks an agent whose commands keep running after the
+	// prompt that ran them ends, and whose later update reports how they ended:
+	// `agy acp` hands a command to the background once its WaitMsBeforeAsync
+	// passes and can end the turn while it runs. A tool still in progress at a
+	// normal end_turn is then a background task, not one the turn abandoned, so
+	// it is not failed with the turn.
+	ToolsOutliveTurn bool
 	// HideCommand reports an advertised command that AO keeps out of the `/`
 	// menu. AO sends a picked command as ordinary prompt text, so a built-in
 	// that drives the agent's own terminal UI, or changes a setting AO has its
@@ -223,6 +252,14 @@ type Config struct {
 	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// BackgroundTasks reads native background work without issuing a prompt.
+	BackgroundTasks func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
+	// StopBackgroundTask stops one native background task. Nil when the
+	// provider has no stop control; tasks are then never reported stoppable.
+	StopBackgroundTask func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	// BackgroundTaskOutput reads one native background task's recent output.
+	// Nil when the provider keeps none; reads then report it unavailable.
+	BackgroundTaskOutput func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
 	// persist ownership metadata around an opaque provider ID while keeping the
 	// raw value on the ACP wire.
@@ -478,6 +515,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		DisableTools:    cfg.DisableTools,
 		ReadOnly:        cfg.ReadOnly,
 		ProviderScopeID: cfg.ProviderScopeID,
+		SkillSessionID:  ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
 		return nil, err
@@ -498,9 +536,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// sessions; it just cannot be resumed after a disconnect. The resume
 	// capability is downgraded in conversationCapabilities, and Resume()
 	// returns ErrChatResumeFailed if called.
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
-		d.cfg.ImplicitWorkspaceDirectories)
+	additional, err := d.sessionDirectories(launchCfg, cfg.AdditionalDirectories, init)
 	if err != nil {
 		conv.discard()
 		return nil, err
@@ -514,7 +550,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	settings := ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}
 	if err := d.openNewSession(ctx, conv, init, launchCfg, settings, additional, mcpServers); err != nil {
 		conv.discard()
-		return nil, err
+		return nil, markAgentAnswered(err)
 	}
 	d.logStartStage(cfg.SessionID, "total", totalStarted, nil)
 	return conv, nil
@@ -652,6 +688,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// The connect below spawns a fresh process, so a resumed conversation's
 		// provider-side history has to be reachable from the new process home.
 		ProviderConversationID: cfg.ProviderConversationID,
+		SkillSessionID:         ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
@@ -708,6 +745,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
 		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+		// The snapshot's current values are the agent's launch defaults; the
+		// provider process is in the state these restored settings describe.
+		conv.markSettingsApplied(ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions})
 		return conv, nil
 	}
 	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
@@ -725,9 +765,7 @@ func (d *Driver) resumeSession(
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
-		d.cfg.ImplicitWorkspaceDirectories)
+	additional, err := d.sessionDirectories(launchCfg, cfg.AdditionalDirectories, init)
 	if err != nil {
 		conv.discard()
 		if isACPAuthRequired(err) {
@@ -791,6 +829,12 @@ func (d *Driver) resumeSession(
 		}
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
+	}
+	if !init.AgentCapabilities.LoadSession {
+		if err := d.replayNativeHistory(resumeCtx, conv, launchCfg, cfg.ProviderConversationID); err != nil {
+			conv.discard()
+			return nil, fmt.Errorf("%w: native history: %w", ports.ErrChatResumeFailed, err)
+		}
 	}
 	conv.hasDurableTurns = cfg.HasPriorTurns
 	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
@@ -943,12 +987,17 @@ func (d *Driver) initialize(
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.backgroundTasks = d.cfg.BackgroundTasks
+	conv.stopBackgroundTask = d.cfg.StopBackgroundTask
+	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.compactionMessage = d.cfg.CompactionMessage
 	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns
+	conv.toolsOutliveTurn = d.cfg.ToolsOutliveTurn
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if d.cfg.ServedModel != nil {
 		servedModel := d.cfg.ServedModel
@@ -956,6 +1005,7 @@ func (d *Driver) initialize(
 			return servedModel(ctx, cfg, sessionID, selectedModel)
 		}
 	}
+	conv.splitModelVariant = d.cfg.SplitModelVariant
 	if d.cfg.ValidateModel != nil {
 		validateModel := d.cfg.ValidateModel
 		conv.validateModel = func(ctx context.Context, model string) error {
@@ -993,6 +1043,10 @@ func (d *Driver) initialize(
 
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	airCapabilities := []string{"sessionFailure"}
+	if d.cfg.AsyncTasks {
+		airCapabilities = append(airCapabilities, "asyncTasks")
+	}
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
 		Meta: map[string]any{
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
@@ -1018,7 +1072,7 @@ func (d *Driver) initialize(
 				"jetbrains": map[string]any{
 					"air": map[string]any{
 						"version":      1,
-						"capabilities": []string{"sessionFailure"},
+						"capabilities": airCapabilities,
 					},
 				},
 			},
@@ -1034,7 +1088,7 @@ func (d *Driver) initialize(
 		if isACPAuthRequired(err) {
 			return nil, acpsdk.InitializeResponse{}, nil, normalizeACPError("ACP initialize", err)
 		}
-		return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: ACP initialize: %w", ports.ErrChatDriverIncompatible, err)
+		return nil, acpsdk.InitializeResponse{}, nil, markAgentAnswered(fmt.Errorf("%w: ACP initialize: %w", ports.ErrChatDriverIncompatible, err))
 	}
 	if d.cfg.ValidateInitialize != nil {
 		if err := d.cfg.ValidateInitialize(init); err != nil {
@@ -1293,6 +1347,40 @@ func isACPSessionMissing(err error) bool {
 	}
 	details, _ := data["details"].(string)
 	return strings.EqualFold(strings.TrimSpace(details), acpSessionNotFoundDetail)
+}
+
+// agentAnsweredError marks a start the agent itself refused with a JSON-RPC
+// error, as opposed to a process that exited or never answered. Spawn
+// telemetry reads FailureCause; the error reads and unwraps like err.
+type agentAnsweredError struct{ err error }
+
+func (e agentAnsweredError) Error() string        { return e.err.Error() }
+func (e agentAnsweredError) Unwrap() error        { return e.err }
+func (e agentAnsweredError) FailureCause() string { return "agent_error" }
+
+// markAgentAnswered wraps err as agentAnsweredError when the agent answered a
+// request with an error; any other failure is returned unchanged.
+func markAgentAnswered(err error) error {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || sdkMadeRequestError(requestErr) {
+		return err
+	}
+	return agentAnsweredError{err: err}
+}
+
+// sdkMadeRequestError reports a RequestError the ACP SDK built locally (peer
+// disconnected, write failed, request context ended): an internal or
+// cancelled error whose data holds only the SDK's "error" string.
+func sdkMadeRequestError(err *acpsdk.RequestError) bool {
+	if err.Code != -32603 && err.Code != -32800 {
+		return false
+	}
+	data, ok := err.Data.(map[string]any)
+	if !ok || len(data) != 1 {
+		return false
+	}
+	_, ok = data["error"].(string)
+	return ok
 }
 
 func normalizeACPError(operation string, err error) error {

@@ -53,7 +53,7 @@ func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.Proje
 	}
 	now := m.clock()
 	projectID := domain.ProjectID(project.ID)
-	rec := seedRecord(ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindWorker}, project.Config, now)
+	rec := m.seedRecord(ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindWorker}, project.Config, now)
 	rec.IsTaskPreparation = true
 	rec.ProvisionState = domain.SessionProvisionProvisioning
 	rec, err := m.store.CreateSession(ctx, rec)
@@ -213,6 +213,23 @@ func (m *Manager) CancelTaskPreparation(ctx context.Context, token domain.TaskPr
 	}
 	m.taskPreparationsMu.Unlock()
 	return err
+}
+
+// RenewTaskPreparation restarts an unclaimed preparation's expiry. The new
+// chat page that holds one reads and stages its files, so the worktree lasts
+// while that page uses it, and for taskPreparationTTL after the last use.
+// A claimed, cancelled, or unknown token is ignored.
+func (m *Manager) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	token = domain.TaskPreparationToken(strings.TrimSpace(string(token)))
+	m.taskPreparationsMu.Lock()
+	defer m.taskPreparationsMu.Unlock()
+	prep := m.taskPreparations[token]
+	if prep == nil || prep.cancelled || prep.cleaning || prep.timer == nil {
+		return
+	}
+	// A timer that fired just before this call has already started expiry;
+	// rearming it only runs that idempotent cancellation once more.
+	prep.timer.Reset(m.taskPreparationTTL)
 }
 
 // scheduleTaskPreparationCleanup arms the normal expiry path. Failed cleanup

@@ -595,6 +595,34 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 	}
 }
 
+// The launch dashboards read every daemon startup step; a key missing here
+// would export stripped and leave that step's time unnamed. The steps match
+// backend/internal/daemon/startup_timing.go.
+func TestDaemonStartupPayloadAllowlistCoversEveryStep(t *testing.T) {
+	want := map[string][]string{
+		"ao.daemon.ready": {
+			"prepare_ms", "lock_wait_ms", "store_open_ms", "lifecycle_setup_ms", "chat_setup_ms", "session_setup_ms",
+			"install_recovery_ms", "services_setup_ms", "codex_recovery_ms", "startup_reconcile_ms", "listen_ms", "startup_ms",
+		},
+		"ao.daemon.startup_reconciled": {"chat_hosts_ms", "sessions_ms", "reviewer_recovery_ms", "runtime_ms", "reconcile_ms"},
+	}
+	for name, keys := range want {
+		allowed, ok := remotePayloadAllowlist[name]
+		if !ok {
+			t.Errorf("%s has no allowlist entry", name)
+			continue
+		}
+		if len(allowed) != len(keys) {
+			t.Errorf("%s allowlist has %d keys, want %v", name, len(allowed), keys)
+		}
+		for _, key := range keys {
+			if _, ok := allowed[key]; !ok {
+				t.Errorf("%s is missing allowlisted key %q", name, key)
+			}
+		}
+	}
+}
+
 // properties is pure, so the person-property derivation is exercised directly
 // rather than through the HTTP fixture. When the sanitized payload carries the
 // operator's GitHub handle, the sink mirrors it into $set and flips this one

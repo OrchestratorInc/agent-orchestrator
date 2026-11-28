@@ -10,8 +10,9 @@ import {
 	type WorkspaceTreeEntry,
 } from "../hooks/useSessionWorkspaceTree";
 import { sessionUiKey } from "../lib/hosts";
-import { type FilesSource, sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { type FilesSource, isWorkspaceNotFoundError, sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 
 type DirectoryState = { key:string; requested:string[]; open:Set<string> };
@@ -66,6 +67,9 @@ function treeStyle(flushTop: boolean): React.CSSProperties {
 		"--trees-icon-width-override": "14px",
 		"--trees-font-family-override": "inherit",
 		"--trees-font-size-override": "var(--font-size-base)",
+		// The tree's :host asks for `light dark`, which follows the OS. Inherit
+		// AO's theme instead, so icon colours match the chat's file chips.
+		colorScheme: "inherit",
 		paddingTop: flushTop ? 0 : 4,
 	} as React.CSSProperties;
 }
@@ -391,7 +395,14 @@ function WorkspaceFileTree({
 		<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-1.5">
 			{isPending ? <FileTreeSkeleton /> : null}
 			{activeError ? (
-				<p className="p-3 text-xs text-error">{activeError.message || t("files.error.loadWorkspaceTree")}</p>
+				isWorkspaceNotFoundError(activeError) ? (
+					<div className="flex flex-col items-start gap-2 p-3 text-xs text-muted-foreground">
+						<p>{t("files.workspaceGone")}</p>
+						<Button onClick={() => void (normalizedFilter && !snapshot ? searchQuery : rootQuery).refetch()} size="sm" type="button" variant="secondary">
+							{t("files.retry")}
+						</Button>
+					</div>
+				) : <p className="p-3 text-xs text-error">{activeError.message || t("files.error.loadWorkspaceTree")}</p>
 			) : null}
 			{(rootQuery.data?.truncated || directoryQueries.some(query=>query.data?.truncated)) ? <p className="p-3 text-xs text-muted-foreground">{t("files.treeTruncated")}</p> : null}
    {isEmpty ? <p className="p-3 text-xs text-muted-foreground">{normalizedFilter ? t("files.explorer.noFilterMatches") : t("files.explorer.empty")}</p> : null}

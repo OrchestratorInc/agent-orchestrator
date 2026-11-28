@@ -24,6 +24,7 @@ func (c *conversation) ListSkills(ctx context.Context) ([]ports.ChatSkill, error
 func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableCommand) {
 	skills := make([]ports.ChatSkill, 0, len(commands))
 	hasCompact := false
+	seen := make(map[string]bool, len(commands))
 	for _, command := range commands {
 		if command.Name == "" {
 			continue
@@ -36,6 +37,12 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 		if c.hideCommand != nil && c.hideCommand(command) {
 			continue
 		}
+		// Some agents list a built-in and a skill of the same name. Both are
+		// invoked as /name, so they are one entry, the first listed.
+		if seen[command.Name] {
+			continue
+		}
+		seen[command.Name] = true
 		inputHint := ""
 		if command.Input != nil && command.Input.Unstructured != nil {
 			inputHint = command.Input.Unstructured.Hint

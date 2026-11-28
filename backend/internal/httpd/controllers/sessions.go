@@ -101,7 +101,7 @@ type SessionService interface {
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
-	RegisterArtifacts(ctx context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error)
+	RegisterArtifacts(ctx context.Context, id domain.SessionID, workingDir string, references []string) (sessionsvc.ArtifactRegistration, error)
 	UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
@@ -146,6 +146,7 @@ type SessionService interface {
 	SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
+	ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFilePaths, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
 	Pin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -206,6 +207,7 @@ type SessionsController struct {
 	Activity                 ActivityRecorder
 	PRRefresh                PRRefresher
 	NativeSessions           ports.AgentNativeSessionResolver
+	TerminalReplies          ports.AgentResolver // adapters whose Stop hook omits the reply
 	DataDir                  string
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
@@ -257,6 +259,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)
 	r.Get("/sessions/{sessionId}/workspace/branches", c.listWorkspaceBranches)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/paths", c.listWorkspaceFilePaths)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
 	r.Get("/sessions/{sessionId}/workspace/file/blob", c.getWorkspaceFileBlob)
@@ -407,7 +410,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	}
 	// A standalone worker has no project to start in the background.
 	async := in.Async && in.ProjectID != ""
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", TerminateOnPRMerge: in.TerminateOnPRMerge, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async, FastMode: in.FastMode, AutoCompactWindow: in.AutoCompactWindow})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -668,6 +671,29 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	}
 	// Only artifact files outlive their session; workspace previews need it.
 	fromArtifacts := r.URL.Query().Get("source") == "artifact"
+	if !fromArtifacts {
+		if assetPath, _, pathErr := wildcardPath(r); pathErr == nil {
+			if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok {
+				if svc, ok := c.Svc.(attachmentSessionService); ok {
+					rec, err := svc.GetAttachmentRecord(r.Context(), sessionID(r))
+					if err != nil {
+						envelope.WriteError(w, r, err)
+						return
+					}
+					if c.Attachments != nil {
+						file, info, openErr := c.Attachments.Open(r.Context(), rec.ID, name)
+						if openErr == nil {
+							defer func() { _ = file.Close() }()
+							serveOpenedPreviewFile(w, r, file, info, assetPath)
+							return
+						}
+					}
+					c.serveRootedPreviewFile(w, r, rec.Metadata.WorkspacePath, assetPath)
+					return
+				}
+			}
+		}
+	}
 	var sess domain.Session
 	var err error
 	if fromArtifacts {
@@ -689,7 +715,7 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
 		}
-		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
+		serveArtifactPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
 	if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok && c.Attachments != nil {
@@ -870,6 +896,19 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
+			// Cloudflare can obfuscate email addresses in HTML before the remote
+			// Browser receives it. Its decoder URL would resolve on the preview
+			// origin, where the agent's app does not serve Cloudflare assets.
+			// A response without a Content-Type is typed after this hook: the
+			// server sniffs its body, which can make it text/html. Reading the
+			// body here would hold back a streamed response, so it is protected
+			// without knowing its type; no-transform is harmless on other types.
+			contentType := res.Header.Values("Content-Type")
+			if len(contentType) == 0 || strings.TrimSpace(contentType[0]) == "" || isHTMLMediaType(contentType[0]) {
+				if !hasCacheDirective(res.Header.Values("Cache-Control"), "no-transform") {
+					res.Header.Add("Cache-Control", "no-transform")
+				}
+			}
 			// Remote proxies publish this app on a separate origin, where the
 			// sandbox is removed in favor of their existing preview policy.
 			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
@@ -890,6 +929,62 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// isHTMLMediaType reports whether contentType names an HTML or XHTML document.
+// Only the type before the first ";" decides: clients and Cloudflare treat a
+// response as HTML even when its parameters are malformed or repeated, which
+// mime.ParseMediaType rejects without returning the type.
+func isHTMLMediaType(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
+
+// previewServedContentType is the Content-Type http.ServeContent sends for
+// content: a type already set on the response, else the type of name's
+// extension, else a sniff of the first 512 bytes. A sniff rewinds content, as
+// ServeContent does before serving it.
+func previewServedContentType(h http.Header, name string, content io.ReadSeeker) (string, error) {
+	if values, set := h["Content-Type"]; set {
+		if len(values) == 0 {
+			return "", nil
+		}
+		return values[0], nil
+	}
+	if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
+		return contentType, nil
+	}
+	var head [512]byte
+	n, _ := io.ReadFull(content, head[:])
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return http.DetectContentType(head[:n]), nil
+}
+
+func hasCacheDirective(values []string, directive string) bool {
+	for _, value := range values {
+		quoted, escaped, start := false, false, 0
+		for i := 0; i <= len(value); i++ {
+			if i == len(value) || (value[i] == ',' && !quoted) {
+				if strings.EqualFold(strings.TrimSpace(value[start:i]), directive) {
+					return true
+				}
+				start = i + 1
+				continue
+			}
+			switch {
+			case escaped:
+				escaped = false
+			case quoted && value[i] == '\\':
+				escaped = true
+			case value[i] == '"':
+				quoted = !quoted
+			}
+		}
+	}
+	return false
 }
 
 // inlineArtifactOrigin serves the session's artifact directory on its inline
@@ -1079,6 +1174,23 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 	serveOpenedPreviewFile(w, r, file, info, clean)
 }
 
+// serveArtifactPreviewFile serves an artifact file as serveRootedPreviewFile
+// does, naming in previewutil.ResolvedPathHeader the path the opened file
+// is at, read from the open handle itself, for a shared page's files: it
+// always names the bytes served. When it cannot be read, the header is left out.
+func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	if resolved, ok := previewutil.ResolvedPath(rootPath, file); ok {
+		w.Header().Set(previewutil.ResolvedPathHeader, resolved)
+	}
+	serveOpenedPreviewFile(w, r, file, info, clean)
+}
+
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {
 	sandboxLegacyPreview(w, r)
 
@@ -1086,7 +1198,21 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
 		w.Header().Set("Access-Control-Expose-Headers", "ETag")
-		w.Header().Set("Cache-Control", "private, no-cache")
+		// Decide on the type ServeContent sends, sniffed HTML included, and hand
+		// it that type so the policy and the response cannot disagree.
+		contentType, err := previewServedContentType(w.Header(), info.Name(), file)
+		if err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("read preview file: %w", err))
+			return
+		}
+		cacheControl := "private, no-cache"
+		if isHTMLMediaType(contentType) {
+			cacheControl += ", no-transform"
+		}
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.Header().Set("Cache-Control", cacheControl)
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 		return
 	}
@@ -1102,6 +1228,7 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-transform")
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(rendered) //nolint:gosec // G705: legacy documents are sandboxed; isolated previews have no daemon API authority
 	}
@@ -1145,6 +1272,22 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
+}
+
+func (c *SessionsController) listWorkspaceFilePaths(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/paths")
+		return
+	}
+	paths, err := c.Svc.ListWorkspaceFilePaths(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	if paths.Paths == nil {
+		paths.Paths = []string{}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListWorkspaceFilePathsResponse{SessionID: paths.SessionID, Paths: paths.Paths, Truncated: paths.Truncated})
 }
 
 func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
@@ -2379,6 +2522,13 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 			"the session is switching agents or interfaces; send again after the handoff completes", nil)
 		return
 	}
+	if errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		// A setting the session cannot apply, such as a model its agent does not
+		// offer: the caller can fix it, as the chat composer's send path says.
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_CONFIG_OPTION_INVALID", err.Error(), nil)
+		return
+	}
 	if err != nil {
 		writeAttachmentWriteError(w, r, err)
 		return
@@ -2457,6 +2607,8 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		AccountID:         strings.TrimSpace(in.AccountID),
 		Attachments:       attachments,
 		TaskPreparation:   domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
+		FastMode:          in.FastMode,
+		AutoCompactWindow: in.AutoCompactWindow,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -2594,6 +2746,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		if running != nil {
 			sig.RunningSubagentIDs = &running
 		}
+	}
+	if sig.Event == "stop" && sig.SubagentID == "" && sig.FinalAssistantMessage == "" {
+		sig.FinalAssistantMessage = c.terminalTurnReply(r.Context(), sessionID(r), sig.ExpectedHarness, sig.AgentSessionID)
 	}
 	var activityErr error
 	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
@@ -2740,6 +2895,26 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
+}
+
+// terminalTurnReply reads a main Stop's missing reply from the harness's
+// native history, for adapters that keep it (ports.AgentTerminalReplyReader).
+// The harness only selects the reader: the history it reads is located from
+// AO's own data for this session, never from a hook-supplied path.
+func (c *SessionsController) terminalTurnReply(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, nativeID string) string {
+	if c.TerminalReplies == nil || harness == "" || c.DataDir == "" {
+		return ""
+	}
+	agent, ok := c.TerminalReplies.Agent(harness)
+	if !ok {
+		return ""
+	}
+	reader, ok := agent.(ports.AgentTerminalReplyReader)
+	if !ok {
+		return ""
+	}
+	reply := reader.TerminalTurnReply(ctx, ports.TerminalReplyConfig{DataDir: c.DataDir, SessionID: id, NativeSessionID: nativeID})
+	return capActivityText(domain.SanitizeControlChars(strings.TrimSpace(reply)), 16<<10)
 }
 
 // capActivityMeta bounds an optional activity correlation string; overlong
@@ -3122,6 +3297,11 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PreviewURL:         s.Metadata.PreviewURL,
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
+		RoleAgent:          s.Metadata.RoleAgent,
+		Effort:             s.Metadata.Effort,
+		ModelPending: s.Harness == domain.HarnessMemcode && s.Mode == domain.SessionModeTUI && s.Metadata.ImportSource == nil &&
+			s.Metadata.RuntimeLaunchID == "" && s.Metadata.Model == "" && !s.IsTerminated &&
+			s.Activity.State != domain.ActivityExited && s.ProvisionState != domain.SessionProvisionFailed,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil
@@ -3476,6 +3656,10 @@ func workspaceSnapshotRequested(query url.Values) bool {
 // reads, including a deleted session whose artifacts were kept.
 type artifactSessionService interface {
 	ArtifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error)
+}
+
+type attachmentSessionService interface {
+	GetAttachmentRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error)
 }
 
 // keptArtifactsService lists and forgets kept artifacts.

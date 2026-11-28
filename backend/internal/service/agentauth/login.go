@@ -91,6 +91,11 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 		return []LoginMethod{{"browser", "GitHub account in browser", false}, {"device_code", "Device code", false}, {"copilot_token", "GitHub token", true}, {"native", "Other native sign-in", false}}
 	case "kimi":
 		return []LoginMethod{{"device_code_global", "Kimi account (kimi.ai)", false}, {"device_code_cn", "Kimi account (kimi.com)", false}, {"native", "Other native sign-in", false}}
+	case "agy":
+		if !planByAgentID[agentID].guidedSupported() {
+			return []LoginMethod{{"native", "Native sign-in", false}}
+		}
+		return []LoginMethod{{agyGoogleMethod, "Google account in browser", false}, {agyCloudMethod, "Google Cloud project", false}, {"native", "Other native sign-in", false}}
 	default:
 		// A plan whose login screen opens only when the user types terminalInput
 		// (Droid, Qwen, Prime Agent) has no reviewed way to reach it in a hidden
@@ -131,9 +136,47 @@ type loginOperation struct {
 	cleanupFailed bool
 	stdin         io.WriteCloser
 	codeSubmitted bool
+	// rejectionsSeen counts the plan's codeRejected text in the output last
+	// observed before the code was typed, so only a rejection printed after
+	// it fails the login.
+	rejectionsSeen int
+	// stepsSent records the tick a guided login sent its last step;
+	// signedInScreensSeen counts the plan's signed-in screens in that tick's
+	// output, and signedInAfterSteps holds once more of them appear, so a
+	// sign-in that was already stored cannot finish the login on its own.
+	stepsSent           bool
+	signedInScreensSeen int
+	signedInAfterSteps  bool
 	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
 	// printed for it.
 	nativeDigits []string
+	// guidedSteps are the reviewed menu moves still to make; guidedReady
+	// records the tick that first saw the next step's ready text, so keys are
+	// sent only once the menu has settled.
+	guidedSteps []guidedStep
+	guidedReady bool
+	// methodSteps are the chosen method's own steps; methodStepsUntouched
+	// holds until one of them is sent, and signingOut marks a login that
+	// added the plan's sign-out steps in front of them.
+	methodSteps          []guidedStep
+	methodStepsUntouched bool
+	signingOut           bool
+	// restarted marks a login whose CLI was started afresh after signing out.
+	restarted bool
+	// restartAt, when set, is when to check whether a restart step's sign-out
+	// has landed, so the CLI can be started afresh.
+	restartAt time.Time
+	// guidedStuck marks a guided login whose key send failed: its remaining
+	// steps are never sent, so it cannot finish on its own.
+	guidedStuck bool
+	// keepsRunning marks a CLI that stays open after signing in; polls counts
+	// watcher ticks between its auth probes.
+	keepsRunning bool
+	polls        int
+	// account marks an account folder's sign-in. The harness's own sign-in
+	// is never handed it to recover, so its panel cannot show, finish or
+	// cancel another account's sign-in.
+	account bool
 }
 
 // StartLogin runs a fixed native login or saves a reviewed provider key.
@@ -159,13 +202,48 @@ type LoginOptions struct {
 	Device *bool
 	// Provider is the catalog provider a provider_key login configures.
 	Provider string
+	// AccountEnv runs the login in an account folder AO keeps (its
+	// CLAUDE_CONFIG_DIR or CODEX_HOME) instead of the computer's own login.
+	// Only the CLI's own sign-in methods take it, and a success leaves the
+	// computer's own login and AO's saved keys as they were.
+	AccountEnv map[string]string
 }
 
 func (o LoginOptions) sharesDevice() bool { return o.Device != nil && *o.Device }
 
+// AccountLoginMethod reports a method that signs a CLI in by running the CLI
+// itself, which an account folder can do: not a key AO saves, a setup token,
+// or the guided native terminal.
+func AccountLoginMethod(agentID, method string) bool {
+	if method == "native" || method == catalogKeyMethod || method == claudeSetupTokenMethod {
+		return false
+	}
+	if _, ok := environmentMethod(agentID, method); ok {
+		return false
+	}
+	if _, ok := directKeyWriter(agentID); ok {
+		return false
+	}
+	args, _, err := loginArgs(agentID, method)
+	return err == nil && len(args) > 0
+}
+
+// StartAccountLogin runs the CLI's own sign-in for method in an account folder
+// whose environment is env. The renderer follows it like any UI login.
+func (s *Service) StartAccountLogin(ctx context.Context, agentID, method, secret string, env map[string]string) (LoginSnapshot, error) {
+	if len(env) == 0 {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_ACCOUNT_INVALID", "An account login needs its account folder.", nil)
+	}
+	return s.StartLoginWithOptions(ctx, agentID, method, secret, LoginOptions{AccountEnv: env})
+}
+
 // StartLoginWithOptions is StartLogin with a model and device setting for
 // provider-key methods. An empty secret reuses the key AO already saved.
 func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, secret string, opts LoginOptions) (LoginSnapshot, error) {
+	account := opts.AccountEnv != nil
+	if account && (!AccountLoginMethod(agentID, method) || opts.Model != "" || opts.Device != nil || opts.Provider != "") {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This sign-in method cannot add an account.", nil)
+	}
 	model := opts.Model
 	if (method == catalogKeyMethod) != (opts.Provider != "") {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_PROVIDER_INVALID", "Choose a provider for a provider key, and only for a provider key.", nil)
@@ -191,6 +269,12 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "Native sign-in does not accept a credential when starting.", nil)
 		}
 		return s.startNativeLogin(ctx, agentID)
+	}
+	if steps, ok := planByAgentID[agentID].guidedMethods[method]; ok && planByAgentID[agentID].guidedSupported() {
+		if secret != "" || model != "" || opts.sharesDevice() || account {
+			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This sign-in method does not accept a credential or setting.", nil)
+		}
+		return s.startHiddenLogin(ctx, agentID, method, steps)
 	}
 	args, needsSecret, err := loginArgs(agentID, method)
 	if err != nil {
@@ -226,7 +310,14 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	// s.mu is taken just to record the result, so a slow store (`omp auth
 	// import`, a systemd user bus) never stalls other harnesses' logins.
 	withdrawFailed := false
-	if isKey, err := s.saveLoginKey(ctx, plan, method, secret, model, opts, &withdrawFailed); isKey {
+	// An account login is always the CLI's own; it never saves a key here.
+	saveKey := s.saveLoginKey
+	if account {
+		saveKey = func(context.Context, Plan, string, string, string, LoginOptions, *bool) (bool, error) {
+			return false, nil
+		}
+	}
+	if isKey, err := saveKey(ctx, plan, method, secret, model, opts, &withdrawFailed); isKey {
 		if err != nil {
 			return LoginSnapshot{}, err
 		}
@@ -251,7 +342,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return s.saveClaudeSetupToken(secret, expires)
 	}
 	loginCtx, cancel := context.WithDeadline(context.Background(), expires)
-	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{})}
+	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{}), account: account}
 	cmd := s.commandContext(loginCtx, plan.command[0], args...)
 	process.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 3 * time.Second
@@ -262,8 +353,13 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
 		}
 	}
-	// AO's copy of a key that would override this sign-in stays out of it.
-	cmd.Env = providerkeys.EnvList(append(os.Environ(), "NO_COLOR=1", "TERM=dumb"), providerkeys.WithheldForSignIn(agentID))
+	// AO's copy of a key that would override this sign-in stays out of it. An
+	// account login also points the CLI at the account's own folder.
+	overrides := providerkeys.WithheldForSignIn(agentID)
+	for key, value := range opts.AccountEnv {
+		overrides[key] = value
+	}
+	cmd.Env = providerkeys.EnvList(append(os.Environ(), "NO_COLOR=1", "TERM=dumb"), overrides)
 	if agentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
@@ -325,7 +421,8 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		// started after it still gets the key. A failed release fails the
 		// sign-in. Runs outside s.mu.
 		var releaseErr error
-		if err == nil && loginCtx.Err() == nil {
+		// An account folder's sign-in leaves the computer's own login alone.
+		if err == nil && loginCtx.Err() == nil && !account {
 			releaseCtx, releaseCancel := context.WithTimeout(afterLogin, 5*time.Second)
 			_, releaseErr = s.releaseSubscriptionKey(releaseCtx, agentID)
 			releaseCancel()
@@ -347,7 +444,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 				// The newest sign-in wins, as in the terminal login menu: an
 				// earlier setup token would otherwise keep signing sessions in.
 				// The native login already succeeded, so cleanup is best effort.
-				if agentID == "claude-code" && s.dataDir != "" {
+				if agentID == "claude-code" && s.dataDir != "" && !account {
 					_ = claudecode.RemoveLocalOAuthToken(s.dataDir)
 				}
 			}
@@ -393,10 +490,19 @@ type guidedAuthTerminal interface {
 	TerminalOpener
 	ObserveAuthTerminal(context.Context, string) (shellterm.AuthTerminalObservation, error)
 	SendAuthTerminalKey(context.Context, string, string) error
+	SendAuthTerminalCommand(context.Context, string, string) error
+	SendAuthTerminalCode(context.Context, string, string) error
 	CloseShellTerminal(context.Context, string) error
 }
 
 func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSnapshot, error) {
+	return s.startHiddenLogin(ctx, agentID, "native", nil)
+}
+
+// startHiddenLogin runs the plan's native command in a hidden terminal. The
+// "native" method lets the user answer the CLI's own prompts from the panel;
+// a guided method walks the CLI's menu with its reviewed steps instead.
+func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, steps []guidedStep) (LoginSnapshot, error) {
 	plan, ok := planByAgentID[agentID]
 	if !ok || len(plan.command) == 0 || plan.LaunchMode != LaunchTerminal {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness has no native login command.", nil)
@@ -434,8 +540,16 @@ func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSn
 	// The native login outlives the HTTP request but keeps its trace values.
 	loginCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), expires)
 	op := &loginOperation{
-		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: "native", Status: "running", NativePrompt: "waiting", ExpiresAt: expires},
+		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires},
 		cancel:   cancel, done: make(chan struct{}), terminalID: result.Terminal.HandleID,
+		guidedSteps: steps, methodSteps: steps, methodStepsUntouched: len(steps) > 0,
+		// Only a guided method finishes while the CLI runs. Plain native
+		// sign-in runs until the user leaves the CLI, so an existing sign-in
+		// cannot close it before its menu is used (to switch accounts, say).
+		keepsRunning: len(steps) > 0 && plan.signInKeepsRunning && plan.guidedSupported(),
+	}
+	if method == "native" {
+		op.snapshot.NativePrompt = "waiting"
 	}
 	s.operations[op.snapshot.ID] = op
 	s.mu.Unlock()
@@ -466,14 +580,12 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 				continue
 			} // A probe error is not proof of exit.
 			if observation.Alive {
-				kind, selected, options, digits := nativePrompt(observation.Output)
-				s.mu.Lock()
-				if op.snapshot.Status == "running" {
-					op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = kind, selected, options
-					op.nativeDigits = digits
+				if !s.observeHiddenLogin(ctx, terminal, op, observation.Output) {
+					continue
 				}
-				s.mu.Unlock()
-				continue
+				// The CLI stays open after signing in and its sign-in is
+				// confirmed: close its terminal below.
+				break
 			}
 			// The PTY reports no exit status, and the user may have pressed Esc
 			// or the CLI may have failed, so the harness's own probe decides.
@@ -484,23 +596,15 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// their own credentials are there without the old key; the
 			// operation succeeds and the panel shows it as configured, not
 			// verified. A signed-out or inconclusive probe fails the operation
-			// so the panel offers a retry or the terminal.
-			probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			released, releaseErr := s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
-			state := domain.AgentAuthenticationUnknown
-			if releaseErr == nil {
-				state = s.nativeSignInState(probeCtx, op.snapshot.AgentID)
-				if !nativeSignInFound(state) {
-					restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-					_ = s.restoreSubscriptionKey(restoreCtx, op.snapshot.AgentID, released)
-					restoreCancel()
-				}
-			}
-			probeCancel()
+			// so the panel offers a retry or the terminal. A guided login that
+			// exited before every reviewed step was sent, or after a failed
+			// key send, fails without probing: an earlier sign-in (a Google
+			// account in the Keychain, say) is not the one the user chose.
+			found := len(op.guidedSteps) == 0 && !op.guidedStuck && s.probeOwnSignIn(ctx, op.snapshot.AgentID)
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "failed"
-				if releaseErr == nil && nativeSignInFound(state) {
+				if found {
 					op.snapshot.Status = "succeeded"
 				}
 			}
@@ -530,6 +634,348 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 	}
 }
 
+// signInPollTicks is how many watcher ticks (500ms each) pass between auth
+// probes of a CLI that stays open after signing in.
+const signInPollTicks = 4
+
+// observeHiddenLogin reduces one frame of a running hidden login. A native
+// login reports the CLI's recognized prompts; a guided login walks its
+// reviewed menu steps and shows an allowed sign-in link. For a CLI that stays
+// open after signing in it reports true once the sign-in is confirmed.
+func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation, output string) bool {
+	if op.snapshot.Method == "native" {
+		kind, selected, options, digits := nativePrompt(output)
+		s.mu.Lock()
+		if op.snapshot.Status == "running" {
+			op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = kind, selected, options
+			op.nativeDigits = digits
+		}
+		s.mu.Unlock()
+	} else {
+		if !op.restartAt.IsZero() {
+			return s.restartWhenSignedOut(ctx, terminal, op)
+		}
+		if op.restarted && op.methodStepsUntouched && showsSignedInScreen(op.snapshot.AgentID, output) {
+			// The fresh CLI came back signed in: the sign-out did not land
+			// (or the probe that confirmed it failed), and its login menu
+			// will not appear. Fail now so the panel offers a retry instead
+			// of waiting for the deadline.
+			s.mu.Lock()
+			if op.snapshot.Status == "running" {
+				op.snapshot.Status = "failed"
+			}
+			s.mu.Unlock()
+			return true
+		}
+		if !op.signingOut && op.methodStepsUntouched && showsSignedInScreen(op.snapshot.AgentID, output) {
+			// The CLI is already signed in, so its login menu will only
+			// appear after signing out: replace the existing sign-in.
+			op.signingOut = true
+			op.guidedSteps = append(append([]guidedStep(nil), planByAgentID[op.snapshot.AgentID].signOutSteps...), op.guidedSteps...)
+			op.guidedReady = false
+		}
+		s.advanceGuidedLogin(ctx, terminal, op, output)
+		plan := planByAgentID[op.snapshot.AgentID]
+		plain := terminalui.PlainTerminalText(output)
+		rejections := 0
+		if plan.codeRejected != "" {
+			rejections = strings.Count(plain, plan.codeRejected)
+		}
+		screens := countSignedInScreens(plan, plain)
+		s.mu.Lock()
+		if len(op.guidedSteps) == 0 && !op.guidedStuck {
+			// The CLI returns to a signed-in screen only once this sign-in
+			// lands. The baseline is the output the last step was sent into;
+			// it follows older screens scrolling out of the observed output.
+			switch {
+			case !op.stepsSent:
+				op.stepsSent, op.signedInScreensSeen = true, screens
+			case screens > op.signedInScreensSeen:
+				op.signedInAfterSteps = true
+			case screens < op.signedInScreensSeen:
+				op.signedInScreensSeen = screens
+			}
+		}
+		submitted := op.codeSubmitted
+		rejected := submitted && rejections > op.rejectionsSeen
+		// Before the code is typed this records the baseline; afterwards it
+		// follows older rejections scrolling out of the observed output.
+		if !submitted || rejections < op.rejectionsSeen {
+			op.rejectionsSeen = rejections
+		}
+		if !submitted && op.snapshot.Status == "running" {
+			// Stop reading links once a code is typed: the CLI echoes it.
+			if link := printedLoginURL(op.snapshot.AgentID, output); link != "" {
+				op.snapshot.LoginURL = link
+			}
+			op.snapshot.AcceptsCode = len(op.guidedSteps) == 0 && !op.guidedStuck && plan.codePrompt != "" && strings.Contains(plain, plan.codePrompt)
+		}
+		s.mu.Unlock()
+		if rejected {
+			// The CLI rejected the code; a fresh login gets a fresh link.
+			s.mu.Lock()
+			if op.snapshot.Status == "running" {
+				op.snapshot.Status = "failed"
+			}
+			s.mu.Unlock()
+			return true
+		}
+	}
+	// A guided login finishes only after every reviewed step was sent: an
+	// earlier sign-in (a Google account in the Keychain, say) must not end a
+	// Cloud project login before its menu is walked. A menu that diverges or
+	// a failed key send leaves it running until the user cancels or the
+	// deadline passes; the hidden terminal offers no manual path to finish.
+	if !op.keepsRunning || len(op.guidedSteps) > 0 || op.guidedStuck {
+		return false
+	}
+	// A sign-in already stored before the login (a stale Keychain or
+	// Credential Manager entry the CLI no longer accepts, say) passes the
+	// probe at once, so the CLI must also show a signed-in screen that
+	// appeared after the last step.
+	s.mu.Lock()
+	signedInAfterSteps := op.signedInAfterSteps
+	s.mu.Unlock()
+	if len(planByAgentID[op.snapshot.AgentID].signedInScreens) > 0 && !signedInAfterSteps {
+		return false
+	}
+	op.polls++
+	if op.polls%signInPollTicks != 0 || !s.signInConfirmedWhileRunning(ctx, op.snapshot.AgentID) {
+		return false
+	}
+	s.mu.Lock()
+	if op.snapshot.Status == "running" {
+		op.snapshot.Status = "succeeded"
+	}
+	op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "", "", nil
+	s.mu.Unlock()
+	return true
+}
+
+// countSignedInScreens counts the plan's signed-in screen texts in plain.
+func countSignedInScreens(plan Plan, plain string) int {
+	n := 0
+	for _, text := range plan.signedInScreens {
+		n += strings.Count(plain, text)
+	}
+	return n
+}
+
+// showsSignedInScreen reports whether output holds one of the texts the
+// plan's CLI shows only once it is signed in.
+func showsSignedInScreen(agentID, output string) bool {
+	screens := planByAgentID[agentID].signedInScreens
+	if len(screens) == 0 {
+		return false
+	}
+	plain := terminalui.PlainTerminalText(output)
+	for _, text := range screens {
+		if strings.Contains(plain, text) {
+			return true
+		}
+	}
+	return false
+}
+
+// advanceGuidedLogin presses the next step's reviewed keys once its ready
+// text has been on screen for a full tick, so a menu that is still drawing
+// never takes a key. A failed key send stops the remaining steps rather than
+// risk a different choice on retry; the user can still cancel.
+func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation, output string) {
+	if len(op.guidedSteps) == 0 || op.guidedStuck {
+		return
+	}
+	plain := terminalui.PlainTerminalText(output)
+	step := op.guidedSteps[0]
+	if step.optional && len(op.guidedSteps) > 1 && !strings.Contains(plain, step.readyText) && strings.Contains(plain, op.guidedSteps[1].readyText) {
+		op.guidedSteps = op.guidedSteps[1:]
+		op.guidedReady = false
+		step = op.guidedSteps[0]
+	}
+	if !strings.Contains(plain, step.readyText) {
+		op.guidedReady = false
+		return
+	}
+	if !op.guidedReady {
+		op.guidedReady = true
+		return
+	}
+	if !op.signingOut || len(op.guidedSteps) <= len(op.methodSteps) {
+		op.methodStepsUntouched = false
+	}
+	if step.command != "" {
+		if err := terminal.SendAuthTerminalCommand(ctx, op.terminalID, step.command); err != nil {
+			op.guidedStuck = true
+			return
+		}
+		// Let the CLI's command completion settle before Enter runs it.
+		if !sleepCtx(ctx, commandSettleDelay) {
+			return
+		}
+		if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, "select"); err != nil {
+			op.guidedStuck = true
+			return
+		}
+	}
+	for i, key := range step.keys {
+		if i > 0 && !sleepCtx(ctx, 100*time.Millisecond) {
+			return
+		}
+		if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, key); err != nil {
+			op.guidedStuck = true
+			return
+		}
+	}
+	op.guidedSteps = op.guidedSteps[1:]
+	op.guidedReady = false
+	if step.restart {
+		op.restartAt = time.Now().Add(restartCheckDelay)
+	}
+}
+
+// commandSettleDelay is how long a typed command sits before Enter;
+// restartCheckDelay is how long a restart step waits between sign-out checks.
+var (
+	commandSettleDelay = time.Second
+	restartCheckDelay  = time.Second
+)
+
+// restartWhenSignedOut starts a guided login's CLI afresh once a fresh auth
+// check no longer finds the sign-in a restart step signed out of. Until then
+// it keeps waiting (the deadline bounds it). A failed restart fails the login.
+func (s *Service) restartWhenSignedOut(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation) bool {
+	if time.Now().Before(op.restartAt) {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	state := s.nativeSignInState(probeCtx, op.snapshot.AgentID)
+	cancel()
+	if nativeSignInFound(state) {
+		op.restartAt = time.Now().Add(restartCheckDelay)
+		return false
+	}
+	op.restartAt = time.Time{}
+	op.guidedReady = false
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	err := terminal.CloseShellTerminal(cleanupCtx, op.terminalID)
+	cancelCleanup()
+	var apiError *apierr.Error
+	if err == nil || (errors.As(err, &apiError) && apiError.Kind == apierr.KindNotFound) {
+		plan := planByAgentID[op.snapshot.AgentID]
+		plan.hiddenTerminal = true
+		var result StartResult
+		if result, err = s.startReserved(ctx, plan); err == nil {
+			s.mu.Lock()
+			op.terminalID = result.Terminal.HandleID
+			op.restarted = true
+			s.mu.Unlock()
+			return false
+		}
+	}
+	s.mu.Lock()
+	if op.snapshot.Status == "running" {
+		op.snapshot.Status = "failed"
+	}
+	s.mu.Unlock()
+	return true
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// signInConfirmedWhileRunning probes a CLI that stays open after signing in.
+// The cheap probe runs first; only once it passes does the full check run,
+// which withholds AO's saved key so the key cannot satisfy it.
+func (s *Service) signInConfirmedWhileRunning(ctx context.Context, agentID string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	state := s.nativeSignInState(probeCtx, agentID)
+	cancel()
+	return nativeSignInFound(state) && s.probeOwnSignIn(ctx, agentID)
+}
+
+// probeOwnSignIn reports whether the harness's own sign-in is present. AO's
+// saved key for the harness is released first so the probe cannot be
+// satisfied by it, and given back unless the probe finds the harness's own
+// sign-in.
+func (s *Service) probeOwnSignIn(ctx context.Context, agentID string) bool {
+	probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer probeCancel()
+	released, err := s.releaseSubscriptionKey(probeCtx, agentID)
+	if err != nil {
+		return false
+	}
+	if nativeSignInFound(s.nativeSignInState(probeCtx, agentID)) {
+		return true
+	}
+	restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	_ = s.restoreSubscriptionKey(restoreCtx, agentID, released)
+	restoreCancel()
+	return false
+}
+
+// urlTextLine matches a terminal line holding only URL characters.
+var urlTextLine = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
+
+// printedLoginURL returns the last allowed sign-in link in a hidden login's
+// output. A full-screen CLI wraps a long link across full-width lines. The
+// terminal width is not observable here, so wrapping is proven only by a
+// following URL-only line exactly as wide as the line the link started on;
+// once proven, further full-width lines and one shorter tail line continue
+// it, and a tail line with trailing text contributes its leading URL run. A
+// complete link followed by a short URL-like word stays unchanged.
+func printedLoginURL(agentID, output string) string {
+	lines := strings.Split(terminalui.PlainTerminalText(output), "\n")
+	found := ""
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		start := strings.Index(line, "https://")
+		if start < 0 {
+			continue
+		}
+		link, width, wrapped := line[start:], len(line), false
+		if !urlTextLine.MatchString(link) {
+			link = strings.Fields(link)[0]
+		} else {
+			for i+1 < len(lines) {
+				next := strings.TrimSpace(lines[i+1])
+				if next == "" {
+					break
+				}
+				if !urlTextLine.MatchString(next) {
+					// A wrapped link's tail line may hold its end plus
+					// trailing text ("...&state=AbC  Copy"): keep the
+					// leading URL run so the link is not cut short.
+					if lead := strings.Fields(next)[0]; wrapped && urlTextLine.MatchString(lead) {
+						link += lead
+						i++
+					}
+					break
+				}
+				fullWidth := len(next) == width
+				if !fullWidth && !wrapped {
+					break
+				}
+				link += next
+				i++
+				if !fullWidth {
+					break
+				}
+				wrapped = true
+			}
+		}
+		if safeLoginURL(agentID, link) {
+			found = link
+		}
+	}
+	return found
+}
+
 // nativeSignInFound reports whether the probe after a native sign-in found
 // the harness's own credential: verified, or present where the harness can
 // only say configured.
@@ -554,6 +1000,11 @@ func (s *Service) nativeSignInState(ctx context.Context, agentID string) domain.
 	prober.InvalidateAgentAuthentication(agentID)
 	snapshot, err := prober.EnsureAgentReadiness(ctx, agentID, domain.AgentReadinessPurposeLaunch)
 	if err != nil {
+		return domain.AgentAuthenticationUnknown
+	}
+	// An inconclusive check keeps the last state it saw, marked stale: after
+	// a CLI signs out, that is the old sign-in. Only a fresh check counts.
+	if snapshot.Authentication.Freshness != domain.AgentReadinessFresh {
 		return domain.AgentAuthenticationUnknown
 	}
 	return snapshot.Authentication.State
@@ -760,6 +1211,31 @@ func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action, option st
 	return op.snapshot, nil
 }
 
+// typeLoginCode types an authorization code into a guided login's hidden
+// terminal and presses Enter. A failed write fails the login: the CLI may hold
+// part of the code, and a fresh login gets a fresh link.
+func (s *Service) typeLoginCode(ctx context.Context, op *loginOperation, terminalID, code string) error {
+	terminal, ok := s.terminals.(guidedAuthTerminal)
+	var err error = apierr.Unavailable("AGENT_AUTH_TERMINAL_UNAVAILABLE", "Guided native sign-in is unavailable.")
+	if ok {
+		err = terminal.SendAuthTerminalCode(ctx, terminalID, code)
+		if err == nil && sleepCtx(ctx, commandSettleDelay) {
+			err = terminal.SendAuthTerminalKey(ctx, terminalID, "select")
+		} else if err == nil {
+			err = ctx.Err()
+		}
+	}
+	if err != nil {
+		s.mu.Lock()
+		if op.snapshot.Status == "running" {
+			op.snapshot.Status = "failed"
+		}
+		s.mu.Unlock()
+		op.cancel()
+	}
+	return err
+}
+
 // SubmitLoginCode forwards one Claude fallback code to the existing native
 // process. The pipe write never holds the registry/output lock.
 func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string) (LoginSnapshot, error) {
@@ -775,6 +1251,14 @@ func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string)
 	if op == nil || op.snapshot.AgentID != agentID {
 		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.NotFound("AGENT_AUTH_OPERATION_NOT_FOUND", "Login operation not found.")
+	}
+	if op.snapshot.Status == "running" && op.snapshot.AcceptsCode && op.terminalID != "" && planByAgentID[agentID].codePrompt != "" {
+		op.snapshot.AcceptsCode = false
+		op.codeSubmitted = true
+		op.snapshot.LoginURL = ""
+		snapshot, terminalID := op.snapshot, op.terminalID
+		s.mu.Unlock()
+		return snapshot, s.typeLoginCode(ctx, op, terminalID, code)
 	}
 	if agentID != "claude-code" || op.stdin == nil || op.snapshot.Status != "running" || !op.snapshot.AcceptsCode {
 		s.mu.Unlock()
@@ -1191,9 +1675,28 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// hasQuery reports whether u carries a non-empty value for every key.
+func hasQuery(u *url.URL, keys []string) bool {
+	query := u.Query()
+	for _, key := range keys {
+		if query.Get(key) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func safeLoginURL(agentID, raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return false
+	}
+	if rules := planByAgentID[agentID].loginURLRules; len(rules) > 0 {
+		for _, rule := range rules {
+			if u.Hostname() == rule.host && strings.HasPrefix(u.Path, rule.pathPrefix) && hasQuery(u, rule.requiredQuery) {
+				return true
+			}
+		}
 		return false
 	}
 	if agentID == "codex" {

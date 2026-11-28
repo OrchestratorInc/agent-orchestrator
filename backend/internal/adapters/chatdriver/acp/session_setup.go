@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -72,6 +73,16 @@ func normalizeAdditionalDirectories(cwd string, directories []string, supported,
 		}
 	}
 	return nil, nil
+}
+
+// sessionDirectories is the additional directories a session is created with:
+// the workspace's own, plus the binding's optional ones where supported.
+func (d *Driver) sessionDirectories(launch LaunchConfig, directories []string, init acpsdk.InitializeResponse) ([]string, error) {
+	supported := init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil
+	if supported && d.cfg.OptionalDirectories != nil {
+		directories = append(slices.Clone(directories), d.cfg.OptionalDirectories(launch)...)
+	}
+	return normalizeAdditionalDirectories(launch.WorkspacePath, directories, supported, d.cfg.ImplicitWorkspaceDirectories)
 }
 
 func normalizeMCPServers(configs []ports.ChatMCPServerConfig, caps acpsdk.McpCapabilities) ([]acpsdk.McpServer, error) {

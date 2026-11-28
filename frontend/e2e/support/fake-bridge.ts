@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import type { UpdateSettings, UpdateStatus } from "../../src/main/update-settings";
 import type { AoBridge } from "../../src/preload";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
-import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-locale";
+import { coerceUiSettings, DEFAULT_UI_SETTINGS, type AppLocale } from "../../src/shared/ui-locale";
 
 // The e2e suite runs the renderer under `dev:web` (VITE_NO_ELECTRON=1) with no
 // Electron preload, so `window.ao` is undefined and lib/bridge.ts falls back to
@@ -29,6 +29,8 @@ import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-local
 // not "the boundary works."
 
 export type FakeBridgeOptions = {
+	/** Persisted application language. */
+	locale?: AppLocale;
 	/** Version string surfaced by app.getVersion() (Settings > Updates). */
 	version?: string;
 	/** Daemon lifecycle state the renderer should observe. */
@@ -49,8 +51,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	const updateSettings =
 		opts.updateSettings ??
 		({ enabled: false, channel: "latest", nightlyAck: false, feature: null } satisfies UpdateSettings);
+	const uiSettings = { ...DEFAULT_UI_SETTINGS, locale: opts.locale ?? DEFAULT_UI_SETTINGS.locale };
 	await page.addInitScript(
-		({ version, daemonState, daemonPort, updateStatus, updateSettings }) => {
+		({ version, daemonState, daemonPort, updateStatus, updateSettings, uiSettings }) => {
 			const unsubscribe = () => () => undefined;
 			const updateListeners = new Set<(status: UpdateStatus) => void>();
 			let currentUpdateSettings = updateSettings;
@@ -74,6 +77,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				awake: {
+					pushes: false,
+					onState: () => () => undefined,
+				},
 				triage: {
 					launch: async () => ({ ok: true }),
 				},
@@ -93,6 +100,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
+						findArtifactIssues: async () => [],
+						publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 						listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
@@ -104,6 +113,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
 					resolveQuitConfirm: () => undefined,
+					onExitFeedbackRequest: () => () => undefined,
+					onExitFeedbackSecondClose: () => () => undefined,
+					reportExitFeedback: () => undefined,
 					onNewShellTerminalShortcut: unsubscribe,
 					onCloseShellTerminalShortcut: unsubscribe,
 					setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -114,6 +126,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onShortcutPressed: unsubscribe,
 					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
@@ -143,9 +156,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				theme: {
 					set: async () => undefined,
+					systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: {
@@ -173,8 +188,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -263,7 +278,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setCloudUser: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
+					takeLaunchStart: async () => null,
+					takeResourceSummary: async () => null,
+					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
+					sendExitFeedbackEvent: () => undefined,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -327,6 +346,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -368,7 +392,18 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),
@@ -429,7 +464,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 				},
 				uiSettings: {
-					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
+					get: async () => ({ ...uiSettings }),
 					set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 				},
 				keybindings: {
@@ -475,6 +510,13 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					startHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 				},
 				cloud: {
 					getSession: async () => null,
@@ -485,6 +527,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
@@ -511,7 +556,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			};
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonState, daemonPort, updateStatus, updateSettings },
+		{ version, daemonState, daemonPort, updateStatus, updateSettings, uiSettings },
 	);
 }
 
@@ -1085,6 +1130,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				awake: {
+					pushes: false,
+					onState: () => () => undefined,
+				},
 				triage: {
 					launch: async () => ({ ok: true }),
 				},
@@ -1104,6 +1153,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
+						findArtifactIssues: async () => [],
+						publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 						listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
@@ -1115,6 +1166,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
 					resolveQuitConfirm: () => undefined,
+					onExitFeedbackRequest: () => () => undefined,
+					onExitFeedbackSecondClose: () => () => undefined,
+					reportExitFeedback: () => undefined,
 					onNewShellTerminalShortcut: unsubscribe,
 					onCloseShellTerminalShortcut: unsubscribe,
 					setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -1125,6 +1179,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onShortcutPressed: unsubscribe,
 					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
@@ -1154,9 +1209,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				theme: {
 					set: async () => undefined,
+					systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },
@@ -1180,8 +1237,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -1270,7 +1327,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setCloudUser: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
+					takeLaunchStart: async () => null,
+					takeResourceSummary: async () => null,
+					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
+					sendExitFeedbackEvent: () => undefined,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -1335,6 +1396,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -1376,7 +1442,18 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),
@@ -1470,6 +1547,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					startHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 				},
 				cloud: {
 					getSession: async () => null,
@@ -1480,6 +1564,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,

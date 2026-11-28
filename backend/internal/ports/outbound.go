@@ -436,11 +436,21 @@ type Workspace interface {
 }
 
 // WorkspaceDefaultBranchRefresher is an optional capability for Git-backed
-// workspaces. Resolution is local-only so callers can retain the canonical ref
-// even when the subsequent best-effort network refresh fails.
+// workspaces. Resolution names the canonical ref even when the subsequent
+// best-effort network refresh fails. An automatic default asks the remote for
+// its HEAD at most once per recheck window, within a bounded time, and
+// otherwise reads the HEAD Git cached locally.
 type WorkspaceDefaultBranchRefresher interface {
 	ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (WorkspaceDefaultBranch, error)
 	FetchDefaultBranch(ctx context.Context, repoPath string, target WorkspaceDefaultBranch) error
+}
+
+// WorkspaceDefaultBranchBudgetedResolver resolves a default branch with its
+// network work bounded by remoteCtx instead of a budget of its own, so the
+// repositories of one start share a single deadline. ctx still bounds the
+// local Git reads, which keep working after remoteCtx expires.
+type WorkspaceDefaultBranchBudgetedResolver interface {
+	ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (WorkspaceDefaultBranch, error)
 }
 
 // WorkspaceDefaultBranch is a locally resolved default-branch target. BaseRef
@@ -450,6 +460,9 @@ type WorkspaceDefaultBranch struct {
 	Remote  string
 	Branch  string
 	BaseRef string
+	// Fetched reports that resolving the target already fetched BaseRef from
+	// the remote, so the caller's own refresh would fetch it a second time.
+	Fetched bool
 }
 
 // WorkspaceObserver is an optional read-only capability implemented by
@@ -528,6 +541,13 @@ var (
 	// session the user deleted must leave the sidebar whether or not its
 	// worktree could be reclaimed.
 	ErrWorkspaceRepoUnavailable = errors.New("workspace: project repository is unavailable")
+	// ErrWorkspaceNotARepo reports that a registered project repository folder
+	// (a project, a workspace root, or a workspace child repository) is no
+	// longer a Git repository, for example because its .git was deleted.
+	// Adapters return it inside *WorkspaceNotARepoError only for those
+	// registered folders, never for a session worktree, so callers can surface
+	// recovery guidance instead of git's raw "not a git repository" exit 128.
+	ErrWorkspaceNotARepo = errors.New("workspace: project folder is not a git repository")
 	// ErrWorkspaceStale reports an AO-managed workspace path no longer points
 	// at a registered git worktree. Replacement paths may skip preservation for
 	// this state after path-safety checks, while real preserve failures remain
@@ -589,6 +609,23 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
+// WorkspaceNotARepoError names the registered project repository folder that
+// git no longer recognizes as a repository. It matches ErrWorkspaceNotARepo via
+// errors.Is and keeps the underlying git failure in its chain for logs and
+// telemetry.
+type WorkspaceNotARepoError struct {
+	Path string
+	Err  error
+}
+
+func (e *WorkspaceNotARepoError) Error() string {
+	return fmt.Sprintf("%v: %q: %v", ErrWorkspaceNotARepo, e.Path, e.Err)
+}
+
+func (e *WorkspaceNotARepoError) Unwrap() []error {
+	return []error{ErrWorkspaceNotARepo, e.Err}
+}
+
 // WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
 // never moves, so the returned info differs only in branch names, and on error
 // it still describes the branches Git holds, which may differ per repository.
@@ -648,6 +685,11 @@ type WorkspaceInfo struct {
 	// when the normal workspace lifecycle primitives operate on one child repo
 	// inside a workspace project.
 	RepoPath string
+	// ReleaseAgentState is set when the session is being deleted, so it can no
+	// longer be restored. Teardown may then remove an agent's restorable
+	// conversation kept in the workspace (see hookutil.IsRestorableStateDir),
+	// which an archive keeps so a later restore can resume it.
+	ReleaseAgentState bool
 }
 
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath
@@ -669,14 +711,6 @@ type WorkspaceProjectConfig struct {
 	// import sets it; child repositories already start from their BaseRef.
 	StartRef string
 	Repos    []WorkspaceProjectRepoConfig
-	Assets   []WorkspaceProjectAssetConfig
-}
-
-// WorkspaceProjectAssetConfig describes a non-repository child directory that
-// is copied from the canonical workspace into each session workspace.
-type WorkspaceProjectAssetConfig struct {
-	RelativePath string
-	SourcePath   string
 }
 
 // WorkspaceProjectRepoConfig describes one registered child repo in a

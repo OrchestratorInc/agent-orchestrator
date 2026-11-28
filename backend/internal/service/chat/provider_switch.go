@@ -24,6 +24,17 @@ func (s *Service) SetTerminalProviderSwitcher(switcher TerminalProviderSwitcher)
 	s.terminalSwitcher = switcher
 }
 
+// AgentChoiceRecorder notes that a session's agent was chosen by a switch, so
+// the board never reads the switch as the project's agent setting drifting.
+type AgentChoiceRecorder interface {
+	RecordAgentChoice(context.Context, domain.SessionID) error
+}
+
+// SetAgentChoiceRecorder gives the service where to record a switch's choice.
+func (s *Service) SetAgentChoiceRecorder(recorder AgentChoiceRecorder) {
+	s.agentChoices = recorder
+}
+
 type providerSwitchActivityDetail struct {
 	Event         string              `json:"event"`
 	SourceHarness domain.AgentHarness `json:"sourceHarness"`
@@ -32,7 +43,7 @@ type providerSwitchActivityDetail struct {
 	SourceModel  string `json:"sourceModel,omitempty"`
 	TargetModel  string `json:"targetModel,omitempty"`
 	TargetEffort string `json:"targetEffort,omitempty"`
-	// TargetAutoCompactWindow is the Claude Code compaction window the target started with.
+	// TargetAutoCompactWindow is the auto-compaction the target started with: Claude Code's window, or OpenCode's "off".
 	TargetAutoCompactWindow string `json:"targetAutoCompactWindow,omitempty"`
 	BranchID                string `json:"branchId"`
 	// PermissionMode is the mode the target started in. ChatPermissionMode is the
@@ -212,7 +223,25 @@ func (s *Service) messageDelivered(ctx context.Context, id domain.SessionID, cli
 	return found, err
 }
 
+// switchProvider moves the session to request's agent and, when that changed
+// the agent, records the choice. A failed record is logged, not the switch's error.
 func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) error {
+	var before domain.AgentHarness
+	if stored, found, err := s.sessions.GetSession(ctx, id); err == nil && found {
+		before = stored.Harness
+	}
+	if err := s.switchProviderAgent(ctx, id, request, result); err != nil {
+		return err
+	}
+	if s.agentChoices != nil && before != request.TargetHarness {
+		if err := s.agentChoices.RecordAgentChoice(context.WithoutCancel(ctx), id); err != nil {
+			s.log.Warn("record agent choice after provider switch", "session", id, "error", err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) switchProviderAgent(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) error {
 	if request.TargetHarness == "" {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is required"}
 	}
@@ -254,15 +283,30 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	// yet. It is woken first, as a message to it would be.
 	if !s.HasLiveChatController(id) {
 		err := s.wakeHibernated(ctx, id)
+		resumed := false
 		if errors.Is(err, ErrNoController) && !stored.IsTerminated && s.resumeAgent != nil {
 			resumeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			err = s.resumeAgent(resumeCtx, id)
 			cancel()
-			if err != nil {
-				return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: fmt.Sprintf("the chat's %s agent has exited and could not be started to hand over: %v", stored.Harness, err), Cause: err}
+			resumed = true
+			if err == nil && !s.HasLiveChatController(id) {
+				// A resume can succeed by recovering the session's status alone,
+				// leaving no agent to hand over; that is a start that did not happen.
+				err = errors.New("the resume finished without starting the agent")
 			}
 		}
 		if err != nil && !errors.Is(err, ErrNoController) {
+			if s.coldSwitchLaunch != nil && !stored.IsTerminated && ctx.Err() == nil {
+				// The agent cannot start, so it cannot take part in the handoff.
+				// The note is built from AO's stored transcript either way; only
+				// stopping a running source is skipped.
+				s.log.Warn("provider switch: source agent could not start; handing over from the stored transcript",
+					"session", id, "source", stored.Harness, "target", request.TargetHarness, "error", err)
+				return s.coldSwitchProvider(ctx, id, request, result, err)
+			}
+			if resumed {
+				return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: fmt.Sprintf("the chat's %s agent has exited and could not be started to hand over: %v", stored.Harness, err), Cause: err}
+			}
 			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "the chat's agent could not be woken: " + err.Error(), Cause: err}
 		}
 	}
@@ -394,60 +438,16 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 		ConversationID: conversation.ID, SourceBranchID: activeBranch.ID,
 		SourceSequence: conversation.LatestSequence, Bootstrap: handoffNote,
 	}
-	if request.TargetHarness == domain.HarnessClaudeCode {
+	if request.TargetHarness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(request.TargetHarness) {
 		targetCfg.ProviderSwitch.AutoCompactWindow = request.AutoCompactWindow
 	}
 	targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
 	targetCfg.Permissions = permissions
-	targetCfg.ControllerReady = func(started StartResult) (ControllerCommit, error) {
-		// The target's launch wrote its browser credential to the session, and the
-		// user may have renamed or pinned it meanwhile, so the row is read again.
-		targetRecord, err := s.requireChatSession(operationCtx, id)
-		if err != nil {
-			return ControllerCommit{}, err
-		}
-		targetRecord.Harness = request.TargetHarness
-		// The source's native session belongs to the source.
-		targetRecord.Metadata.AgentSessionID = ""
-		targetRecord.Metadata.NativeTranscriptPath = ""
-		targetRecord.Metadata.NativeIdentityObservedAt = time.Time{}
-		targetRecord.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: s.now()}
-		targetRecord.Metadata.ProviderConversationID = started.ProviderConversationID
-		targetRecord.Metadata.ControllerGeneration = started.ControllerGeneration
-		targetRecord.Metadata.Model, targetRecord.Metadata.Effort = request.Model, request.Effort
-		targetRecord.UpdatedAt = s.now()
-		marker := providerSwitchActivityDetail{
-			Event: "provider_switch", SourceHarness: source.harness,
-			TargetHarness: request.TargetHarness, BranchID: started.ProviderBoundary.ID,
-			SourceModel: sourceModel, TargetModel: request.Model, TargetEffort: request.Effort,
-			TargetAutoCompactWindow: targetCfg.ProviderSwitch.AutoCompactWindow,
-			PermissionMode:          permissions,
-		}
-		if chatPermissions != permissions {
-			marker.ChatPermissionMode = chatPermissions
-		}
-		detail, _ := json.Marshal(marker)
-		switchActivity := domain.ConversationActivity{
-			ID: started.ProviderBoundary.ID + ":provider-switch", Kind: domain.ActivityKindSystem,
-			Status:  domain.ActivityStatusCompleted,
-			Summary: "Switched provider from " + string(source.harness) + " to " + string(request.TargetHarness),
-			Detail:  detail, RequestID: strings.TrimSpace(request.IdempotencyKey),
-			ProviderItemID: started.ProviderBoundary.ID + ":provider-switch",
-		}
-		// The target's settings are saved with the switch, so the source never
-		// resumes with them, whether the target fails or the daemon dies first.
-		if err := s.store.CommitProviderSwitch(operationCtx, targetRecord, *started.ProviderBoundary, started.ControllerGeneration, started.Conversation.Settings, switchActivity); err != nil {
-			return ControllerCommit{}, err
-		}
-		committed := started.Conversation
-		committed.ActiveBranchID = started.ProviderBoundary.ID
-		committed.SessionID = id
-		return ControllerCommit{Conversation: committed, ControllerOwner: domain.SessionControllerOwner{
-			Harness: request.TargetHarness, Mode: domain.SessionModeChat,
-			ProviderConversationID: started.ProviderConversationID,
-			ControllerGeneration:   started.ControllerGeneration,
-		}}, nil
-	}
+	targetCfg.ControllerReady = s.commitProviderSwitch(operationCtx, id, request, providerSwitchSource{
+		harness: source.harness, model: sourceModel,
+		autoCompactWindow: targetCfg.ProviderSwitch.AutoCompactWindow,
+		permissions:       permissions, chatPermissions: chatPermissions,
+	})
 
 	// The context reading is the outgoing model's; the target reports its own.
 	if err := s.store.RecordUsage(operationCtx, conversation.ID, domain.ConversationUsage{}); err != nil {
@@ -484,9 +484,20 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 // one it can: Kimi in its default, Pi with permissions bypassed, as the picker
 // shows beforehand.
 func (s *Service) switchPermissions(ctx context.Context, source *Controller, request domain.ProviderSwitchRequest) (start, chat ports.PermissionMode) {
-	mode := s.sourcePermissions(source)
-	if marker, ok := s.latestSwitchMarker(ctx, source.conversation.ID); ok &&
-		marker.TargetHarness == source.harness && marker.ChatPermissionMode != "" && marker.PermissionMode == mode {
+	return s.switchPermissionsFrom(ctx, source.conversation.ID, source.harness, s.sourcePermissions(source), request)
+}
+
+// switchPermissionsFrom is switchPermissions for a source whose current mode is
+// already known, including one with no running controller.
+func (s *Service) switchPermissionsFrom(
+	ctx context.Context,
+	conversationID string,
+	sourceHarness domain.AgentHarness,
+	mode ports.PermissionMode,
+	request domain.ProviderSwitchRequest,
+) (start, chat ports.PermissionMode) {
+	if marker, ok := s.latestSwitchMarker(ctx, conversationID); ok &&
+		marker.TargetHarness == sourceHarness && marker.ChatPermissionMode != "" && marker.PermissionMode == mode {
 		mode = marker.ChatPermissionMode
 	}
 	if request.PermissionMode != "" {
@@ -528,7 +539,8 @@ func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {
 
 // adoptTargetsLiveModel saves the model the target runs when its chat does not
 // offer the picked one (Claude Code's lists the newest of each family by alias),
-// or the chat would show one model and save another.
+// or the chat would show one model and save another. A pick the chat runs as a
+// base model plus a reasoning level is offered, so it stays as picked.
 func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID, target *Controller, picked string) {
 	configurer, ok := target.conv.(ports.ChatConfigOptionController)
 	if picked == "" || !ok {
@@ -545,6 +557,14 @@ func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID
 		live := option.Current.Select
 		if live == "" || live == picked || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool { return choice.Value == picked }) {
 			return
+		}
+		// A pick that folds its reasoning level into the model id (Antigravity's
+		// gemini-3.8-flash-low) runs as the base model plus that level. The
+		// picked id is kept, or a restart would apply the base at its default level.
+		if resolver, ok := target.conv.(ports.ChatModelVariantResolver); ok {
+			if base, split := resolver.ModelVariantBase(picked); split && base == live {
+				return
+			}
 		}
 		settings := target.Settings()
 		settings.Model = live

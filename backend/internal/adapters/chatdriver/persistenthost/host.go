@@ -40,6 +40,9 @@ const (
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
+	// After the provider exits, its output gets this long before the pipes are
+	// closed on a descendant that still holds them.
+	providerPipeDrainDelay = 2 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -389,7 +392,7 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		return nil, errors.New("chat host start requires provider argv")
 	}
 	if err := spawnDetached(ctx, cfg); err != nil {
-		return nil, err
+		return nil, hostStartError{err: err}
 	}
 	deadline := time.Now().Add(startupTimeout)
 	var lastErr error
@@ -415,8 +418,17 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	if d, readErr := readDescriptor(cfg.DataDir, cfg.SessionID); readErr == nil && processalive.Alive(d.PID) {
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, lastErr)
 	}
-	return nil, fmt.Errorf("start chat host: %w", lastErr)
+	return nil, hostStartError{err: fmt.Errorf("start chat host: %w", lastErr)}
 }
+
+// hostStartError marks a detached chat host that could not be launched or
+// never published a reachable descriptor. Spawn telemetry reads FailureCause;
+// the error reads and unwraps like err.
+type hostStartError struct{ err error }
+
+func (e hostStartError) Error() string        { return e.err.Error() }
+func (e hostStartError) Unwrap() error        { return e.err }
+func (e hostStartError) FailureCause() string { return "host_failed" }
 
 // Reconcile terminates compatible authenticated hosts whose durable session no
 // longer exists. Live-session hosts, incompatible hosts, and inconclusive probes
@@ -672,6 +684,12 @@ func Run(ctx context.Context, cfg Config) error {
 	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
+	// A helper the provider starts in its own session (Codex's npx MCP servers)
+	// escapes the group signal and keeps the output pipes open, which held the
+	// final Wait, and the host, forever: the host kept Codex's thread writer, so
+	// a hibernated chat could not wake (#8632). Once the provider has exited,
+	// Wait gives its output this long, then closes the pipes.
+	child.WaitDelay = providerPipeDrainDelay
 	configureProviderProcess(child)
 	stdin, err := child.StdinPipe()
 	if err != nil {

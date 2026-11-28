@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WEEKDAY_CODES, buildRRuleFromSchedule, describeSchedule, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
+import { WEEKDAY_CODES, buildRRuleFromSchedule, describeSchedule, nextScheduledRun, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
 
 describe("automation-schedule", () => {
 	it("roundtrips every weekday the form can choose", () => {
@@ -61,14 +61,15 @@ describe("automation-schedule", () => {
 
 it("round trips and edits weekday schedules without reverting to monthly", () => {
 	const fields = scheduleFieldsFromRRule("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0");
-	expect(fields).toMatchObject({ preset: "custom", customFrequency: "weekdays", hour: "9", minute: "0", legacyRaw: null });
-	expect(buildRRuleFromSchedule({ ...fields, hour: "10", minute: "30" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=30;BYSECOND=0");
+	expect(fields).toMatchObject({ preset: "weekdays", time: "09:00", legacyRaw: null });
+	expect(buildRRuleFromSchedule({ ...fields, time: "10:30" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=30;BYSECOND=0");
+	expect(buildRRuleFromSchedule({ ...fields, preset: "custom", hour: "10", minute: "30" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=30;BYSECOND=0");
 });
 
 it.each([
 	["FREQ=DAILY;BYHOUR=9;BYMINUTE=15;BYSECOND=0", "daily", "daily"],
 	["FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0;BYSECOND=0", "weekly", "weekly"],
-	["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", "custom", "weekdays"],
+	["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", "weekdays", "weekdays"],
 ])("shows saved starter schedule %s while preserving its daemon anchor", (rrule, preset, frequency) => {
 	const saved = `DTSTART;TZID=America/New_York:20261015T080000\nRRULE:${rrule}`;
 	const fields = scheduleFieldsFromRRule(saved);
@@ -76,7 +77,7 @@ it.each([
 	expect(fields.customFrequency).toBe(frequency);
 	expect(buildRRuleFromSchedule(fields)).toBe(saved);
 	if (frequency === "weekdays") {
-		expect(buildRRuleFromSchedule({ ...fields, legacyRaw: null, hour: "10" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0;BYSECOND=0");
+		expect(buildRRuleFromSchedule({ ...fields, legacyRaw: null, time: "10:00" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0;BYSECOND=0");
 	}
 });
 
@@ -115,5 +116,25 @@ describe("describeSchedule", () => {
 		["FREQ=MONTHLY;BYMONTHDAY=-1", { kind: "other", frequency: "monthly", time: null }],
 	])("summarizes %s", (rule, expected) => {
 		expect(describeSchedule(rule)).toEqual(expected);
+	});
+});
+
+describe("nextScheduledRun", () => {
+	// Saturday 14 November 2026, 10:00 local time.
+	const saturday = new Date(2026, 10, 14, 10, 0);
+	const weekdays = scheduleFieldsFromRRule("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0");
+
+	it("finds the next matching day and time", () => {
+		expect(nextScheduledRun(weekdays, saturday)).toEqual(new Date(2026, 10, 16, 9, 0));
+		expect(nextScheduledRun({ ...weekdays, preset: "daily", time: "11:30" }, saturday)).toEqual(new Date(2026, 10, 14, 11, 30));
+	});
+
+	it.each([
+		["an empty time", { time: "" }],
+		["a half-typed time", { time: "09:" }],
+		["an empty custom hour", { preset: "custom" as const, customFrequency: "daily" as const, hour: "", minute: "0" }],
+		["an out-of-range custom minute", { preset: "custom" as const, customFrequency: "daily" as const, hour: "9", minute: "75" }],
+	])("shows no preview for %s", (_, draft) => {
+		expect(nextScheduledRun({ ...weekdays, ...draft }, saturday)).toBeNull();
 	});
 });

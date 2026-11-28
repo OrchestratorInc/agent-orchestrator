@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -414,6 +416,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("persistent chat host already owns a provider conversation for a fresh session")
 	}
 
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork
@@ -462,6 +465,25 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
+// addSkillRoots gives a new app-server the session's bridged skills. The roots
+// last as long as the process, so a reconnect to a live one keeps them. A Codex
+// without the method, or that refuses it, runs without the skills.
+func (d *Driver) addSkillRoots(ctx context.Context, conv *conversation, dataDir string, sessionID domain.SessionID) {
+	roots := codexagent.SkillRoots(dataDir, string(sessionID))
+	if len(roots) == 0 {
+		return
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, skillRootsTimeout)
+	defer cancel()
+	if err := conv.conn.request(requestCtx, codexproto.MethodSkillsExtraRootsSet, map[string]any{"extraRoots": roots}, nil); err != nil {
+		d.log.Warn("codex: bridged skills not added", "sessionID", sessionID, "error", err)
+	}
+}
+
+// skillRootsTimeout bounds how long a session start waits for Codex to take the
+// bridged skills.
+const skillRootsTimeout = 5 * time.Second
+
 // Reconnect attaches to a surviving provider without launching a replacement.
 func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	cfg.ReconnectOnly = true
@@ -496,10 +518,12 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// Neither the tier nor the collaboration mode the thread was left on is
 		// known; the next turn states both.
 		conv.tierUnknown, conv.planUnknown = true, true
+		conv.backgroundHistoryPending = true
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
 
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.launchMode = cfg.Permissions
@@ -645,6 +669,7 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 	}
 
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.codexHome = env["CODEX_HOME"]
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Close()
 		return nil, err
@@ -732,6 +757,7 @@ func (d *Driver) connectSession(
 		},
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.codexHome = env["CODEX_HOME"]
 	if transport.Reconnected {
 		// A daemon stopped mid-initialize leaves a host whose app-server never
 		// was, failing every call "Not initialized". An initialized one refuses
@@ -941,6 +967,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		_ = conv.Close()
 		return nil, errors.New("side provider host already owns a conversation")
 	}
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork

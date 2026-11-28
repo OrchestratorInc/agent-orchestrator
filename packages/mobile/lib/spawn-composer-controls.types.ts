@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
+import type { ChatSkill } from "./chat/types";
 import type { EffortChoice } from "./modelEffort";
 import type { VoiceState } from "./voice/types";
 
@@ -48,9 +49,6 @@ export type SpawnComposerControlsProps = {
 	projects: readonly SpawnComposerOption[];
 	projectId: string | null;
 	onSelectProject: (projectId: string) => void;
-	accounts?: readonly SpawnComposerOption[];
-	accountId?: string;
-	onSelectAccount?: (accountId: string) => void;
 	agents: readonly SpawnComposerOption[];
 	harness: string;
 	onSelectHarness: (harness: string) => void;
@@ -85,6 +83,8 @@ export type SpawnComposerControlsProps = {
 	/** The task's prompt, written in the composer's field. */
 	prompt: string;
 	onChangePrompt: (value: string) => void;
+	/** The picked agent's skills for a `/` at the start of the prompt; absent on Cloud. */
+	onLoadSkills?: () => Promise<ChatSkill[]>;
 	/** Names who will answer, as a conversation's field does: "Ask Codex". */
 	placeholder: string;
 	/** The picked files, shown above the composer as the chat shows its own. */

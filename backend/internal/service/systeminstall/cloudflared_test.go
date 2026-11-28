@@ -64,11 +64,11 @@ func TestPlanCloudflaredDownloadsThePinnedRelease(t *testing.T) {
 	}
 }
 
-// No pinned asset means today's package-manager route, unchanged.
+// No pinned asset means the package-manager route uses the headless winget plan.
 func TestPlanCloudflaredWithoutAPinnedAssetUsesThePackageManager(t *testing.T) {
 	s, _ := newDownloadService("windows", "arm64", nil, "winget")
 	plan := s.planFor(TargetCloudflared)
-	if plan.download != nil || strings.Join(plan.Command, " ") != "winget install -e --id Cloudflare.cloudflared" {
+	if plan.download != nil || strings.Join(plan.Command, " ") != "winget install -e --id Cloudflare.cloudflared --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" {
 		t.Fatalf("plan = %+v, want the winget fallback", plan)
 	}
 }
@@ -126,6 +126,26 @@ func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("download attempts = %d, want the first and one more", calls.Load())
+	}
+}
+
+// A download still running when the install deadline passes is a timeout,
+// though its own error only wraps the expired context.
+func TestCloudflaredDownloadPastTheDeadlineIsATimeout(t *testing.T) {
+	s := newTestService("linux", "apt-get")
+	s.goarch = "amd64"
+	s.installTimeout = 50 * time.Millisecond
+	s.managedBinaries = managedBinaryInstallerFunc(func(ctx context.Context, _ ports.ManagedBinaryDownload) (string, error) {
+		<-ctx.Done()
+		return "", fmt.Errorf("download cloudflared: %w", ctx.Err())
+	})
+	if _, err := s.Start(context.Background(), TargetCloudflared); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	job, _ := s.Status(context.Background(), TargetCloudflared)
+	if job.FailureCause != FailureTimeout {
+		t.Fatalf("FailureCause = %q, want %q (job %+v)", job.FailureCause, FailureTimeout, job)
 	}
 }
 

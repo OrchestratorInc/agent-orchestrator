@@ -23,7 +23,7 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash, import_source, display_name_explicit
+    client_request_id, client_request_hash, import_source, display_name_explicit, role_agent
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -31,7 +31,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -59,9 +59,21 @@ UPDATE sessions SET
     automation_launch_completed = ?
 WHERE id = ?;
 
+-- name: SetSessionRoleAgent :execrows
+-- Generic session updates leave role_agent alone: only a spawn (insert) and a
+-- switch to another agent record which agent the project named at the time.
+UPDATE sessions
+SET role_agent = sqlc.arg(role_agent)
+WHERE id = sqlc.arg(id);
+
 -- name: UpdateSessionModel :execrows
 UPDATE sessions
 SET model = sqlc.arg(model)
+WHERE id = sqlc.arg(id);
+
+-- name: UpdateSessionEffort :execrows
+UPDATE sessions
+SET effort = sqlc.arg(effort)
 WHERE id = sqlc.arg(id);
 
 -- name: SetSessionHibernated :execrows
@@ -104,7 +116,8 @@ WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND activity_last_at <= sqlc.arg(idle_before)
     AND trim(provider_conversation_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
-    AND stale_binary_launch = controller_generation;
+    AND stale_binary_launch = controller_generation
+    AND NOT EXISTS (SELECT 1 FROM session_version_moves m WHERE m.session_id = sessions.id);
 
 -- name: ListVersionRefreshTerminalCandidates :many
 -- Idle terminal sessions whose current launch still runs a replaced release
@@ -116,7 +129,8 @@ WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
     AND activity_last_at <= sqlc.arg(idle_before)
     AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
-    AND stale_binary_launch = runtime_launch_id;
+    AND stale_binary_launch = runtime_launch_id
+    AND NOT EXISTS (SELECT 1 FROM session_version_moves m WHERE m.session_id = sessions.id);
 
 -- name: CountStaleBinarySessions :many
 -- Live launches still on a replaced release, per harness.
@@ -297,7 +311,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -319,7 +333,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -341,7 +355,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -363,7 +377,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListPreviewSessions :many
@@ -444,6 +458,7 @@ UPDATE sessions SET
     updated_at = sqlc.arg(updated_at),
     auto_inject_review = sqlc.arg(auto_inject_review),
     auto_inject_ci = sqlc.arg(auto_inject_ci),
+    terminate_on_pr_merge = sqlc.arg(terminate_on_pr_merge),
     provision_state = sqlc.arg(provision_state),
     provision_error = '',
     client_request_id = sqlc.arg(client_request_id),
@@ -475,6 +490,30 @@ UPDATE sessions SET auto_inject_review = ?, updated_at = ? WHERE id = ?;
 
 -- name: SetSessionAutoInjectCI :execrows
 UPDATE sessions SET auto_inject_ci = ?, updated_at = ? WHERE id = ?;
+
+-- name: MarkSessionMoved :execrows
+-- Records the AO Cloud session a session moved to while move_started still
+-- names that move and the agent is stopped. A session resumed here since the
+-- move pushed it (which clears move_started) is not marked.
+UPDATE sessions SET moved_to = ?, move_started = '', updated_at = ?
+WHERE id = ? AND moved_to = '' AND move_started = ?
+    AND (is_terminated = 1 OR activity_state = 'exited');
+
+-- name: EndSessionMoveStarted :execrows
+-- Clears a move in progress unless the session has been marked moved.
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '';
+
+-- name: EndSessionMoveStartedFor :execrows
+-- Clears the move in progress only while it is still this move and the
+-- session has not been marked moved: abandoning an old move never clears a
+-- newer one recorded in between.
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '' AND move_started = ?;
+
+-- name: SetSessionMoveConversationPlaced :execrows
+UPDATE sessions SET move_conversation_placed = 1, updated_at = ? WHERE id = ?;
+
+-- name: SetSessionMoveStarted :execrows
+UPDATE sessions SET move_started = ?, updated_at = ? WHERE id = ?;
 
 -- name: SetSessionPinned :execrows
 UPDATE sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?;
