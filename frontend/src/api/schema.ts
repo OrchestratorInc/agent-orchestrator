@@ -8141,6 +8141,10 @@ export interface components {
             /** @description Why the resolver picked this provider. */
             reason: string;
             sessionId: string;
+            /** @description AO is booting the device now. */
+            starting?: boolean;
+            /** @description The device was shut down after going unused, to free memory. The lease still holds it; opening it (or the agent's next command) starts it again. */
+            suspended?: boolean;
         };
         DevicePlatformStatus: {
             available: boolean;

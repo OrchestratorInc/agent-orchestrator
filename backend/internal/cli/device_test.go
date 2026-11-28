@@ -149,6 +149,28 @@ func TestDeviceStatus_ListsPlatformsAndLeases(t *testing.T) {
 	}
 }
 
+// A sleeping device reads as asleep, and a stopped emulator (listed by its AVD
+// name, leased under its old serial) still names its session.
+func TestDeviceStatus_ShowsSleepingAndStoppedLeasedDevices(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := deviceServer(t, http.StatusOK, `{"available":true,"enabled":true,"state":"ready",
+"platforms":[{"platform":"ios","available":true},{"platform":"android","available":true}],
+"devices":[{"id":"UDID-1","name":"iPhone 17 Pro","platform":"ios","booted":false},{"id":"Pixel_9","name":"Pixel_9","platform":"android","booted":false}],
+"leases":[{"sessionId":"aa-47","provider":"local","reason":"r","suspended":true,"device":{"id":"UDID-1","name":"iPhone 17 Pro","platform":"ios"},"agentDevice":{"command":"","args":[]}},
+{"sessionId":"aa-48","provider":"local","reason":"r","device":{"id":"emulator-5554","name":"Pixel_9","platform":"android"},"agentDevice":{"command":"","args":[]}}]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "device", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"iPhone 17 Pro  [asleep, leased to aa-47]", "Pixel_9  [off, leased to aa-48]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestDeviceClose_SaysWhenThereIsNothingToRelease(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	cfg := setConfigEnv(t)

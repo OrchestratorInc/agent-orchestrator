@@ -68,7 +68,7 @@ func TestUnreadableLeaseRecordStartsEmpty(t *testing.T) {
 	if err := writeFileAtomic(leasesPath(dir), "not a lease file"); err != nil {
 		t.Fatal(err)
 	}
-	leases, owned, parked := loadLeases(dir)
+	leases, owned, _, parked := loadLeases(dir, time.Unix(1, 0))
 	if len(leases) != 0 || len(owned) != 0 || len(parked) != 0 {
 		t.Fatalf("leases=%v owned=%v from a corrupt file", leases, owned)
 	}
@@ -93,7 +93,7 @@ func TestParkedDevicesSurviveADaemonRestart(t *testing.T) {
 	if got := p.shutdownList(); len(got) != 1 || got[0] != "A" {
 		t.Fatalf("shutdowns = %v after a restart, want [A]", got)
 	}
-	if _, _, parked := loadLeases(dir); len(parked) != 0 {
+	if _, _, _, parked := loadLeases(dir, time.Unix(1, 0)); len(parked) != 0 {
 		t.Fatalf("parked record = %v after powering A off, want empty", parked)
 	}
 }

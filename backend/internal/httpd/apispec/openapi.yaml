@@ -23397,6 +23397,14 @@ components:
           type: string
         sessionId:
           type: string
+        starting:
+          description: AO is booting the device now.
+          type: boolean
+        suspended:
+          description: The device was shut down after going unused, to free memory.
+            The lease still holds it; opening it (or the agent's next command) starts
+            it again.
+          type: boolean
       required:
       - sessionId
       - provider

@@ -49,6 +49,9 @@ const (
 type Config struct {
 	DataDir string
 	Log     *slog.Logger
+	// AOCommand is the ao executable a lease's command runs to start its
+	// device again after it was shut down for going unused; empty is "ao".
+	AOCommand string
 }
 
 // Provider is the local DeviceProvider.
@@ -109,7 +112,10 @@ type hubProcess struct {
 	ready atomic.Bool
 }
 
-var _ ports.DeviceProvider = (*Provider)(nil)
+var (
+	_ ports.DeviceProvider      = (*Provider)(nil)
+	_ ports.DeviceAgentActivity = (*Provider)(nil)
+)
 
 // New returns a provider that starts nothing until EnsureReady.
 func New(cfg Config) *Provider {
@@ -1014,6 +1020,8 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 	helperBoot := ""
 	if expected {
 		helperBoot = p.currentBoots(ctx)[device.ID]
+		// The device service records it as the boot AO started.
+		device.BootID = helperBoot
 	}
 	if device.Platform == ports.DevicePlatformIOS {
 		// Booting alone does not attach a stream helper; the grid start does
@@ -1365,8 +1373,12 @@ func (p *Provider) AgentControl(device ports.DeviceInfo, sessionID string) (port
 	if !safeLeaseToken.MatchString(sessionID) || !safeLeaseToken.MatchString(device.ID) {
 		return ports.DeviceAgentControl{}, fmt.Errorf("session or device id %q has characters a lease command cannot carry", sessionID)
 	}
-	path := filepath.Join(p.stateRoot(), "leases", sessionID, "agent-device")
-	if err := writeLeaseWrapper(path, p.ShimPath(), []string{"--platform", string(device.Platform), selector, device.ID, "--session", "ao-" + sessionID}); err != nil {
+	path := filepath.Join(p.leaseDir(sessionID), "agent-device")
+	aoCommand := p.cfg.AOCommand
+	if aoCommand == "" {
+		aoCommand = "ao"
+	}
+	if err := writeLeaseWrapper(path, p.ShimPath(), []string{"--platform", string(device.Platform), selector, device.ID, "--session", "ao-" + sessionID}, aoCommand, sessionID); err != nil {
 		return ports.DeviceAgentControl{}, err
 	}
 	return ports.DeviceAgentControl{Command: path}, nil
@@ -1379,11 +1391,51 @@ func (p *Provider) RevokeControl(sessionID string) error {
 	if !safeLeaseToken.MatchString(sessionID) {
 		return fmt.Errorf("session id %q has characters a lease command cannot carry", sessionID)
 	}
-	path := filepath.Join(p.stateRoot(), "leases", sessionID, "agent-device")
+	path := filepath.Join(p.leaseDir(sessionID), "agent-device")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
+	if err := os.Remove(filepath.Join(p.leaseDir(sessionID), leaseAsleepFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	return writeRevokedWrapper(path)
+}
+
+// leaseDir holds one session's agent command and its activity files.
+func (p *Provider) leaseDir(sessionID string) string {
+	return filepath.Join(p.stateRoot(), "leases", sessionID)
+}
+
+// AgentLastUsed is when the session's agent last ran its device command: the
+// command touches a file each run.
+func (p *Provider) AgentLastUsed(sessionID string) time.Time {
+	if !safeLeaseToken.MatchString(sessionID) {
+		return time.Time{}
+	}
+	info, err := os.Stat(filepath.Join(p.leaseDir(sessionID), leaseUsedFile))
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// SetAgentAsleep marks the session's device asleep, so its command starts it
+// again before running, or awake.
+func (p *Provider) SetAgentAsleep(sessionID string, asleep bool) error {
+	if !safeLeaseToken.MatchString(sessionID) {
+		return fmt.Errorf("session id %q has characters a lease command cannot carry", sessionID)
+	}
+	marker := filepath.Join(p.leaseDir(sessionID), leaseAsleepFile)
+	if !asleep {
+		if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(p.leaseDir(sessionID), 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(marker, nil, 0o600)
 }
 
 // ReleaseControl closes agent-device sessions AO opened on this device for

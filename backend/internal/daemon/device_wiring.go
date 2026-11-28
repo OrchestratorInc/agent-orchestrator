@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	localdevice "github.com/aoagents/agent-orchestrator/backend/internal/adapters/device/local"
 	"github.com/aoagents/agent-orchestrator/backend/internal/devices"
@@ -19,9 +20,15 @@ type deviceSessions interface {
 // newDeviceService builds the simulator and emulator service with the local
 // provider. Nothing installs or starts until the user opts in.
 func newDeviceService(dataDir string, sessions deviceSessions, log *slog.Logger) *devices.Service {
+	// The daemon is the ao binary: a lease's command runs it to start a device
+	// that was shut down for going unused.
+	aoCommand, err := os.Executable()
+	if err != nil {
+		aoCommand = ""
+	}
 	return devices.New(devices.Config{
 		DataDir:  dataDir,
-		Provider: localdevice.New(localdevice.Config{DataDir: dataDir, Log: log}),
+		Provider: localdevice.New(localdevice.Config{DataDir: dataDir, Log: log, AOCommand: aoCommand}),
 		Sessions: func(ctx context.Context, id domain.SessionID) (devices.SessionInfo, error) {
 			sess, err := sessions.Get(ctx, id)
 			if err != nil {
