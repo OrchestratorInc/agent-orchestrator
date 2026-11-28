@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { applyWindowTranslucency } from "../lib/window-translucency";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -1415,6 +1416,29 @@ describe("useBrowserView", () => {
 		expect(bridge.destroy).not.toHaveBeenCalled();
 	});
 
+	it("publishes an existing native page's tint cutout when transparency changes without resizing", async () => {
+		const bridge = setupBridge();
+		bridge.nativeCompositionEnabled = true;
+		const shell = document.createElement("div");
+		shell.className = "app-shell-root";
+		document.body.appendChild(shell);
+		const slot = createSlot();
+		vi.spyOn(aoBridge.theme, "setWindowTranslucent").mockImplementation(async (enabled) => ({ supported: true, enabled, reason: null }));
+		const { result, unmount } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		try {
+			await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+			act(() => result.current.slotRef(slot));
+			await act(() => applyWindowTranslucency(true));
+			expect(document.documentElement.dataset.browserHole).toBe("true");
+			expect(shell.style.getPropertyValue("--browser-hole-w")).toBe("320px");
+			await act(() => applyWindowTranslucency(false));
+			expect(document.documentElement.dataset.browserHole).toBeUndefined();
+		} finally {
+			await act(() => applyWindowTranslucency(false));
+			unmount();
+		}
+	});
+
 	it("destroys a transient Settings Browser view on close so another login starts fresh", async () => {
 		const bridge = setupBridge();
 		const first = renderHook(() => useBrowserView({
@@ -1490,6 +1514,8 @@ describe("useBrowserView", () => {
 			})),
 		);
 
+		// Settle initial frame/attachment/280ms measurements before opening a modal.
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
 		bridge.setBounds.mockClear();
 		const dialog = document.createElement("div");
 		dialog.setAttribute("role", "dialog");
@@ -1505,6 +1531,7 @@ describe("useBrowserView", () => {
 			dialog.remove();
 			await Promise.resolve();
 		});
+		expect(bridge.setBounds).not.toHaveBeenCalled();
 	});
 
 	it("raises the shell above the live native view while a browser overlay is open", async () => {

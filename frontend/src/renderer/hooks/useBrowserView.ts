@@ -17,6 +17,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
+import { useWindowTransparency } from "../lib/window-translucency";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -335,6 +336,7 @@ export function useBrowserView({
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
+	const windowTranslucent = useWindowTransparency().enabled;
 	const lifecycleRef = useRef({ sessionId, terminated });
 	lifecycleRef.current = { sessionId, terminated };
 	const transientClosedRef = useRef(false);
@@ -464,6 +466,16 @@ export function useBrowserView({
 		window.clearTimeout(frameRef.current);
 		frameRef.current = null;
 	}, []);
+
+	// A transparency toggle does not resize the native page. Publish its tint
+	// cutout again even when its geometry has not moved. Initial attachment has
+	// its own measurement; this effect only handles actual transparency changes.
+	const previousTranslucency = useRef(windowTranslucent);
+	useLayoutEffect(() => {
+		if (previousTranslucency.current === windowTranslucent) return;
+		previousTranslucency.current = windowTranslucent;
+		measureAndSend();
+	}, [windowTranslucent, measureAndSend]);
 
 	const scheduleMeasure = useCallback(() => {
 		scrollOnlyMeasureRef.current = false;

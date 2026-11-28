@@ -26,6 +26,7 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../lib/platform", () => ({
 	isLinuxPlatform: () => true,
 	isMacPlatform: () => false,
+	isWindowsPlatform: () => false,
 }));
 
 const { TitlebarNav } = await import("./TitlebarNav");

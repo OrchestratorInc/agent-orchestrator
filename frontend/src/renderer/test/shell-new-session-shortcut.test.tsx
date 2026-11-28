@@ -136,9 +136,16 @@ const shellMocks = vi.hoisted(() => {
 		},
 		remoteDelete: vi.fn(),
 		listRemoteHosts: vi.fn(async () => []),
+		setWindowBackground: vi.fn(async (_color: string) => undefined),
+		// jsdom resolves no CSS colors; tests that need the native background set this.
+		sidebarColor: { current: null as string | null },
 		state,
 	};
 });
+
+vi.mock("../lib/css-color", () => ({
+	resolveCssColorToHex: () => shellMocks.sidebarColor.current,
+}));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-query")>()),
@@ -170,6 +177,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		theme: {
+			persistTerminal: async () => undefined,
+			setWindowBackground: (color: string) => shellMocks.setWindowBackground(color),
+			onWindowTransparency: () => () => undefined,
+			setWindowTranslucent: async () => ({ supported: false, enabled: false, reason: "unsupported" }),
+		},
 		app: {
 			onScrollPhase: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
@@ -1079,6 +1092,34 @@ describe("shell sidebar toggle", () => {
 		expect(screen.getByTestId("sidebar-provider")).toHaveAttribute("data-open", "true");
 		expect(screen.getByRole("button", { name: "Collapse sidebar" })).toBeInTheDocument();
 	});
+});
+
+describe("shell native window background", () => {
+	it("skips same-value theme writes but retries after a failed send", async () => {
+		const root = document.documentElement;
+		shellMocks.sidebarColor.current = "#111212";
+		shellMocks.setWindowBackground.mockReset();
+		shellMocks.setWindowBackground.mockResolvedValue(undefined);
+		shellMocks.setWindowBackground.mockRejectedValueOnce(new Error("IPC lost"));
+		try {
+			await renderShell();
+			await waitFor(() => expect(shellMocks.setWindowBackground).toHaveBeenCalledTimes(1));
+			expect(shellMocks.setWindowBackground).toHaveBeenLastCalledWith("#111212");
+
+			// The failed send must not leave the unchanged appearance looking applied.
+			act(() => { root.dataset.theme = root.dataset.theme ?? "dark"; });
+			await waitFor(() => expect(shellMocks.setWindowBackground).toHaveBeenCalledTimes(2));
+
+			// After a successful send, a same-value write costs no IPC.
+			act(() => { root.dataset.theme = root.dataset.theme ?? "dark"; });
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(shellMocks.setWindowBackground).toHaveBeenCalledTimes(2);
+		} finally {
+			shellMocks.sidebarColor.current = null;
+			shellMocks.setWindowBackground.mockReset();
+			shellMocks.setWindowBackground.mockResolvedValue(undefined);
+		}
+	}, 60_000);
 });
 
 describe("shell new-shell-terminal shortcut subscription", () => {

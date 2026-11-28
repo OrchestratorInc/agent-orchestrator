@@ -10,6 +10,7 @@ import { useSoundNotificationsStore } from "../stores/sound-notifications-store"
 import { useUiStore, type ChatSendKeyMode } from "../stores/ui-store";
 import type { ThemePreference, ThemeStyle } from "./theme";
 import { THEMES } from "./theme-palettes";
+import { windowTransparencyPresentation, type WindowTransparencyView } from "./window-transparency-presentation";
 import type { TerminalClickMode } from "./terminal-mouse";
 
 // What the palette can find by name beyond projects, sessions and PRs:
@@ -78,7 +79,7 @@ type SettingsEntry = {
 	label: MessageKey;
 	keywords: string[];
 	/** Shown only where the settings page shows the row. */
-	when?: "developerMode" | "mac";
+	when?: "developerMode" | "transparency";
 };
 
 /**
@@ -104,7 +105,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "appearance", section: "general", label: "settings.appearance", keywords: ["look", "visual"] },
 	{ id: "theme", section: "general", label: "settings.theme", keywords: ["dark mode", "light mode", "system"] },
 	{ id: "color-theme", section: "general", label: "settings.colorTheme", keywords: ["colors", "accent", "palette", "scheme"] },
-	{ id: "transparency", section: "general", label: "settings.windowTranslucency", keywords: ["translucency", "vibrancy", "blur"], when: "mac" },
+	{ id: "transparency", section: "general", label: "settings.windowTranslucency", keywords: ["translucency", "vibrancy", "acrylic", "blur"], when: "transparency" },
 	{ id: "project-avatars", section: "general", label: "settings.projectAvatars", keywords: ["repo icons", "project icons", "github avatars"] },
 	{ id: "language", section: "general", label: "settings.language", keywords: ["locale", "translation", "chinese", "japanese", "spanish"] },
 	{ id: "render-math", section: "general", label: "settings.renderMath", keywords: ["latex", "katex", "equations", "formulas", "tex"] },
@@ -225,13 +226,15 @@ export function choiceValue(itemId: string): string | undefined {
 	return itemId.startsWith("choice:") ? itemId.split(":").slice(2).join(":") : undefined;
 }
 
-type SettingsVisibility = { developerMode: boolean; diagnostics: boolean; mac?: boolean; prefs?: PalettePreferences };
+type SettingsVisibility = { developerMode: boolean; diagnostics: boolean; mac?: boolean; windows?: boolean; transparency?: WindowTransparencyView; prefs?: PalettePreferences };
 
 /** Mirrors the settings catalog's and General page's visibility rules for the entries here. */
-function entryVisible(entry: SettingsEntry, { developerMode, diagnostics, mac = false }: SettingsVisibility): boolean {
+function entryVisible(entry: SettingsEntry, { developerMode, diagnostics, mac = false, windows = false, transparency }: SettingsVisibility): boolean {
 	if (entry.section === "diagnostics" && !(developerMode && diagnostics)) return false;
 	if (entry.when === "developerMode") return developerMode;
-	if (entry.when === "mac") return mac;
+	if (entry.when === "transparency") return windowTransparencyPresentation(
+		transparency ?? { supported: null, enabled: false, reason: null }, { mac, windows },
+	).visible;
 	return true;
 }
 
@@ -248,11 +251,16 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 		const on = Boolean(prefs?.toggles[entry.id as ToggleId]);
 		const choices = CHOICES[entry.id];
 		const choice = prefs && choices;
+		const transparency = entry.id === "transparency" ? windowTransparencyPresentation(
+			visibility.transparency ?? { supported: null, enabled: false, reason: null },
+			{ mac: visibility.mac ?? false, windows: visibility.windows ?? false },
+		) : undefined;
 		return {
 			id: `setting:${entry.id}`,
 			group: "settings",
 			title,
 			subtitle: isPage ? undefined : pageLabel(entry.section),
+			...(transparency?.disabled ? { disabled: true, disabledReason: t(transparency.hint) } : {}),
 			// A list's option names find the list ("nord" → Color theme ›), not each option.
 			keywords: isPage
 				? [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])]
@@ -262,7 +270,7 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 			...(choice && prefs ? { state: choice.options(t).find((option) => option.value === choice.current(prefs))?.label } : {}),
 			// A switch flips; a choice opens its list; a page entry opens the page;
 			// any other lands on its own row.
-			action: toggle
+			action: transparency?.disabled ? undefined : toggle
 				? { kind: "run", run: () => toggle(!on) }
 				: choice
 					? { kind: "open-view", view: { mode: "choices", menu: entry.id, title } }
