@@ -867,12 +867,39 @@ func TestTaskStartTerminalDeliveryUnconfirmedPointsAtTheTerminal(t *testing.T) {
 	d.set("POST /api/v1/sessions/repo-1/send", 409, `{"error":"conflict","code":"SESSION_DELIVERY_UNCONFIRMED","message":"Message was written to the terminal but the agent did not start a turn"}`)
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
-	if got := ExitCode(err); got != 1 {
-		t.Fatalf("exit = %d (%v), want 1", got, err)
+	// Typed but unsubmitted: delivered, not confirmed, so exit 4 and no resend.
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4", got, err)
 	}
 	res := decodeTaskResult(t, out)
-	if res["fix"] != "check the agent's terminal with `ao session get repo-1`; if claude-code is not signed in, run `claude auth login`, then retry" {
+	if !strings.HasPrefix(res["taskId"].(string), "repo-1:tui-") || !strings.Contains(res["reason"].(string), "do not start the task again") ||
+		!strings.Contains(res["fix"].(string), "submit the brief waiting in its terminal") || !strings.Contains(res["fix"].(string), "run `claude auth login` first") {
 		t.Fatalf("result = %v", res)
+	}
+}
+
+// A terminal orchestrator that was just started gets its boot time before the
+// brief is typed into it.
+func TestTaskStartWaitsForAFreshTerminalOrchestratorToBoot(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	created := start.Add(-3 * time.Second).UTC().Format(time.RFC3339Nano)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-1","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","createdAt":"`+created+`","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("POST /api/v1/sessions/repo-1/conversation/messages", 409, `{"error":"conflict","code":"SESSION_MODE_MISMATCH","message":"no chat conversation"}`)
+	var sentAfter time.Duration
+	d.setFunc("POST /api/v1/sessions/repo-1/send", func() (int, string) {
+		sentAfter = deps.Now().Sub(start)
+		return 200, `{"ok":true,"sessionId":"repo-1","message":"fix calc"}`
+	})
+	t.Setenv("AO_SESSION_ID", "")
+
+	if _, _, err := executeCLI(t, deps, "task", "start", "fix calc", "--project", "repo", "--json"); err != nil {
+		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	if sentAfter < 12*time.Second {
+		t.Fatalf("brief sent %s after start; want it held until the 15 s boot window passed (session was 3 s old)", sentAfter)
 	}
 }
 

@@ -242,6 +242,10 @@ type taskID struct {
 // recorded at or after that moment.
 const terminalTaskTurnPrefix = "tui-"
 
+// taskTerminalBootWait is how long a freshly started terminal orchestrator
+// is given to boot before a brief is typed into it.
+var taskTerminalBootWait = 15 * time.Second
+
 // terminalTaskSlack allows for the session recording the turn's time slightly
 // before the CLI noted the send.
 const terminalTaskSlack = 2 * time.Second
@@ -463,12 +467,37 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		// Same attribution as `ao send`: an agent inside a session names itself;
 		// anything else is the user's own message.
 		sender := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
+		// A terminal orchestrator that was just started may still be booting,
+		// and a brief typed before its prompt is ready is left unsubmitted.
+		// Nothing in the session reports readiness, so give a fresh one its
+		// boot time first.
+		if !sess.CreatedAt.IsZero() {
+			if wait := taskTerminalBootWait - c.deps.Now().Sub(sess.CreatedAt); wait > 0 {
+				c.deps.Sleep(wait)
+				if err := ctx.Err(); err != nil {
+					return failedTask("", sessions, "interrupted before the task was sent: "+err.Error(), "")
+				}
+			}
+		}
 		sentAt := c.deps.Now()
-		if err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil); err != nil {
+		id := taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d", terminalTaskTurnPrefix, sentAt.UnixMilli())}
+		err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil)
+		if errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_DELIVERY_UNCONFIRMED" {
+			// The brief is in the terminal's composer but not submitted.
+			// Sending it again would be refused (composer busy) or doubled.
+			fix := fmt.Sprintf("open session %s in the Orchestrator app and submit the brief waiting in its terminal (`ao session get %s` shows it), then follow it with `ao task wait %s`", orchestratorID, orchestratorID, id)
+			if sess.Harness != "" {
+				fix += "; if " + sess.Harness + " is not signed in, " + strings.TrimSuffix(c.signInFix(ctx, sess.Harness), ", then retry") + " first"
+			}
+			return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: sessions, waitTimedOut: true,
+				Reason: fmt.Sprintf("the brief was typed into orchestrator %s's terminal, but the agent did not submit it (%s); it was delivered, so do not start the task again", orchestratorID, err.Error()),
+				Fix:    fix}
+		}
+		if err != nil {
 			return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", err)
 		}
 		// The task is the first turn the terminal session records from now on.
-		return c.createdTaskStatus(ctx, taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d", terminalTaskTurnPrefix, sentAt.UnixMilli())})
+		return c.createdTaskStatus(ctx, id)
 	}
 	switch {
 	case errors.As(sendErr, &apiErr) && !lostReply:
@@ -526,12 +555,6 @@ func (c *commandContext) taskAPIFailure(ctx context.Context, sessions []string, 
 	var apiErr apiResponseError
 	if errors.As(err, &apiErr) && signInErrorCodes[apiErr.ErrorBody.Code] {
 		return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), c.signInFix(ctx, agent))
-	}
-	if errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_DELIVERY_UNCONFIRMED" && len(sessions) > 0 && agent != "" {
-		// A terminal agent that never takes the message is often sitting at a
-		// sign-in screen.
-		return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()),
-			fmt.Sprintf("check the agent's terminal with `ao session get %s`; if %s is not signed in, %s", sessions[0], agent, c.signInFix(ctx, agent)))
 	}
 	return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), "")
 }
@@ -604,12 +627,13 @@ func (c *commandContext) signInFix(ctx context.Context, agent string) string {
 
 // taskSession is the part of GET /sessions/{id} a task status needs.
 type taskSession struct {
-	ID             string `json:"id"`
-	Harness        string `json:"harness"`
-	Mode           string `json:"mode"`
-	IsTerminated   bool   `json:"isTerminated"`
-	ProvisionState string `json:"provisionState"`
-	ProvisionError string `json:"provisionError"`
+	ID             string    `json:"id"`
+	CreatedAt      time.Time `json:"createdAt"`
+	Harness        string    `json:"harness"`
+	Mode           string    `json:"mode"`
+	IsTerminated   bool      `json:"isTerminated"`
+	ProvisionState string    `json:"provisionState"`
+	ProvisionError string    `json:"provisionError"`
 	Activity       struct {
 		State string `json:"state"`
 	} `json:"activity"`

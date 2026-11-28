@@ -64,6 +64,11 @@ with a reply, even if it finished between two polls. A terminal session whose
 agent records no turns only shows idle or working; check it with `ao session
 get <id>`.
 
+A terminal orchestrator that was just started gets about 15 seconds to boot
+before the brief is typed into it. If the brief still lands in its terminal
+unsubmitted, the command exits `4` with the task id: open that session, submit
+the brief, then follow it with `ao task wait`. Do not start the task again.
+
 On the orchestrator path, the status covers the workers the orchestrator
 started for the task, not just its own turn:
 
