@@ -1500,6 +1500,7 @@ async function createWindowInternal(): Promise<void> {
 			if (!shellWebContents.isDestroyed()) shellWebContents.send("browser:openWindowRequest", { viewId, sessionId });
 		},
 		fitSessionWindow: (viewId, viewport) => browserSessionWindows?.fitToRecording(viewId, viewport),
+		sessionWindowFits: (viewport) => browserSessionWindows?.fits(viewport) ?? true,
 		// `ao browser record`: finished videos wait under the data directory
 		// until the CLI reads them back.
 		recording: {

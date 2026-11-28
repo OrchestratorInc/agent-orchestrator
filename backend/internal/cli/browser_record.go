@@ -54,9 +54,10 @@ func newBrowserRecordCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comma
 		Use:   "start",
 		Short: "Start recording the active tab",
 		Long: "Start recording the active tab. The page opens in its own window, sized to the\n" +
-			"recording and fixed while it records (scaled to fit when the size is bigger than\n" +
-			"the screen), so the person can watch; the window closes when the recording stops.\n" +
-			"A window already open is used instead and gets its own size back afterwards.\n\n" +
+			"recording and fixed while it records, so the person can watch; the window closes\n" +
+			"when the recording stops. A window already open is used instead and gets its own\n" +
+			"size back afterwards. A size bigger than a window on the screen can show records\n" +
+			"off screen at its full size instead, with no window.\n\n" +
 			"--size lays the page out at that viewport for the whole recording, to show a\n" +
 			"responsive layout (default desktop, 1280x800): WIDTHxHEIGHT (240 to 2560 each), a desktop size\n" +
 			"(desktop 1280x800, laptop 1440x900, full-hd 1920x1080), or a device from the\n" +
@@ -101,6 +102,8 @@ func newBrowserRecordCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comma
 			switch resp.Result["window"] {
 			case "none":
 				where = "off screen (no window could open)"
+			case "too-large":
+				where = "off screen at full size (bigger than a window on this screen can show)"
 			case "existing":
 				where = "in its open window"
 			}

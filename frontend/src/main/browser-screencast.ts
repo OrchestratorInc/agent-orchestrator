@@ -26,6 +26,10 @@ export class BrowserScreencast {
 		private readonly needsHiddenPaint: () => boolean = () => true,
 		// The largest frame to send; a pinned viewport bigger than this is scaled down.
 		private readonly maxSize: () => { width: number; height: number } = () => ({ width: 1280, height: 720 }),
+		// Whether a screenshot must lay the page out beyond its view. A page
+		// already at its viewport's size (a recording's) need not: that relayout
+		// shows, on screen and in the frames, as a jump or a blank frame.
+		private readonly beyondViewport: () => boolean = () => true,
 	) {
 		this.listener = (_event, method, params) => {
 			if (method !== "Page.screencastFrame" || this.stopped) return;
@@ -102,7 +106,7 @@ export class BrowserScreencast {
 			const y = metrics?.cssVisualViewport?.pageY ?? 0;
 			const result = await this.debug.sendCommand("Page.captureScreenshot", {
 				format: "jpeg", quality: 70, fromSurface: true,
-				captureBeyondViewport: true,
+				captureBeyondViewport: this.beyondViewport(),
 				clip: { x, y, width, height, scale },
 			}) as { data?: string };
 			if (!this.stopped && typeof result?.data === "string") {

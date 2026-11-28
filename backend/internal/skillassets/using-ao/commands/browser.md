@@ -230,13 +230,14 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 `record start` records the active tab from the page's own frames and follows
 tab switches. The page opens in its own window, sized to the recording and
 fixed while it records, so the user can watch; it appears without taking the
-user's keyboard, and the side panel says the page is recording there. When the
-size is bigger than the screen, the window shows the page scaled down. The
+user's keyboard, and the side panel says the page is recording there. A size
+bigger than a window on the screen can show records off screen at its full
+size instead, with no window (any window the user had open closes). The
 window closes when the recording stops and the page returns to the panel; a
 window the user already had open is used instead and gets its own size back.
 If no window can open, the page is recorded off screen. Recording needs no
 screen recording permission and no computer use, and keeps going while the
-window is covered or minimized. Drive
+window is minimized. Drive
 the page with the other commands meanwhile, then `record stop [path]` saves the
 video (default `ao-browser-<time>.webm`), refuses to overwrite an existing
 file, and with `--json` returns the path, size, duration, frame count, width,

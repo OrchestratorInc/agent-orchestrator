@@ -176,6 +176,14 @@ describe("createBrowserSessionWindows", () => {
 		expect(windows[0]!.options).toMatchObject({ width: 1454, height: 818 });
 	});
 
+	it("says whether a recording's size fits a window on the screen", () => {
+		const { sessionWindows } = setup({ contentArea: { width: 1454, height: 908 } });
+		expect(sessionWindows.fits({ width: 1280, height: 800 })).toBe(true);
+		expect(sessionWindows.fits({ width: 1440, height: 900 })).toBe(true);
+		expect(sessionWindows.fits({ width: 1920, height: 1080 })).toBe(false);
+		expect(sessionWindows.fits({ width: 390, height: 1000 })).toBe(false);
+	});
+
 	it("sizes an open window for a recording and gives its size back after", () => {
 		const { open, sessionWindows, windows } = setup();
 		open("1:sess-1");

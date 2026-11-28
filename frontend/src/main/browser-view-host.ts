@@ -617,6 +617,9 @@ export type BrowserViewHostOptions = {
   // Size a session's open window for a recording's viewport, or (null) give
   // it back its own size and let the person resize it again.
   fitSessionWindow?: (viewId: string, viewport: { width: number; height: number } | null) => void;
+  // Whether a recording's viewport fits a window on this screen. A page draws
+  // only as large as its window, so a bigger one records off screen instead.
+  sessionWindowFits?: (viewport: { width: number; height: number }) => boolean;
   // How long a recording waits for its window to open before recording off
   // screen instead.
   recordingWindowTimeoutMs?: number;
@@ -4476,12 +4479,16 @@ export function createBrowserViewHost(
 			},
 			(code, message) => live.sink?.error(code, message),
 			() => liveViewport(session),
+			// A recording off screen needs screenshots when its page goes still; one
+			// in its window gets frames as the window paints. A screenshot there
+			// would disturb the page the person is watching.
 			() =>
 				!session.visible ||
-				Boolean(session.live?.recording?.viewport) ||
+				(Boolean(session.live?.recording?.viewport) && !session.window) ||
 				windowOf(session).isMinimized?.() === true ||
 				windowOf(session).isVisible?.() === false,
 			() => captureMaxSize(session),
+			() => !session.live?.recording?.viewport,
 		);
 		live.screencast = cast;
 		live.tabId = entry.tabId;
@@ -4529,8 +4536,9 @@ export function createBrowserViewHost(
 
 	// Whether a recording opened its session's window ("opened": it closes it
 	// again), sized one already open ("existing": it gives the size back), or
-	// records off screen ("none": no window could open).
-	type RecordingWindowMode = "opened" | "existing" | "none";
+	// records off screen ("none": no window could open; "too-large": its size
+	// does not fit a window on this screen).
+	type RecordingWindowMode = "opened" | "existing" | "none" | "too-large";
 	const recordingWindowModes = new WeakMap<BrowserRecording, RecordingWindowMode>();
 
 	async function prepareRecordingWindow(
@@ -4538,6 +4546,15 @@ export function createBrowserViewHost(
 		viewport: { width: number; height: number },
 	): Promise<RecordingWindowMode> {
 		const viewId = session.viewId;
+		// A page draws only as large as its window: shrunk to fit, the video
+		// would hold a shrunk page. It records off screen at its full size.
+		if (options.sessionWindowFits && !options.sessionWindowFits(viewport)) {
+			if (session.window) {
+				releaseWindow(viewId);
+				options.closeSessionWindow?.(viewId);
+			}
+			return "too-large";
+		}
 		if (session.window) {
 			options.fitSessionWindow?.(viewId, viewport);
 			return "existing";

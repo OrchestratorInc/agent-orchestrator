@@ -37,10 +37,12 @@ export type BrowserSessionWindows = {
 	focus: (viewId: string) => void;
 	close: (viewId: string) => void;
 	/**
-	 * Size a session's window for a recording's viewport (scaled to fit the
-	 * screen), fixed while it records; null gives back its own size.
+	 * Size a session's window for a recording's viewport (the host only asks
+	 * for one that fits), fixed while it records; null gives back its own size.
 	 */
 	fitToRecording: (viewId: string, viewport: { width: number; height: number } | null) => void;
+	/** Whether a window this screen can show holds the viewport at its full size. */
+	fits: (viewport: { width: number; height: number }) => boolean;
 	closeAll: () => void;
 };
 
@@ -201,6 +203,10 @@ export function createBrowserSessionWindows(options: {
 			window.setResizable(before.resizable);
 			window.setContentSize(before.width, before.height);
 			window.setMinimumSize(before.minimumSize[0] ?? 0, before.minimumSize[1] ?? 0);
+		},
+		fits: (viewport) => {
+			const size = fitted(viewport);
+			return size.width === viewport.width && size.height === viewport.height;
 		},
 		closeAll: () => {
 			for (const { window } of [...windows.values()]) {

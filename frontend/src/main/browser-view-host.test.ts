@@ -638,6 +638,89 @@ describe("browser recording", () => {
 		expect(await record("record-stop")).toMatchObject({ frames: 1 });
 	});
 
+	it("records a size bigger than the screen off screen at its full size, without a window", async () => {
+		const requestSessionWindow = vi.fn();
+		const closeSessionWindow = vi.fn();
+		const { debuggerSendCommand, host, invoke, record, sendFrame, view } = setupRecordingHost({
+			requestSessionWindow,
+			closeSessionWindow,
+			sessionWindowFits: () => false,
+		});
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		// A window the person had open gives the page back and closes.
+		const sessionWindow = {
+			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+			getContentBounds: () => ({ x: 0, y: 0, width: 1200, height: 820 }),
+			isDestroyed: () => false,
+		};
+		host.attachWindow(viewId, sessionWindow);
+
+		expect(await record("record-start", { size: "laptop" })).toMatchObject({ window: "too-large", viewport: { width: 1440, height: 900 } });
+		expect(requestSessionWindow).not.toHaveBeenCalled();
+		expect(sessionWindow.contentView.removeChildView).toHaveBeenCalledWith(view);
+		expect(closeSessionWindow).toHaveBeenCalledWith(viewId);
+		// The page is laid out at the full size, not shrunk, on a surface that size.
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+			width: 1440,
+			height: 900,
+			deviceScaleFactor: 0,
+			mobile: false,
+		});
+		expect(view.setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 1440, height: 900 });
+		sendFrame(jpegFrame(1440, 900));
+		expect(await record("record-stop")).toMatchObject({ frames: 1, width: 1440, height: 900 });
+		expect(closeSessionWindow).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes no screenshots of a still page recording in its window, and plain ones off screen", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+		try {
+			const sessionWindow = {
+				contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+				getContentBounds: () => ({ x: 0, y: 0, width: 1280, height: 800 }),
+				isDestroyed: () => false,
+			};
+			let attach: (() => void) | undefined;
+			const { debuggerSendCommand, emit, host, invoke, record, sendFrame } = setupRecordingHost({
+				requestSessionWindow: vi.fn(() => attach?.()),
+				closeSessionWindow: (id) => host.releaseWindow(id),
+			});
+			const { viewId } = await invoke("browser:ensure", "sess-1");
+			attach = () => host.attachWindow(viewId, sessionWindow);
+			const screenshots = () => debuggerSendCommand.mock.calls.filter(([method]) => method === "Page.captureScreenshot");
+			// Fake timers hold every wait: move time along until the command answers.
+			const settle = async <T,>(promise: Promise<T>): Promise<T> => {
+				let done = false;
+				void promise.finally(() => {
+					done = true;
+				}).catch(() => undefined);
+				// Real file work (the recording's folder and file) runs between steps.
+				for (let i = 0; i < 500 && !done; i += 1) {
+					await vi.advanceTimersByTimeAsync(10);
+					await new Promise((resolve) => setImmediate(resolve));
+				}
+				return promise;
+			};
+
+			expect(await settle(record("record-start"))).toMatchObject({ window: "opened" });
+			emit("browser:setBounds", 1, { viewId, revision: 1, rect: { x: 0, y: 0, width: 1280, height: 800 }, visible: true, surface: "window" });
+			sendFrame();
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(screenshots()).toEqual([]);
+			await settle(record("record-stop"));
+
+			// Off screen nobody paints the page: a still page is captured, without
+			// laying it out beyond the view that is already its size.
+			attach = undefined;
+			expect(await settle(record("record-start", { size: "800x600" }))).toMatchObject({ window: "none" });
+			await vi.advanceTimersByTimeAsync(6000);
+			expect(screenshots().length).toBeGreaterThan(0);
+			expect(screenshots().at(-1)?.[1]).toMatchObject({ captureBeyondViewport: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("undoes a recording whose capture fails to start", async () => {
 		const sessionWindow = {
 			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
