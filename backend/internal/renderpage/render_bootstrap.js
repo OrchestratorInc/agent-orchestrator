@@ -242,7 +242,7 @@
   }
   document.addEventListener("pointerup", function () { reportSelection(true); }, true);
   document.addEventListener("keyup", function (e) {
-    if (/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift|Meta|Control)$/.test(e.key)) reportSelection(true);
+    if (/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift|Meta|Control|a|A)$/.test(e.key)) reportSelection(true);
   }, true);
   document.addEventListener("selectionchange", function () {
     var selection = document.getSelection();
