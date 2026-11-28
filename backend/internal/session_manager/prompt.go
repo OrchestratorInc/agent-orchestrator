@@ -42,7 +42,11 @@ type systemPromptConfig struct {
 	ProjectRules          string
 	OrchestratorRules     string
 	// TimeZone is the user's IANA zone name; empty omits the section.
-	TimeZone           string
+	TimeZone string
+	// Docker is whether a docker CLI resolves on the daemon's PATH. It says
+	// nothing about whether the Docker daemon runs or its socket is reachable.
+	// The container label rules are only useful to a session that can start one.
+	Docker             bool
 	AdditionalSections []string
 }
 
@@ -103,7 +107,10 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 		}
 	case sessionPromptRoleWorker:
 		if cfg.Standalone {
-			sections = append(sections, standaloneWorkerSystemPrompt(), workerContainerLabelPrompt())
+			sections = append(sections, standaloneWorkerSystemPrompt())
+			if cfg.Docker {
+				sections = append(sections, workerContainerLabelPrompt())
+			}
 			break
 		}
 		orchestratorID := strings.TrimSpace(cfg.OrchestratorSessionID)
@@ -114,7 +121,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 		if strings.TrimSpace(cfg.Project.Repo) != "" {
 			sections = append(sections, workerNativeReviewPrompt(cfg.Project, orchestratorID != ""))
 		}
-		sections = append(sections, workerMultiPRPrompt(), workerContainerLabelPrompt(), workerGitIsolationPrompt())
+		sections = append(sections, workerMultiPRPrompt())
+		if cfg.Docker {
+			sections = append(sections, workerContainerLabelPrompt())
+		}
+		sections = append(sections, workerGitIsolationPrompt())
 		if rules := strings.TrimSpace(cfg.ProjectRules); rules != "" {
 			sections = append(sections, "## Project Rules\n"+rules)
 		}
@@ -453,8 +464,8 @@ Keep branch names inside this session namespace so Orchestrator can track every 
 
 // workerContainerLabelPrompt tells a worker how to make any Docker containers
 // it starts reapable by AO on session end (#2652). AO does not run docker
-// itself -- this is the only place the ao.session/ao.spare convention reaches
-// an agent.
+// itself -- on hosts where a docker CLI resolves, this is the only place the
+// ao.session/ao.spare convention reaches an agent.
 func workerContainerLabelPrompt() string {
 	return `## Docker Containers Started By This Session
 

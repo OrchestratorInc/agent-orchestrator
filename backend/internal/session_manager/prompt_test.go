@@ -41,6 +41,7 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 		},
 		OrchestratorSessionID: "mer-orchestrator",
 		ProjectRules:          "Always run focused tests.",
+		Docker:                true,
 	})
 	for _, want := range []string{
 		"## Worker Role",
