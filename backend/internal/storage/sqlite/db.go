@@ -161,6 +161,7 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 	}
 	writeDB.SetMaxOpenConns(1)
 	writeDB.SetMaxIdleConns(1)
+	snapshotBeforeMigrate(context.Background(), dataDir, writeDB)
 	if err := migrate(writeDB); err != nil {
 		_ = writeDB.Close()
 		return nil, err
